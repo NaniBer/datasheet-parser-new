@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Status:**
 - ✅ Pin extraction system - Complete and tested
-- ⏸️ Model generation (3D CAD/GLB) - Placeholder code exists but not implemented
+- 🚧 Model generation (3D CAD/GLB) - 12 tasks pending (see SCHEMATIC DESIGN TASK BREAKDOWN below)
 
 ---
 
@@ -245,6 +245,47 @@ The `src/model_generator/` directory contains placeholder code for:
 
 These are not integrated or tested yet.
 
+---
+
+## SCHEMATIC DESIGN TASK BREAKDOWN
+
+**Status:** 🚧 Not Started
+
+### Phase 1: Cadquery Integration (Foundation)
+
+| Task | Description | Status |
+|-------|-------------|--------|
+| 1.1 | Install and verify cadquery works in the environment | ⏸️ Pending |
+| 1.2 | Test basic cadquery code - create a simple box/cylinder | ⏸️ Pending |
+| 1.3 | Understand cadquery API - workplane, cq, shapes | ⏸️ Pending |
+
+### Phase 2: Pin Data to 3D Model (Core)
+
+| Task | Description | Status |
+|-------|-------------|--------|
+| 2.1 | Design package geometry for each type (DIP, QFN, SOIC, TQFP, BGA) | ⏸️ Pending |
+| 2.2 | Create pin cylinders/boxes positioned correctly for each package | ⏸️ Pending |
+| 2.3 | Generate cadquery code from PinData object | ⏸️ Pending |
+| 2.4 | Test with simple IC - NE555 (DIP-8) | ⏸️ Pending |
+
+### Phase 3: GLB Export
+
+| Task | Description | Status |
+|-------|-------------|--------|
+| 3.1 | Export cadquery model to GLB format | ⏸️ Pending |
+| 3.2 | Verify GLB file is valid | ⏸️ Pending |
+| 3.3 | Test with a 3D viewer to confirm pins are visible | ⏸️ Pending |
+
+### Phase 4: Integration with CLI
+
+| Task | Description | Status |
+|-------|-------------|--------|
+| 4.1 | Connect pin extraction → model generation → GLB export in main.py | ⏸️ Pending |
+| 4.2 | Test end-to-end: PDF → PinData → GLB file | ⏸️ Pending |
+| 4.3 | Clean up unused code (placeholder files) | ⏸️ Pending |
+
+**Total: 12 Tasks**
+
 ### LLM Prompt Improvements
 Consider these when improving extraction:
 - Add more suffix code patterns for other manufacturers
@@ -261,15 +302,10 @@ Consider these when improving extraction:
 ## CLI Usage
 
 ```bash
-# Basic usage (model generation not yet implemented)
-python -m src.main datasheet.pdf output.glb
-
-# With verbose output
+# Pin extraction only (currently working)
 python -m src.main datasheet.pdf output.glb --verbose
 
-# With custom API key
-python -m src.main datasheet.pdf output.glb --api-key YOUR_KEY
-
-# Note: Model generation not yet implemented
-# Currently, pin extraction is the complete workflow
+# Model generation (not yet implemented - see SCHEMATIC DESIGN TASK BREAKDOWN)
+# Full pipeline will be available after Phase 4 completion
+python -m src.main datasheet.pdf output.glb
 ```
