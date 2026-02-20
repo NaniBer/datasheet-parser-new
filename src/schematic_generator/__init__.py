@@ -19,6 +19,14 @@ from .pin_layout import (
     PinLayout,
     layout_pins,
 )
+from .schematic_builder import (
+    SchematicBuilder,
+    build_schematic_from_pin_data as builder_build_schematic,
+)
+from .adapter import (
+    pin_data_to_builder_format,
+    build_schematic_from_pin_data,
+)
 
 __all__ = [
     "PackageType",
@@ -27,6 +35,7 @@ __all__ = [
     "SchematicParameters",
     "PinPosition",
     "PinLayout",
+    "SchematicBuilder",
     "get_dip_parameters",
     "get_soic_parameters",
     "get_tqfp_parameters",
@@ -36,4 +45,7 @@ __all__ = [
     "get_schematic_parameters",
     "calculate_pin_position",
     "layout_pins",
+    "builder_build_schematic",
+    "pin_data_to_builder_format",
+    "build_schematic_from_pin_data",
 ]

@@ -32,6 +32,7 @@ class PinGeometry:
     # Text positioning
     pin_num_size: float = 1.5  # Font size for pin number
     pin_num_offset: float = 4.0  # Distance from body edge to pin number
+    pin_num_height: float = 0.5  # Text height for pin number
     pin_name_size: float = 2.0  # Font size for pin name
     pin_name_offset: float = 8.0  # Distance from body edge to pin name
     pin_name_height: float = 0.5  # Text height (extrusion)
@@ -92,8 +93,8 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
     Get schematic parameters for DIP (Dual Inline Package).
 
     DIP packages have pins on two sides (left and right).
-    Pin numbering is clockwise: starts at top-left, goes down left side,
-    then up right side.
+    Pin numbering is counter-clockwise starting at top-left,
+    going down left side, then up right side.
 
     Examples:
         - DIP-8: NE555 timer
@@ -102,15 +103,15 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
         - DIP-40: ATmega32
     """
     # Standard DIP pitch is 2.54mm (0.1 inch)
-    pitch = 2.54
+    pitch = 3.80
 
     # Calculate body dimensions based on pin count
-    # DIP standard: width ~7.62mm, height scales with pin count
-    width = 7.62
+    # DIP standard: width ~15-20mm for better visibility, height scales with pin count
+    width = 15.0
 
     # Height = (pins_per_side - 1) * pitch + margins
     pins_per_side = pin_count // 2
-    height = (pins_per_side - 1) * pitch + 15.0  # 15mm for margins
+    height = (pins_per_side - 1) * pitch + 20.0  # 20mm for margins
 
     return SchematicParameters(
         package_type=PackageType.DIP,
@@ -126,20 +127,21 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
             pin_num_size=1.5,
             pin_num_offset=3.0,
             pin_name_size=2.0,
-            pin_name_offset=7.0,
-            pin_name_height=0.5
+            pin_name_offset=9.0,
+            pin_name_height=0.5,
+            pin_num_height=0.5
         ),
         body_geometry=BodyGeometry(
             border_thickness=0.5,
             border_height=0.5,
             designator_name="U",
             designator_size=4.0,
-            designator_offset=5.0,
+            designator_offset=8.0,
             designator_height=0.5,
             value_size=2.0,
-            value_offset=2.0,
+            value_offset=3.0,
             value_height=0.5,
-            top_margin=7.0
+            top_margin=10.0
         ),
         pins_per_side=[pins_per_side, pins_per_side, 0, 0],
         counter_clockwise=True  # Counter-clockwise numbering for DIP
@@ -188,10 +190,10 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
 
     # Calculate body width based on pin count
     # More pins = larger body
+    # TQFP-44: ~10mm, TQFP-64: ~12mm, TQFP-100: ~14mm
     pins_per_side = pin_count // 4
 
     # Body size scales with pin count
-    # TQFP-44: ~10mm, TQFP-64: ~12mm, TQFP-100: ~14mm
     width = 8.0 + (pins_per_side * pitch)
     height = width  # Square
 
@@ -210,7 +212,8 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
             pin_num_offset=2.0,
             pin_name_size=1.5,
             pin_name_offset=4.0,
-            pin_name_height=0.3
+            pin_name_height=0.3,
+            pin_num_height=0.3
         ),
         body_geometry=BodyGeometry(
             border_thickness=0.3,
@@ -315,7 +318,7 @@ PACKAGE_TYPE_ALIASES = {
 
 def parse_package_type(package_str: str) -> PackageType:
     """
-    Parse package type from string (e.g., "LQFP64" → PackageType.LQFP).
+    Parse package type from string (e.g., "LQFP64" -> PackageType.LQFP).
     """
     package_str = package_str.upper().strip()
 
@@ -323,7 +326,7 @@ def parse_package_type(package_str: str) -> PackageType:
     if package_str in PACKAGE_TYPE_ALIASES:
         return PACKAGE_TYPE_ALIASES[package_str]
 
-    # Try prefix match (e.g., "LQFP64" → "LQFP")
+    # Try prefix match (e.g., "LQFP64" -> "LQFP")
     for alias, ptype in PACKAGE_TYPE_ALIASES.items():
         if package_str.startswith(alias):
             return ptype
@@ -337,7 +340,7 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
     Get schematic parameters for a package.
 
     Args:
-        package_type: Package type string (e.g., "DIP-8", "LQFP64", "TQFP-44")
+        package_type: Package type string (e.g., "DIP-8", "LQFP64")
         pin_count: Number of pins
 
     Returns:
@@ -376,18 +379,18 @@ def calculate_pin_position(
     params: SchematicParameters
 ) -> Tuple[float, float, str]:
     """
-    Calculate the (x, y) position and side for a pin.
+    Calculate (x, y) position and side for a pin.
 
     Args:
-        pin_index: 0-based index of the pin in the sorted list
-        params: SchematicParameters for the package
+        pin_index: 0-based index of pin in sorted list
+        params: SchematicParameters for package
 
     Returns:
         (x, y, side) where side is "left", "right", "top", or "bottom"
 
     Note:
         This is a simplified calculation. The actual implementation
-        will need to handle the specific pin numbering order for each
+        will need to handle specific pin numbering order for each
         package type (clockwise vs counter-clockwise).
     """
     # Simplified: for DIP, just alternate left/right
@@ -404,7 +407,7 @@ def calculate_pin_position(
             return (params.body_width / 2, y, "right")
 
     # For TQFP, distribute pins on all 4 sides
-    elif params.package_type in [PackageType.TQFP, PackageType.LQFP, PackageType.QFN]:
+    elif params.package_type in [PackageType.TQFP, PackageType.LQFP]:
         pins_per_side = params.pin_count // 4
 
         if pin_index < pins_per_side:
@@ -412,20 +415,20 @@ def calculate_pin_position(
             y = (params.body_height / 2) - params.body_geometry.top_margin - (pin_index * params.pin_pitch)
             return (-params.body_width / 2, y, "left")
         elif pin_index < pins_per_side * 2:
-            # Top side (left to right)
-            top_index = pin_index - pins_per_side
-            x = -(params.body_width / 2) + params.body_geometry.top_margin + (top_index * params.pin_pitch)
-            return (x, params.body_height / 2, "top")
+            # Bottom side (left to right)
+            bottom_index = pin_index - pins_per_side
+            x = -(params.body_width / 2) + params.body_geometry.top_margin + (bottom_index * params.pin_pitch)
+            return (x, -params.body_height / 2, "bottom")
         elif pin_index < pins_per_side * 3:
-            # Right side (bottom to top for counter-clockwise)
+            # Right side (bottom to top)
             right_index = pin_index - pins_per_side * 2
             y = -(params.body_height / 2) + params.body_geometry.top_margin + (right_index * params.pin_pitch)
             return (params.body_width / 2, y, "right")
         else:
-            # Bottom side (right to left)
-            bottom_index = pin_index - pins_per_side * 3
-            x = (params.body_width / 2) - params.body_geometry.top_margin - (bottom_index * params.pin_pitch)
-            return (x, -params.body_height / 2, "bottom")
+            # Top side (right to left)
+            top_index = pin_index - pins_per_side * 3
+            x = (params.body_width / 2) - params.body_geometry.top_margin - (top_index * params.pin_pitch)
+            return (x, params.body_height / 2, "top")
 
     # Default
     return (0, 0, "left")
