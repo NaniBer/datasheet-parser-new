@@ -4,43 +4,46 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Datasheet Parser** - Extracts pin data from electronic component datasheets using hybrid page detection (rules-based + LLM fallback) and FastChat API for pin data extraction.
+**Datasheet Parser** - Extracts pin data from electronic component datasheets using hybrid page detection (rules-based + LLM fallback) and FastChat API for pin data extraction. Generates schematic symbols in GLB format.
 
 **Status:**
 - ✅ Pin extraction system - Complete and tested
 - ✅ Schematic generator - Complete and tested
-- ✅ CLI integration with --schematic flag
+- ✅ CLI integration - Complete and tested
 - ✅ End-to-end pipeline working
+- ✅ Multi-page pinout table support - Complete
 
 ## Common Development Commands
 
 ### Testing
 
 ```bash
-# Run end-to-end pin extraction test on all PDFs
+# Run end-to-end test
 python3 test_scripts/test_end_to_end.py
 
-# Run page detection only
+# Run page detection test
 python3 test_scripts/test_page_detection.py
 
-# Test content extraction only
+# Test content extraction
 python3 test_scripts/test_content_extraction.py
 
 # Test LLM connection
 python3 test_scripts/test_chat_bot.py
 
-# Test LLM pin extraction with sample data
+# Test LLM pin extraction
 python3 test_scripts/test_pin_extraction.py
 
-# Run schematic generator tests
-python3 test_scripts/test_cadquery.py
-python3 test_scripts/test_cadquery_api.py
+# Test package geometry
 python3 test_scripts/test_package_geometry.py
-python3 test_scripts/test_pin_layout.py
-python3 test_scripts/test_adapter.py
 
-# Run end-to-end schematic generation
-python3 test_scripts/test_pdf_to_schematic.py
+# Test pin layout
+python3 test_scripts/test_pin_layout.py
+
+# Test pin mapping
+python3 test_scripts/test_pin_mapping.py
+
+# Test end-to-end schematic generation
+python3 test_scripts/test_end_to_end_schematic.py
 ```
 
 ### Running Tests
@@ -105,11 +108,18 @@ src/
 │   └── page_verifier.py    # LLM fallback for ambiguous pages
 ├── pdf_extractor/
 │   ├── page_detector.py     # Hybrid page detection
-│   └── content_extractor.py # Text/table/image extraction
+│   ├── content_extractor.py # Text/table/image extraction
+│   └── pinout_filter.py   # Filter content to pinout-relevant information
 ├── models/
 │   └── pin_data.py        # Pin, PackageInfo, PinData models
+├── utils/
+│   └── package_detector.py # Package type normalization
 ├── main.py                  # CLI entry point
-└── schematic_generator/  ← NEW: Schematic symbol generation
+└── schematic_generator/      # Schematic symbol generation
+    ├── package_geometry.py   # Geometry parameters for each package type
+    ├── pin_layout.py        # Pin layout algorithms
+    ├── schematic_builder.py  # Cadquery builder with GLB export
+    └── adapter.py          # PinData to SchematicBuilder format conversion
 ```
 
 test_scripts/                 # Test scripts for each component
@@ -137,6 +147,14 @@ test_scripts/                 # Test scripts for each component
 
 **`src/pdf_extractor/content_extractor.py`** - Text/table/image extraction
 - `ContentExtractor.extract_content(candidates)` → ExtractedContent
+- Applies PinoutFilter to reduce content to only pinout-relevant information
+- Filter preserves content from pages with pinout tables
+
+**`src/pdf_extractor/pinout_filter.py`** - Content filtering for LLM
+- `is_pinout_table()` - Identifies pinout tables
+- `is_pinout_section()` - Identifies pinout text sections
+- `filter_content()` - Filters extracted content to only relevant information
+- Preserves content from pages with pinout tables even if text doesn't match keywords
 
 ### LLM Integration
 
@@ -159,6 +177,7 @@ test_scripts/                 # Test scripts for each component
 | **Keyword detection** | ✅ Working - Detects pin, vcc, gnd, gpio keywords |
 | **Diagram detection** | ✅ Working - Detects diagrams with captions |
 | **Position heuristics** | ✅ Working - Validates pages are in correct 20-70% range |
+| **Multi-page pinout tables** | ✅ Fixed - Preserves content across page continuations |
 
 ### Schematic Generator (NEW!)
 
@@ -200,14 +219,17 @@ Package (main assembly)
 ## CLI Usage
 
 ```bash
-# Pin extraction only (existing)
+# Basic usage - PDF to schematic GLB
 python -m src.main datasheet.pdf output.glb --verbose
 
-# With schematic generation (NEW)
-python -m src.main datasheet.pdf output.glb --schematic --verbose
+# With custom API key
+python -m src.main datasheet.pdf output.glb --api-key YOUR_API_KEY --verbose
 
-# Pin extraction + schematic (both modes)
-python -m src.main datasheet.pdf output.glb --schematic --verbose
+# With custom model
+python -m src.main datasheet.pdf output.glb --model gpt-4 --verbose
+
+# Adjust page detection confidence
+python -m src.main datasheet.pdf output.glb --min-confidence 3 --verbose
 ```
 
 ---
@@ -255,11 +277,92 @@ python -m src.main datasheet.pdf output.glb --schematic --verbose
 ## Test Results Summary
 
 | Package | Pin Count | GLB Size | Status |
-|---------|-----------|----------|-----------|----------|
+|---------|-----------|----------|-----------|
 | DIP-8 | 8 | 1.36 MB | ✅ |
 | TQFP-44 | 44 | 9.44 MB | ✅ |
 | LQFP-64 | 64 | 14.54 MB | ✅ |
 | SOIC-16 | 16 | 2.09 MB | ✅ |
+| ESP32-WROOM-32E (Unknown-38) | 38 | 7.70 MB | ✅ (all pins extracted) |
+
+---
+
+## Recent Changes
+
+### Pin Extraction Fix (Feb 2026)
+
+**Problem:** Multi-page pinout tables were being truncated. Pins 28-38 of ESP32-WROOM-32E were showing as "unknown" because the content from Page 12 was not being preserved by the PinoutFilter.
+
+**Root Cause:**
+1. `PinoutFilter.filter_content()` was splitting text by page markers and discarding blocks that didn't perfectly match pinout section keywords
+2. Text blocks were losing their page markers during filtering
+3. Pages with pinout tables but different text formatting were being filtered out
+
+**Solution:**
+1. Added more keywords to `PINOUT_SECTION_KEYWORDS` (including `'pindescription'`, `'pindefinitions'`, `'pin table'`)
+2. Modified `filter_content()` to preserve content from pages that have pinout tables, even if text doesn't match keywords
+3. Added page markers back to filtered text: `--- Page {page_num} ---`
+4. Removed unused `filter_text_blocks()` method
+
+**Result:** All 38 pins now correctly extracted for ESP32-WROOM-32E
+
+### Code Cleanup (Feb 2026)
+
+**Removed directories/files:**
+- `src/model_generator/` - Unused 3D model generation code
+- `src/llm/vision_client.py` - Vision API (not implemented)
+- `src/pdf_extractor/image_pinout_extractor.py` - Unused image extractor
+- 22+ obsolete test scripts (debug_*, inspect_*, test_*)
+- `model (10).png` - Temporary image
+
+**Simplified main.py:**
+- Removed unused imports (ImagePinoutExtractor, PageVerifier, VisionAPIClient)
+- Removed broken 3D model generation code
+- Removed `--format`, `--schematic`, `--verify-ambiguity`, `--vision` arguments
+- Updated verbose messages from [1/5] to [1/3]
+- Schematic generation is now the default (no flag needed)
+
+---
+
+## What's Missing
+
+| Issue | Description | Impact |
+|--------|-------------|---------|
+| **QFN package type detection** | LLM returns "Unknown-38" instead of recognizing QFN-38 | Schematic uses DIP layout (wrong for QFN) |
+| **Package-specific pin recognition** | ESP32 pin naming (IOxx, GPIOxx) not fully recognized | Pins may have incorrect function classification |
+| **BGA package support** | BGA schematic generator uses grid layout (simplified) | Limited BGA support |
+
+## Next Steps
+
+### High Priority
+1. **Fix QFN package type detection**
+   - Update LLM prompt to better recognize QFN packages
+   - Add ESP32 package patterns to package_detector.py
+   - Add QFN-38 specific parameters to package_geometry.py
+
+2. **Add QFN perimeter distribution**
+   - Implement true QFN layout with pins on all 4 sides
+   - Add has_center_pad parameter for QFN thermal pad
+
+### Medium Priority
+3. **Improve package type normalization**
+   - Add ESP32-WROOM-32 mapping to QFN-38
+   - Add ESP32-WROOM-32D mapping to appropriate package
+   - Add more manufacturer-specific package patterns
+
+4. **Add BGA grid layout support**
+   - Implement proper BGA pin layout (not just perimeter)
+   - Add ball map support for BGA packages
+
+### Low Priority
+5. **Improve pin function classification**
+   - Better detect GPIO, ADC, DAC, SPI, I2C, UART functions
+   - Add clock, crystal, and reset pin recognition
+
+6. **Add pin number markers**
+   - Add pin 1 dot markers to schematic symbols
+   - Add notch indicators for orientation
+
+| ESP32-WROOM-32E (Unknown-38) | 38 | 7.70 MB | ✅ (all pins extracted) |
 
 ---
 
@@ -285,8 +388,9 @@ python -m src.main datasheet.pdf output.glb --schematic --verbose
 
 | Issue | Description | Status |
 |--------|-------------|--------|
-| **Full pipeline with LLM-extracted PinData** | ⚠️ Issue: Recursion error when converting PinData to string. Needs investigation. Use manual pin data mode for testing. |
-| **am623.pdf malformed JSON** | ⚠️ Issue: Too much content (30 pages, 93 tables) overwhelmed LLM. Needs content filtering/truncation |
+| **QFN package type detection** | LLM returns "Unknown-38" instead of recognizing QFN-38. Schematic defaults to DIP layout which is incorrect. | ⚠️ Needs improvement to LLM prompt or package_detector.py |
+| **QFN perimeter distribution** | Current get_qfn_parameters() uses TQFP-style counter-clockwise on all 4 sides. Real QFN has different pin distribution. | ⚠️ Needs QFN-specific implementation |
+| **Package type normalization** | "Unknown-38" defaults to DIP instead of QFN. | ⚠️ Add ESP32 package mapping to package_detector.py |
 
 ---
 
