@@ -30,11 +30,11 @@ class PinGeometry:
     point_size: float = 0.5  # Size of pin point (mm)
 
     # Text positioning
-    pin_num_size: float = 1.5  # Font size for pin number
-    pin_num_offset: float = 4.0  # Distance from body edge to pin number
+    pin_num_size: float = 1.0  # Font size for pin number
+    pin_num_offset: float = 2.0  # Distance from body edge to pin number
     pin_num_height: float = 0.5  # Text height for pin number
-    pin_name_size: float = 2.0  # Font size for pin name
-    pin_name_offset: float = 8.0  # Distance from body edge to pin name
+    pin_name_size: float = 1.5  # Font size for pin name
+    pin_name_offset: float = 6.0  # Distance from body edge to pin name
     pin_name_height: float = 0.5  # Text height (extrusion)
 
 
@@ -55,7 +55,7 @@ class BodyGeometry:
     value_height: float = 0.5  # Text height
 
     # Spacing from body top to first pin
-    top_margin: float = 10.0  # Margin from top to first pin row (mm)
+    top_margin: float = 5.0  # Margin from top to first pin row (mm)
 
 
 @dataclass
@@ -103,11 +103,11 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
         - DIP-40: ATmega32
     """
     # Standard DIP pitch is 2.54mm (0.1 inch)
-    pitch = 3.80
+    pitch = 2.50
 
     # Calculate body dimensions based on pin count
     # DIP standard: width ~15-20mm for better visibility, height scales with pin count
-    width = 15.0
+    width = 20.0
 
     # Height = (pins_per_side - 1) * pitch + margins
     pins_per_side = pin_count // 2
@@ -120,28 +120,28 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
         body_width=width,
         body_height=height,
         pin_geometry=PinGeometry(
-            leg_length=5.0,
+            leg_length=2.0,
             leg_width=0.15,
             leg_thickness=0.5,
             point_size=0.5,
-            pin_num_size=1.5,
-            pin_num_offset=3.0,
-            pin_name_size=2.0,
-            pin_name_offset=9.0,
+            pin_num_size=1.0,
+            pin_num_offset=2.0,
+            pin_name_size=1.5,
+            pin_name_offset=12.0,
             pin_name_height=0.5,
             pin_num_height=0.5
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.5,
+            border_thickness=0.25,
             border_height=0.5,
             designator_name="U",
-            designator_size=4.0,
-            designator_offset=8.0,
+            designator_size=3.0,
+            designator_offset=6.0,
             designator_height=0.5,
-            value_size=2.0,
-            value_offset=3.0,
+            value_size=1.5,
+            value_offset=2.5,
             value_height=0.5,
-            top_margin=10.0
+            top_margin=5.0
         ),
         pins_per_side=[pins_per_side, pins_per_side, 0, 0],
         counter_clockwise=True  # Counter-clockwise numbering for DIP
@@ -210,7 +210,7 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
             point_size=0.3,
             pin_num_size=1.0,
             pin_num_offset=2.0,
-            pin_name_size=1.5,
+            pin_name_size=1.0,
             pin_name_offset=4.0,
             pin_name_height=0.3,
             pin_num_height=0.3
@@ -361,6 +361,8 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
         return get_soic_parameters(pin_count)
     elif ptype == PackageType.TQFP or ptype == PackageType.LQFP:
         return get_tqfp_parameters(pin_count)
+    elif ptype == PackageType.QFN:
+        return get_qfn_parameters(pin_count)
     elif ptype == PackageType.QFN:
         return get_qfn_parameters(pin_count)
     elif ptype == PackageType.BGA:

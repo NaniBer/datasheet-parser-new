@@ -179,28 +179,37 @@ class SchematicBuilder:
         """
         legs_assy = cq.Assembly(name="Legs")
 
-        # Sort pin_data by pin number
-        def pin_sort_key(pin):
-            try:
-                return (0, int(pin.get("number", pin.get("pin_num", 0))))
-            except Exception:
-                return (1, str(pin.get("number", pin.get("pin_num", ""))))
+        # Create a mapping from pin number to position
+        pin_number_to_position = {
+            pos.pin_number: pos for pos in self.pin_positions
+        }
 
-        sorted_pins = sorted(pin_data, key=pin_sort_key)
+        logger.info("Building %d pins" % len(pin_data))
 
-        logger.info("Building %d pins" % len(sorted_pins))
+        # Debug: print pin positions
+        logger.debug("Pin positions:")
+        for pin_num, pos in pin_number_to_position.items():
+            logger.debug("  Pin %s: (%.1f, %.1f) %s" % (pin_num, pos.x, pos.y, pos.side))
+
+        # Debug: print input pin data
+        logger.debug("Input pin data:")
+        for pin in pin_data:
+            pin_num = str(pin.get("number", pin.get("pin_num", "")))
+            pin_name = pin.get("name", pin.get("pin_name", ""))
+            logger.debug("  Pin %s: %s" % (pin_num, pin_name))
 
         # Build each pin
-        for pin_idx, pin in enumerate(sorted_pins):
-            pin_num = str(pin.get("number", pin.get("pin_num", str(pin_idx + 1))))
+        for pin in pin_data:
+            pin_num = str(pin.get("number", pin.get("pin_num", "")))
             pin_name = pin.get("name", pin.get("pin_name", ""))
 
-            # Get position from layout algorithm
-            if pin_idx < len(self.pin_positions):
-                pin_pos = self.pin_positions[pin_idx]
-            else:
+            # Get position from layout algorithm by pin number
+            pin_pos = pin_number_to_position.get(pin_num)
+            if pin_pos is None:
                 logger.warning("No layout position for pin %s" % pin_num)
                 continue
+
+            logger.info("Building pin %s (%s) at (%.1f, %.1f) side=%s" % (pin_num, pin_name, pin_pos.x, pin_pos.y, pin_pos.side))
 
             # Build pin components
             pin_components = self.build_pin(pin_pos, pin_name, pin_num)

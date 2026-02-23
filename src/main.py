@@ -2,7 +2,7 @@
 """
 Datasheet Parser CLI
 
-Extract pin data from electronic component datasheets and generate 3D CAD models.
+Extract pin data from electronic component datasheets and generate schematic symbols.
 """
 
 import sys
@@ -12,16 +12,16 @@ from typing import Optional
 
 # Import project modules
 from .pdf_extractor import PageDetector, ContentExtractor
-from .llm import LLMClient, PageVerifier
-from .model_generator import CadqueryBuilder, GLBExporter
+from .llm import LLMClient
+from .schematic_generator import build_schematic_from_pin_data
 from .utils import PackageDetector
-from .models import PinData
+from .models import PinData, Pin, PackageInfo
 
 
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Extract pin data from datasheets and generate 3D CAD models",
+        description="Extract pin data from datasheets and generate schematic symbols",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -36,9 +36,6 @@ Examples:
 
   # Verbose output
   python -m src.main datasheet.pdf output.glb --verbose
-
-  # Export to alternative format
-  python -m src.main datasheet.pdf output.step --format step
         """
     )
 
@@ -49,25 +46,18 @@ Examples:
 
     parser.add_argument(
         "output",
-        help="Output 3D model file (e.g., output.glb, output.step, output.stl)"
+        help="Output schematic GLB file (e.g., output.glb)"
     )
 
     parser.add_argument(
         "--api-key",
-        help="LLM API key (or set DATASHEET_PARSER_API_KEY env var)"
+        help="LLM API key (or set FASTCHAT_API_KEY env var)"
     )
 
     parser.add_argument(
         "--model",
-        default="default",
+        default="llama-3",
         help="LLM model to use (default: %(default)s)"
-    )
-
-    parser.add_argument(
-        "--format",
-        choices=["glb", "step", "stl"],
-        default="glb",
-        help="Output format (default: %(default)s)"
     )
 
     parser.add_argument(
@@ -75,12 +65,6 @@ Examples:
         type=int,
         default=5,
         help="Minimum confidence score for page detection (default: %(default)s)"
-    )
-
-    parser.add_argument(
-        "--verify-ambiguity",
-        action="store_true",
-        help="Use LLM to verify ambiguous pages (requires API key)"
     )
 
     parser.add_argument(
@@ -121,12 +105,11 @@ def main():
     if args.verbose:
         print(f"Processing: {input_path}")
         print(f"Output: {output_path}")
-        print(f"Format: {args.format.upper()}")
 
     try:
         # Step 1: Detect relevant pages
         if args.verbose:
-            print("\n[1/5] Detecting relevant pages...")
+            print("\n[1/3] Detecting relevant pages...")
 
         with PageDetector(str(input_path)) as detector:
             candidates = detector.detect_relevant_pages(
@@ -140,12 +123,12 @@ def main():
 
         if not candidates:
             print("Error: No relevant pages found in datasheet")
-            print("Try lowering --min-confidence or using --verify-ambiguity")
+            print("Try lowering --min-confidence")
             sys.exit(1)
 
         # Step 2: Extract content from relevant pages
         if args.verbose:
-            print("\n[2/5] Extracting content from relevant pages...")
+            print("\n[2/3] Extracting content from relevant pages...")
 
         with ContentExtractor(str(input_path)) as extractor:
             content = extractor.extract_content(candidates)
@@ -155,23 +138,9 @@ def main():
                 print(f"Found {len(content.tables)} table(s)")
                 print(f"Found {len(content.images)} image(s)")
 
-        # Step 3: Verify ambiguous pages (if requested)
-        if args.verify_ambiguity and api_key:
-            if args.verbose:
-                print("\n[3/5] Verifying ambiguous pages with LLM...")
-
-            llm_client = LLMClient(api_key=api_key, model=args.model)
-            verifier = PageVerifier(llm_client)
-
-            low_conf_pages = detector.get_low_confidence_pages(threshold=args.min_confidence)
-            if low_conf_pages:
-                candidates = verifier.verify_pages(low_conf_pages, extractor)
-                if args.verbose:
-                    print(f"Verified {len(low_conf_pages)} ambiguous pages")
-
-        # Step 4: Extract pin data using LLM
+        # Step 3: Extract pin data with LLM
         if args.verbose:
-            print("\n[4/5] Extracting pin data with LLM...")
+            print("\n[3/3] Extracting pin data with LLM...")
 
         if not api_key:
             print("Error: API key required for pin data extraction")
@@ -188,43 +157,37 @@ def main():
             print(f"Extracted pin data:")
             print(f"  Component: {pin_data.component_name}")
             print(f"  Package: {pin_data.package.type}-{pin_data.package.pin_count}")
-            print(f"  Dimensions: {pin_data.package.width}mm x {pin_data.package.height}mm")
+            if pin_data.package.width > 0:
+                print(f"  Dimensions: {pin_data.package.width}mm x {pin_data.package.height}mm")
+            else:
+                print(f"  Dimensions: N/A (will be estimated from package type)")
             print(f"  Pin count: {len(pin_data.pins)}")
             print(f"  Extraction method: {pin_data.extraction_method}")
 
-            if len(pin_data.pins) <= 10:
-                print(f"  Pins:")
-                for pin in pin_data.pins:
+            if len(pin_data.pins) > 0:
+                print(f"  Pins (all {len(pin_data.pins)} pins):")
+                for i, pin in enumerate(pin_data.pins, 1):
                     func = f" ({pin.function})" if pin.function else ""
-                    print(f"    {pin.number}: {pin.name}{func}")
+                    print(f"    {i:2d}. Pin {pin.number}: {pin.name}{func}")
 
         # Validate and normalize package
         detector = PackageDetector()
         normalized_pkg = detector.normalize_package_name(pin_data.package.type)
         pin_data.package.type = normalized_pkg
 
-        # Step 5: Generate 3D model
+        # Step 4: Generate schematic symbol
         if args.verbose:
-            print("\n[5/5] Generating 3D model...")
+            print("\n[3/3] Generating schematic symbol...")
 
-        builder = CadqueryBuilder(pin_data)
-        cadquery_code = builder.generate_model_code()
+        result = build_schematic_from_pin_data(
+            pin_data=pin_data,
+            output_path=str(output_path)
+        )
+        if not result:
+            print(f"Error: Failed to generate schematic")
+            sys.exit(1)
 
-        if args.verbose:
-            print(f"Generated cadquery code ({len(cadquery_code)} characters)")
-
-        # Export model
-        exporter = GLBExporter(cadquery_code)
-
-        output_format = args.format
-        if output_format == "glb":
-            exporter.export_to_glb(str(output_path))
-        elif output_format == "step":
-            exporter.export_to_step(str(output_path))
-        elif output_format == "stl":
-            exporter.export_to_obj(str(output_path))  # Exports as STL
-
-        print(f"\nSuccess! Model generated: {output_path}")
+        print(f"\nSuccess! Schematic generated: {output_path}")
 
     except FileNotFoundError as e:
         print(f"Error: File not found - {e}")

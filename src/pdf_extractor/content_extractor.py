@@ -11,12 +11,12 @@ except ImportError:
     pdfplumber = None
 
 from .page_detector import PageCandidate
+from .pinout_filter import PinoutFilter
 
 
 @dataclass
 class ExtractedContent:
     """Content extracted from relevant pages."""
-
     pages: List[int]  # Page numbers
     text_content: str  # Combined text from all pages
     images: List[Tuple[int, bytes]]  # (page_number, image_data)
@@ -28,7 +28,7 @@ class ContentExtractor:
 
     def __init__(self, pdf_path: str):
         """
-        Initialize the content extractor.
+        Initialize content extractor.
 
         Args:
             pdf_path: Path to the PDF datasheet
@@ -55,8 +55,9 @@ class ContentExtractor:
             candidates: List of PageCandidate objects to extract from
 
         Returns:
-            ExtractedContent object with extracted data
+            ExtractedContent object with extracted data (already filtered)
         """
+        # First extract all content
         extracted = ExtractedContent(
             pages=[c.page_number for c in candidates],
             text_content="",
@@ -84,7 +85,22 @@ class ContentExtractor:
                 tables = self._extract_tables_from_page(page, candidate.page_number)
                 extracted.tables.extend(tables)
 
-        return extracted
+        # Apply pinout filtering to reduce content to only relevant information
+        # TEMPORARILY DISABLED: Some datasheets use different wording that gets filtered out
+        filter = PinoutFilter()
+        filtered = filter.filter_content(extracted)
+
+        # If filter removes all content, use unfiltered as fallback
+        if not filtered.text_content and extracted.text_content:
+            filtered = extracted
+
+        # Return filtered content
+        return ExtractedContent(
+            pages=filtered.pages,
+            text_content=filtered.text_content,
+            tables=filtered.tables,
+            images=filtered.images
+        )
 
     def _extract_text_from_page(
         self, page, page_num: int
@@ -116,7 +132,6 @@ class ContentExtractor:
             List of (page_number, image_data) tuples
         """
         images = []
-
         for img_index, img_obj in enumerate(page.images):
             try:
                 # Get the image from the PDF
@@ -157,7 +172,6 @@ class ContentExtractor:
             List of (page_number, table_data) tuples
         """
         tables = []
-
         extracted_tables = page.extract_tables()
         if not extracted_tables:
             return tables
@@ -182,28 +196,37 @@ class ContentExtractor:
 
         # Add page numbers
         formatted_parts.append(f"Relevant pages: {', '.join(map(str, content.pages))}\n")
-        formatted_parts.append("--- Extracted Text Content ---\n")
-        formatted_parts.append(content.text_content)
 
-        # Add table information
+        # Add text content (filtered to pinout-related)
+        if content.text_content:
+            formatted_parts.append("--- Pinout Information ---\n")
+            formatted_parts.append(content.text_content)
+            formatted_parts.append("")
+
+        # Add tables (filtered to pinout tables)
         if content.tables:
-            formatted_parts.append("\n--- Extracted Tables ---\n")
+            formatted_parts.append("\n--- Pinout Tables ---\n")
             for page_num, table in content.tables:
                 formatted_parts.append(f"\nTable from page {page_num}:")
-                for row_idx, row in enumerate(table):
-                    if row_idx < 20:  # Limit table rows for context
-                        row_text = " | ".join(str(cell or "") for cell in row)
-                        formatted_parts.append(f"  {row_text}")
-                    elif row_idx == 20:
-                        formatted_parts.append("  ... (truncated)")
-                        break
+                if table and len(table) > 0:
+                    # Header
+                    header = " | ".join(str(cell) for cell in table[0])
+                    formatted_parts.append(f"| {header} |")
+                    # Data rows (limit to 15 for context)
+                    for row_idx, row in enumerate(table):
+                        if row_idx < 15:
+                            row_text = " | ".join(str(cell) for cell in row)
+                            formatted_parts.append(f"| {row_text} |")
+                        elif row_idx == 15:
+                            formatted_parts.append("| ... (truncated)")
+                            break
 
         # Note about images
         if content.images:
+            formatted_parts.append("\n--- Note ---\n")
             formatted_parts.append(
-                f"\n--- Note ---\n"
-                f"This content includes {len(content.images)} image(s) from the datasheet. "
-                f"Images should be processed separately if needed."
+                f"This content includes {len(content.images)} diagram image(s). "
+                f"Use these for visual reference of pinout diagrams."
             )
 
         return "\n".join(formatted_parts)

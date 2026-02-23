@@ -7,6 +7,7 @@ This module provides functions to convert between the PinData model
 
 from typing import List, Dict, Any
 from src.models.pin_data import PinData, Pin
+from .schematic_builder import build_schematic_from_pin_data as build_schematic
 
 
 def pin_data_to_builder_format(pin_data: PinData) -> tuple:
@@ -65,4 +66,4 @@ def build_schematic_from_pin_data(pin_data: PinData, output_path: str) -> bool:
     package_type, pin_count, component_name, pins_for_builder = pin_data_to_builder_format(pin_data)
 
     # Build schematic
-    return build_schematic_from_pin_data(pin_data, output_path)
+    return build_schematic(package_type, pin_count, component_name, pins_for_builder, output_path)

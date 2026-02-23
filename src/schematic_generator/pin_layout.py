@@ -99,8 +99,9 @@ class PinLayout:
             x = -self.params.body_width / 2
 
             # Pin leg points left
-            text_x = x + self.params.pin_geometry.pin_name_offset
-            num_x = x + self.params.pin_geometry.pin_num_offset
+            # Text should be OUTSIDE the component (left side)
+            text_x = x - self.params.pin_geometry.pin_name_offset
+            num_x = x - self.params.pin_geometry.pin_num_offset
 
             positions.append(PinPosition(
                 pin_index=i,
@@ -118,16 +119,20 @@ class PinLayout:
             ))
 
         # Right side: pins pins_per_side+1 to pin_count (bottom to top)
-        # For DIP clockwise: pin 5 at bottom, pin 8 at top
+        # For DIP counter-clockwise: pin 5 at bottom, pin 8 at top
+        # IMPORTANT: Right side must go BOTTOM to TOP for counter-clockwise numbering
         for i in range(pins_per_side):
-            # Calculate Y position from bottom to top
-            y = -(self.params.body_height / 2) + self.params.body_geometry.top_margin + (i * self.params.pin_pitch)
+            # Calculate Y position - need to go bottom-to-top for counter-clockwise
+            # Use reversed index: pins_per_side - 1 - i
+            reversed_idx = pins_per_side - 1 - i
+            y = (self.params.body_height / 2) - self.params.body_geometry.top_margin - (reversed_idx * self.params.pin_pitch)
             x = self.params.body_width / 2
             pin_num = pins_per_side + i + 1
 
             # Pin leg points right
-            text_x = x - self.params.pin_geometry.pin_name_offset
-            num_x = x - self.params.pin_geometry.pin_num_offset
+            # Text should be OUTSIDE the component (right side)
+            text_x = x + self.params.pin_geometry.pin_name_offset
+            num_x = x + self.params.pin_geometry.pin_num_offset
 
             positions.append(PinPosition(
                 pin_index=pins_per_side + i,
