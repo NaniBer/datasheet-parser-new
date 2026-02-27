@@ -40,16 +40,20 @@ class PinLayout:
     - DIP: Clockwise numbering (1 at top-left, down left, up right)
     - TQFP/LQFP: Counter-clockwise numbering (1 at top-left, counter-clockwise)
     - SOIC: Counter-clockwise numbering
+    - Custom: Layout defined by Vision API (non-standard packages)
     """
 
-    def __init__(self, params: SchematicParameters):
+    def __init__(self, params: SchematicParameters, custom_layout: Optional[Dict[str, List[int]]] = None):
         """
         Initialize pin layout with schematic parameters.
 
         Args:
             params: SchematicParameters for the package
+            custom_layout: Optional dict mapping side names to pin numbers
+                         (e.g., {"left_side": [1,2,3], "bottom_edge": [4,5,6]})
         """
         self.params = params
+        self.custom_layout = custom_layout
 
     def layout_all_pins(self) -> List[PinPosition]:
         """
@@ -60,7 +64,10 @@ class PinLayout:
         """
         positions = []
 
-        if self.params.package_type == PackageType.DIP:
+        # Use custom layout if provided (from Vision API)
+        if self.custom_layout:
+            positions = self._layout_custom_pins()
+        elif self.params.package_type == PackageType.DIP:
             positions = self._layout_dip_pins()
         elif self.params.package_type in [PackageType.TQFP, PackageType.LQFP]:
             positions = self._layout_quad_pins()
@@ -366,13 +373,168 @@ class PinLayout:
 
         return positions
 
+    def _layout_custom_pins(self) -> List[PinPosition]:
+        """
+        Layout pins using custom layout data from Vision API.
 
-def layout_pins(params: SchematicParameters) -> List[PinPosition]:
+        Uses layout_sections dict that maps section names to pin numbers:
+        {
+            "left_side": [1, 2, 3, ...],
+            "bottom_edge": [15, 16, ...],
+            "right_side": [25, 26, ...],
+            "top_edge": [10, 11, ...]  # optional
+        }
+
+        Parses section names to determine side and placement order.
+        """
+        positions = []
+
+        # Map section names to sides
+        side_mapping = {
+            "left": "left",
+            "left_side": "left",
+            "left column": "left",
+            "left side column": "left",
+            "right": "right",
+            "right_side": "right",
+            "right column": "right",
+            "right side column": "right",
+            "top": "top",
+            "top_edge": "top",
+            "top edge": "top",
+            "bottom": "bottom",
+            "bottom_edge": "bottom",
+            "bottom edge": "bottom",
+        }
+
+        # Group sections by side and determine order
+        sections_by_side = {}
+        section_order = []  # Track order sections were provided
+
+        for section_name, pin_numbers in self.custom_layout.items():
+            # Parse section name to get side
+            section_lower = section_name.lower()
+            side = "left"  # default
+
+            # Try to find matching side
+            for key, mapped_side in side_mapping.items():
+                if key in section_lower:
+                    side = mapped_side
+                    break
+
+            if side not in sections_by_side:
+                sections_by_side[side] = []
+            sections_by_side[side].append((section_name, pin_numbers))
+            section_order.append((side, section_name, pin_numbers))
+
+        # Layout parameters
+        body_width = self.params.body_width
+        body_height = self.params.body_height
+        pin_pitch = self.params.pin_pitch
+        top_margin = self.params.body_geometry.top_margin
+
+        # Process each section in order
+        pin_index = 0
+        for side, section_name, pin_numbers in section_order:
+            if side == "left":
+                # Left side: top to bottom
+                for i, pin_num in enumerate(pin_numbers):
+                    y = (body_height / 2) - top_margin - (i * pin_pitch)
+                    x = -body_width / 2
+
+                    positions.append(PinPosition(
+                        pin_index=pin_index,
+                        pin_number=str(pin_num),
+                        x=x,
+                        y=y,
+                        side=side,
+                        rotation=180,  # Pointing left
+                        text_x=x - self.params.pin_geometry.pin_name_offset,
+                        text_y=y,
+                        text_halign="left",
+                        num_x=x - self.params.pin_geometry.pin_num_offset,
+                        num_y=y,
+                        num_halign="left"
+                    ))
+                    pin_index += 1
+
+            elif side == "right":
+                # Right side: top to bottom (or bottom to top depending on data)
+                for i, pin_num in enumerate(pin_numbers):
+                    y = (body_height / 2) - top_margin - (i * pin_pitch)
+                    x = body_width / 2
+
+                    positions.append(PinPosition(
+                        pin_index=pin_index,
+                        pin_number=str(pin_num),
+                        x=x,
+                        y=y,
+                        side=side,
+                        rotation=0,  # Pointing right
+                        text_x=x + self.params.pin_geometry.pin_name_offset,
+                        text_y=y,
+                        text_halign="right",
+                        num_x=x + self.params.pin_geometry.pin_num_offset,
+                        num_y=y,
+                        num_halign="right"
+                    ))
+                    pin_index += 1
+
+            elif side == "bottom":
+                # Bottom side: left to right
+                for i, pin_num in enumerate(pin_numbers):
+                    x = -(body_width / 2) + top_margin + (i * pin_pitch)
+                    y = -body_height / 2
+
+                    positions.append(PinPosition(
+                        pin_index=pin_index,
+                        pin_number=str(pin_num),
+                        x=x,
+                        y=y,
+                        side=side,
+                        rotation=270,  # Pointing down
+                        text_x=x,
+                        text_y=y - self.params.pin_geometry.pin_name_offset,
+                        text_halign="center",
+                        num_x=x,
+                        num_y=y - self.params.pin_geometry.pin_num_offset,
+                        num_halign="center"
+                    ))
+                    pin_index += 1
+
+            elif side == "top":
+                # Top side: left to right
+                for i, pin_num in enumerate(pin_numbers):
+                    x = -(body_width / 2) + top_margin + (i * pin_pitch)
+                    y = body_height / 2
+
+                    positions.append(PinPosition(
+                        pin_index=pin_index,
+                        pin_number=str(pin_num),
+                        x=x,
+                        y=y,
+                        side=side,
+                        rotation=90,  # Pointing up
+                        text_x=x,
+                        text_y=y + self.params.pin_geometry.pin_name_offset,
+                        text_halign="center",
+                        num_x=x,
+                        num_y=y + self.params.pin_geometry.pin_num_offset,
+                        num_halign="center"
+                    ))
+                    pin_index += 1
+
+        return positions
+
+
+def layout_pins(params: SchematicParameters, custom_layout: Optional[Dict[str, List[int]]] = None) -> List[PinPosition]:
     """
     Convenience function to layout pins for a package.
 
     Args:
         params: SchematicParameters for the package
+        custom_layout: Optional dict mapping side names to pin numbers
+                     (e.g., {"left_side": [1,2,3], "bottom_edge": [4,5,6]})
 
     Returns:
         List of PinPosition for all pins
@@ -384,5 +546,5 @@ def layout_pins(params: SchematicParameters) -> List[PinPosition]:
         >>> for pos in positions[:4]:
         ...     print(f"Pin {pos.pin_number}: ({pos.x:.2f}, {pos.y:.2f}) {pos.side}")
     """
-    layout = PinLayout(params)
+    layout = PinLayout(params, custom_layout)
     return layout.layout_all_pins()

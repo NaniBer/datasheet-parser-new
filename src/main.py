@@ -13,9 +13,12 @@ from typing import Optional
 # Import project modules
 from .pdf_extractor import PageDetector, ContentExtractor
 from .llm import LLMClient
+from .llm.image_ocr_client import ImageOCRClient
 from .schematic_generator import build_schematic_from_pin_data
 from .utils import PackageDetector
 from .models import PinData, Pin, PackageInfo
+import io
+import pdfplumber
 
 
 def parse_arguments():
@@ -71,6 +74,12 @@ Examples:
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose output"
+    )
+
+    parser.add_argument(
+        "--layout-mode",
+        action="store_true",
+        help="Use Vision API to extract layout structure (separated flow: LLM for pins, Vision for layout)"
     )
 
     return parser.parse_args()

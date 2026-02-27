@@ -5,7 +5,7 @@ This module provides functions to convert between the PinData model
 (from the pin extraction pipeline) and the format expected by SchematicBuilder.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from src.models.pin_data import PinData, Pin
 from .schematic_builder import build_schematic_from_pin_data as build_schematic
 
@@ -48,7 +48,7 @@ def pin_data_to_builder_format(pin_data: PinData) -> tuple:
     return package_type, pin_count, component_name, pins_for_builder
 
 
-def build_schematic_from_pin_data(pin_data: PinData, output_path: str) -> bool:
+def build_schematic_from_pin_data(pin_data: PinData, output_path: str, custom_layout: Optional[Dict[str, List[int]]] = None) -> bool:
     """
     Build and export schematic from PinData.
 
@@ -58,6 +58,8 @@ def build_schematic_from_pin_data(pin_data: PinData, output_path: str) -> bool:
     Args:
         pin_data: PinData object from pin extraction
         output_path: Path to save GLB file
+        custom_layout: Optional dict mapping side names to pin numbers
+                     (e.g., {"left_side": [1,2,3], "bottom_edge": [4,5,6]})
 
     Returns:
         True if successful, False otherwise
@@ -66,4 +68,4 @@ def build_schematic_from_pin_data(pin_data: PinData, output_path: str) -> bool:
     package_type, pin_count, component_name, pins_for_builder = pin_data_to_builder_format(pin_data)
 
     # Build schematic
-    return build_schematic(package_type, pin_count, component_name, pins_for_builder, output_path)
+    return build_schematic(package_type, pin_count, component_name, pins_for_builder, output_path, custom_layout)

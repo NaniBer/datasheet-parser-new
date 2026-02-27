@@ -44,15 +44,17 @@ class PinoutFilter:
     ]
 
     # Keywords that suggest content is NOT pinout-related (to be filtered out)
+    # Use full phrases to avoid false positives (e.g., "package" in "TQFN package")
     NON_PINOUT_KEYWORDS = [
         'absolute maximum', 'absolute minimum', 'electrical characteristics',
         'recommended operating conditions', 'thermal information',
         'ordering information', 'packaging information',
-        'dimensions', 'mechanical', 'physical',
-        'soldering', 'footprint', 'package drawing',
-        'package variants', 'package ordering',
+        'dimensions', 'mechanical dimensions', 'physical dimensions',
+        'soldering', 'footprint', 'mechanical drawing',
+        'package variants', 'package ordering information',
         'reeling information', 'marking', 'labeling',
-        'storage', 'transportation', 'handling'
+        'storage', 'transportation', 'handling',
+        'mounting', 'assembly'
     ]
 
     def is_pinout_table(self, table: List) -> bool:
@@ -78,10 +80,42 @@ class PinoutFilter:
         # Check for pinout section keywords
         has_pinout_kw = any(kw in text_lower for kw in self.PINOUT_SECTION_KEYWORDS)
 
-        # Filter out non-pinout content
-        has_non_pinout_kw = any(kw in text_lower for kw in self.NON_PINOUT_KEYWORDS)
+        # Check for strong pinout indicators (should override non-pinout keywords)
+        # These are very specific to pinout content
+        strong_pinout_indicators = [
+            'pinout -', 'figure 1-1. pinout', 'figure 1-2. pinout',
+            'figure 1-3. pinout', 'pin configurations', 'pin mapping'
+        ]
+        has_strong_indicator = any(kw in text_lower for kw in strong_pinout_indicators)
 
-        return has_pinout_kw and not has_non_pinout_kw
+        # Check for pinout figure/diagram text patterns
+        # Look for lines like "(PCINT8/XCK0/T0) PB0 PA0"
+        # This is the format of pinout diagrams extracted as text
+        pinout_diagram_pattern = (
+            r'\([a-z0-9]+/[a-z0-9]+/[a-z0-9]+/t?\d*\)\s*[a-z]+\d+\s+[a-z]+\d+\s*\('
+        )
+        import re
+        has_diagram_format = bool(re.search(pinout_diagram_pattern, text_lower, re.IGNORECASE))
+
+        # Filter out non-pinout content
+        # Use full word matching for non-pinout keywords to avoid false positives
+        # e.g., "package" in "TQFP/QFN/MLF" should not filter out
+        full_word_non_pinout = any(
+            f' {kw} ' in text_lower or text_lower.endswith(kw)
+            for kw in ['absolute maximum', 'absolute minimum', 'electrical characteristics',
+                      'recommended operating conditions', 'thermal information',
+                      'ordering information', 'packaging information']
+        )
+
+        # Keep page if:
+        # 1. Has strong pinout indicator (highest priority), OR
+        # 2. Has pinout keywords AND no strong non-pinout indicators, OR
+        # 3. Has diagram format pattern
+        return (
+            has_strong_indicator or
+            (has_pinout_kw and not full_word_non_pinout) or
+            has_diagram_format
+        )
 
     def filter_tables(self, tables: List[Tuple[int, List]]) -> List[Tuple[int, List]]:
         """Filter to only pinout tables."""
@@ -122,18 +156,29 @@ class PinoutFilter:
         if current_page is not None and current_block:
             text_blocks.append((current_page, "\n".join(current_block)))
 
-        # Filter text blocks
+        # Filter text blocks with improved logic
         filtered_text_blocks = []
         filtered_pages = []
 
         for page_num, block_text in text_blocks:
-            # Keep block if:
-            # 1. Page has a pinout table, OR
-            # 2. Block text matches pinout section keywords
+            # Check pinout status with multiple indicators
             is_pinout_page = page_num in pages_with_pinout_tables
             is_pinout_text = self.is_pinout_section(block_text)
 
-            if is_pinout_page or is_pinout_text:
+            # Additional check: keep pages with very strong pinout indicators
+            # even if text filter fails
+            block_lower = block_text.lower()
+            has_strong_pinout_heading = any(
+                kw in block_lower for kw in ['pinout -', 'figure 1-1. pinout',
+                                               'figure 1-2. pinout', 'figure 1-3. pinout',
+                                               'pin configurations']
+            )
+
+            # Keep block if ANY condition matches:
+            # 1. Page has a pinout table, OR
+            # 2. Block text matches pinout section keywords, OR
+            # 3. Has strong pinout heading
+            if is_pinout_page or is_pinout_text or has_strong_pinout_heading:
                 # Add page marker back
                 marked_block = f"--- Page {page_num} ---\n{block_text}"
                 filtered_text_blocks.append(marked_block)
@@ -144,8 +189,11 @@ class PinoutFilter:
         filtered_text = "\n\n".join(filtered_text_blocks)
 
         # Filter pages - keep pages with pinout tables or pinout text
+        # If filtered_pages is empty but we had candidates, keep the highest confidence ones
         if filtered_pages:
-            # Keep all pages that were in candidates
+            pages = extracted.pages
+        elif extracted.pages:
+            # Fallback: keep pages that were in candidates (don't lose everything)
             pages = extracted.pages
         else:
             pages = []

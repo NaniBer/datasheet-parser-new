@@ -50,7 +50,7 @@ class SchematicBuilder:
         1.0
     )
 
-    def __init__(self, package_type: str, pin_count: int, component_name: str = "IC"):
+    def __init__(self, package_type: str, pin_count: int, component_name: str = "IC", custom_layout: Optional[Dict[str, List[int]]] = None):
         """
         Initialize schematic builder.
 
@@ -58,16 +58,19 @@ class SchematicBuilder:
             package_type: Package type (e.g., "DIP-8", "LQFP64")
             pin_count: Number of pins
             component_name: Component name for PackageValue label
+            custom_layout: Optional dict mapping side names to pin numbers
+                         (e.g., {"left_side": [1,2,3], "bottom_edge": [4,5,6]})
         """
         self.package_type = package_type
         self.pin_count = pin_count
         self.component_name = component_name
+        self.custom_layout = custom_layout
 
         # Get schematic parameters
         self.params = get_schematic_parameters(package_type, pin_count)
 
         # Calculate pin positions
-        self.pin_positions = layout_pins(self.params)
+        self.pin_positions = layout_pins(self.params, custom_layout)
 
         logger.info(
             "Initialized schematic builder for %s (%d pins)" % (package_type, pin_count)
@@ -349,6 +352,7 @@ def build_schematic_from_pin_data(
     component_name: str,
     pin_data: List[Dict[str, Any]],
     output_path: str,
+    custom_layout: Optional[Dict[str, List[int]]] = None,
 ) -> bool:
     """
     Convenience function to build and export schematic from pin data.
@@ -359,9 +363,11 @@ def build_schematic_from_pin_data(
         component_name: Component name
         pin_data: List of pin dictionaries with 'number', 'name'
         output_path: Path to save GLB file
+        custom_layout: Optional dict mapping side names to pin numbers
+                     (e.g., {"left_side": [1,2,3], "bottom_edge": [4,5,6]})
 
     Returns:
         True if successful, False otherwise
     """
-    builder = SchematicBuilder(package_type, pin_count, component_name)
+    builder = SchematicBuilder(package_type, pin_count, component_name, custom_layout)
     return builder.save_glb(output_path, pin_data)
