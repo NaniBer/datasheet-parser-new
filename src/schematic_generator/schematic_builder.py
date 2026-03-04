@@ -150,56 +150,64 @@ class SchematicBuilder:
         leg_assy.add(pin_leg, color=self.PIN_COLOR)
         components.append(leg_assy)
 
-        # Pin name text - Vertical on top/bottom (stacked characters), horizontal on left/right
+        # Pin name text (function name) - Vertical on top/bottom, horizontal on left/right
         if pin_name:
             txt_size = self.params.pin_geometry.pin_name_size
             txt_height = self.params.pin_geometry.pin_name_height
+            name_assy = cq.Assembly(name="%s_text" % pin_number)
 
+            # For top/bottom pins, stack characters vertically (without rotation)
             if pin_pos.side in ["top", "bottom"]:
-                # Stack characters vertically for top/bottom pins (no rotation)
-                for i, char in enumerate(pin_name[:15]):  # Limit to 15 chars
-                    char_offset = -i * txt_size  # Stack upward from text position
-                    char_text = cq.Workplane("XY").center(
-                        pin_pos.text_x, pin_pos.text_y + char_offset
-                    ).text(char, txt_size, txt_height, halign="center")
+                # Stack characters from outer edge inward
+                # Top edge: chars stacked downward (decreasing Y)
+                # Bottom edge: chars stacked upward (increasing Y)
+                start_y = pin_pos.text_y
+                direction = -1 if pin_pos.side == "top" else 1
+                char_spacing = txt_size * 1.2  # Spacing between characters
 
-                    char_assy = cq.Assembly(name="%s_%s_char" % (pin_number, i))
-                    char_assy.add(char_text, color=self.BLACK_COLOR)
-                    components.append(char_assy)
+                for i, char in enumerate(pin_name[:30]):
+                    char_y = start_y + (i * char_spacing * direction)
+                    char_wp = cq.Workplane("XY").center(
+                        pin_pos.text_x, char_y
+                    ).text(char, txt_size, txt_height, halign="center")
+                    name_assy.add(char_wp, color=self.BLACK_COLOR)
             else:
-                # Horizontal text for left/right pins
+                # Left/right pins: normal horizontal text
                 pin_name_text = cq.Workplane("XY").center(
                     pin_pos.text_x, pin_pos.text_y
                 ).text(pin_name[:30], txt_size, txt_height, halign=pin_pos.text_halign)
-
-                name_assy = cq.Assembly(name="%s_text" % pin_number)
                 name_assy.add(pin_name_text, color=self.BLACK_COLOR)
-                components.append(name_assy)
 
-        # Pin number text - Vertical on top/bottom (stacked characters), horizontal on left/right
+            components.append(name_assy)
+
+        # Pin number text - Vertical on top/bottom, horizontal on left/right
         num_size = self.params.pin_geometry.pin_num_size
         num_height = self.params.pin_geometry.pin_num_height
+        num_assy = cq.Assembly(name="%s_num" % pin_number)
 
+        # For top/bottom pins, stack characters vertically (without rotation)
         if pin_pos.side in ["top", "bottom"]:
-            # Stack characters vertically for top/bottom pins (no rotation)
-            for i, char in enumerate(pin_number[:5]):  # Numbers are usually 1-2 chars
-                char_offset = -i * num_size  # Stack upward from text position
-                char_text = cq.Workplane("XY").center(
-                    pin_pos.num_x, pin_pos.num_y + char_offset
-                ).text(char, num_size, num_height, halign="center")
+            # Stack characters from outer edge inward
+            # Top edge: chars stacked downward (decreasing Y)
+            # Bottom edge: chars stacked upward (increasing Y)
+            start_y = pin_pos.num_y
+            direction = -1 if pin_pos.side == "top" else 1
+            char_spacing = num_size * 1.2  # Spacing between characters
 
-                char_assy = cq.Assembly(name="%s_%s_num" % (pin_number, i))
-                char_assy.add(char_text, color=self.BLACK_COLOR)
-                components.append(char_assy)
+            for i, char in enumerate(pin_number):
+                char_y = start_y + (i * char_spacing * direction)
+                char_wp = cq.Workplane("XY").center(
+                    pin_pos.num_x, char_y
+                ).text(char, num_size, num_height, halign="center")
+                num_assy.add(char_wp, color=self.BLACK_COLOR)
         else:
-            # Horizontal text for left/right pins
+            # Left/right pins: normal horizontal text
             num_text = cq.Workplane("XY").center(
                 pin_pos.num_x, pin_pos.num_y
             ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
-
-            num_assy = cq.Assembly(name="%s_num" % pin_number)
             num_assy.add(num_text, color=self.BLACK_COLOR)
-            components.append(num_assy)
+
+        components.append(num_assy)
 
         return components
 

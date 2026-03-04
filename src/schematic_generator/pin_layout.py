@@ -187,8 +187,8 @@ class PinLayout:
             y = (self.params.body_height / 2) - top_margin - (i * self.params.pin_pitch)
             x = -self.params.body_width / 2
 
-            text_x = x + self.params.pin_geometry.pin_name_offset
-            num_x = x + self.params.pin_geometry.pin_num_offset
+            text_x = x + self.params.pin_geometry.pin_name_offset+0.5
+            num_x = x + self.params.pin_geometry.pin_num_offset+0.5
 
             positions.append(PinPosition(
                 pin_index=i,
@@ -212,9 +212,9 @@ class PinLayout:
             pin_idx = pins_per_side + i
 
             text_x = x
-            text_y = y - self.params.pin_geometry.pin_name_offset
+            text_y = y - self.params.pin_geometry.pin_num_offset  # Names OUTSIDE (further)
             num_x = x
-            num_y = y - self.params.pin_geometry.pin_num_offset
+            num_y = y - self.params.pin_geometry.pin_name_offset  # Numbers INSIDE (closer)
 
             positions.append(PinPosition(
                 pin_index=pin_idx,
@@ -264,9 +264,9 @@ class PinLayout:
             pin_idx = 3 * pins_per_side + i
 
             text_x = x
-            text_y = y + self.params.pin_geometry.pin_name_offset
+            text_y = y + self.params.pin_geometry.pin_num_offset  # Names OUTSIDE (further)
             num_x = x
-            num_y = y + self.params.pin_geometry.pin_num_offset
+            num_y = y + self.params.pin_geometry.pin_name_offset  # Numbers INSIDE (closer)
 
             positions.append(PinPosition(
                 pin_index=pin_idx,
