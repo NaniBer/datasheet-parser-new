@@ -150,46 +150,56 @@ class SchematicBuilder:
         leg_assy.add(pin_leg, color=self.PIN_COLOR)
         components.append(leg_assy)
 
-        # Pin name text - Vertical on top/bottom, horizontal on left/right
+        # Pin name text - Vertical on top/bottom (stacked characters), horizontal on left/right
         if pin_name:
             txt_size = self.params.pin_geometry.pin_name_size
             txt_height = self.params.pin_geometry.pin_name_height
 
             if pin_pos.side in ["top", "bottom"]:
-                # Rotate 90° for top/bottom pins to make text vertical
-                pin_name_text = (cq.Workplane("XY").center(
-                    pin_pos.text_x, pin_pos.text_y
-                ).text(pin_name[:30], txt_size, txt_height, halign=pin_pos.text_halign)
-                    .rotate((0, 0, 1), (pin_pos.text_x, pin_pos.text_y, 0), 90))
+                # Stack characters vertically for top/bottom pins (no rotation)
+                for i, char in enumerate(pin_name[:15]):  # Limit to 15 chars
+                    char_offset = -i * txt_size  # Stack upward from text position
+                    char_text = cq.Workplane("XY").center(
+                        pin_pos.text_x, pin_pos.text_y + char_offset
+                    ).text(char, txt_size, txt_height, halign="center")
+
+                    char_assy = cq.Assembly(name="%s_%s_char" % (pin_number, i))
+                    char_assy.add(char_text, color=self.BLACK_COLOR)
+                    components.append(char_assy)
             else:
-                # No rotation for left/right pins
+                # Horizontal text for left/right pins
                 pin_name_text = cq.Workplane("XY").center(
                     pin_pos.text_x, pin_pos.text_y
                 ).text(pin_name[:30], txt_size, txt_height, halign=pin_pos.text_halign)
 
-            name_assy = cq.Assembly(name="%s_text" % pin_number)
-            name_assy.add(pin_name_text, color=self.BLACK_COLOR)
-            components.append(name_assy)
+                name_assy = cq.Assembly(name="%s_text" % pin_number)
+                name_assy.add(pin_name_text, color=self.BLACK_COLOR)
+                components.append(name_assy)
 
-        # Pin number text - Vertical on top/bottom, horizontal on left/right
+        # Pin number text - Vertical on top/bottom (stacked characters), horizontal on left/right
         num_size = self.params.pin_geometry.pin_num_size
         num_height = self.params.pin_geometry.pin_num_height
 
         if pin_pos.side in ["top", "bottom"]:
-            # Rotate 90° for top/bottom pins to make text vertical
-            num_text = (cq.Workplane("XY").center(
-                pin_pos.num_x, pin_pos.num_y
-            ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
-                .rotate((0, 0, 1), (pin_pos.num_x, pin_pos.num_y, 0), 90))
+            # Stack characters vertically for top/bottom pins (no rotation)
+            for i, char in enumerate(pin_number[:5]):  # Numbers are usually 1-2 chars
+                char_offset = -i * num_size  # Stack upward from text position
+                char_text = cq.Workplane("XY").center(
+                    pin_pos.num_x, pin_pos.num_y + char_offset
+                ).text(char, num_size, num_height, halign="center")
+
+                char_assy = cq.Assembly(name="%s_%s_num" % (pin_number, i))
+                char_assy.add(char_text, color=self.BLACK_COLOR)
+                components.append(char_assy)
         else:
-            # No rotation for left/right pins
+            # Horizontal text for left/right pins
             num_text = cq.Workplane("XY").center(
                 pin_pos.num_x, pin_pos.num_y
             ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
 
-        num_assy = cq.Assembly(name="%s_num" % pin_number)
-        num_assy.add(num_text, color=self.BLACK_COLOR)
-        components.append(num_assy)
+            num_assy = cq.Assembly(name="%s_num" % pin_number)
+            num_assy.add(num_text, color=self.BLACK_COLOR)
+            components.append(num_assy)
 
         return components
 
