@@ -24,9 +24,9 @@ class PackageType(Enum):
 @dataclass
 class PinGeometry:
     """Geometry parameters for individual pins."""
-    leg_length: float = 6.0  # Length of pin leg (mm)
+    leg_length: float = 1.0  # Length of pin leg (mm)
     leg_width: float = 0.15  # Width of pin leg (mm)
-    leg_thickness: float = 0.5  # Extrusion thickness (mm)
+    leg_thickness: float = 0.15  # Extrusion thickness (mm)
     point_size: float = 0.5  # Size of pin point (mm)
 
     # Text positioning
@@ -47,7 +47,7 @@ class BodyGeometry:
     # Labels
     designator_name: str = "U"  # Designator letter
     designator_size: float = 4.0  # Font size for designator
-    designator_offset: float = 8.0  # Distance above body
+    designator_offset: float = 16.0  # Distance above body
     designator_height: float = 0.5  # Text height
 
     value_size: float = 2.0  # Font size for package value
@@ -193,7 +193,7 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
         - TQFP-44: ATmega164A
         - LQFP-64: STM32F103
     """
-    pitch = 0.5  # 0.5mm is common for TQFP
+    pitch =  0.8 
 
     # Calculate body width based on pin count
     # More pins = larger body
