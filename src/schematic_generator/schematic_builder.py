@@ -132,38 +132,63 @@ class SchematicBuilder:
         leg_width = self.params.pin_geometry.leg_width
         leg_thickness = self.params.pin_geometry.leg_thickness
 
-        # Create pin leg (for schematic symbols, we don't rotate - just position)
-        pin_leg = cq.Workplane("XY").center(pin_pos.x, pin_pos.y).rect(
-            leg_length, leg_width
-        ).extrude(leg_thickness)
+        # Create pin leg with correct dimensions based on side
+        # Left/Right side: Horizontal pin (left to right) - length is X dimension
+        # Top/Bottom side: Vertical pin (top to bottom) - length is Y dimension
+        if pin_pos.side in ["left", "right"]:
+            # Horizontal pin: leg_length in X, leg_width in Y
+            pin_leg = (cq.Workplane("XY").center(pin_pos.x, pin_pos.y)
+                       .rect(leg_length, leg_width)
+                       .extrude(leg_thickness))
+        else:  # top or bottom
+            # Vertical pin: swap dimensions - leg_width in X, leg_length in Y
+            pin_leg = (cq.Workplane("XY").center(pin_pos.x, pin_pos.y)
+                       .rect(leg_width, leg_length)
+                       .extrude(leg_thickness))
 
         leg_assy = cq.Assembly(name="%s_leg" % pin_number)
         leg_assy.add(pin_leg, color=self.PIN_COLOR)
         components.append(leg_assy)
 
-        # Pin name text (function name)
+        # Pin name text - Vertical on top/bottom, horizontal on left/right
         if pin_name:
             txt_size = self.params.pin_geometry.pin_name_size
             txt_height = self.params.pin_geometry.pin_name_height
 
-            pin_name_text = cq.Workplane("XY").center(
-                pin_pos.text_x, pin_pos.text_y
-            ).text(pin_name[:30], txt_size, txt_height, halign=pin_pos.text_halign)
+            if pin_pos.side in ["top", "bottom"]:
+                # Rotate 90° for top/bottom pins to make text vertical
+                pin_name_text = (cq.Workplane("XY").center(
+                    pin_pos.text_x, pin_pos.text_y
+                ).text(pin_name[:30], txt_size, txt_height, halign=pin_pos.text_halign)
+                    .rotate((0, 0, 1), (pin_pos.text_x, pin_pos.text_y, 0), 90))
+            else:
+                # No rotation for left/right pins
+                pin_name_text = cq.Workplane("XY").center(
+                    pin_pos.text_x, pin_pos.text_y
+                ).text(pin_name[:30], txt_size, txt_height, halign=pin_pos.text_halign)
 
             name_assy = cq.Assembly(name="%s_text" % pin_number)
             name_assy.add(pin_name_text, color=self.BLACK_COLOR)
             components.append(name_assy)
 
-        # Pin number text
+        # Pin number text - Vertical on top/bottom, horizontal on left/right
         num_size = self.params.pin_geometry.pin_num_size
         num_height = self.params.pin_geometry.pin_num_height
 
-        pin_num_text = cq.Workplane("XY").center(
-            pin_pos.num_x, pin_pos.num_y
-        ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
+        if pin_pos.side in ["top", "bottom"]:
+            # Rotate 90° for top/bottom pins to make text vertical
+            num_text = (cq.Workplane("XY").center(
+                pin_pos.num_x, pin_pos.num_y
+            ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
+                .rotate((0, 0, 1), (pin_pos.num_x, pin_pos.num_y, 0), 90))
+        else:
+            # No rotation for left/right pins
+            num_text = cq.Workplane("XY").center(
+                pin_pos.num_x, pin_pos.num_y
+            ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
 
         num_assy = cq.Assembly(name="%s_num" % pin_number)
-        num_assy.add(pin_num_text, color=self.BLACK_COLOR)
+        num_assy.add(num_text, color=self.BLACK_COLOR)
         components.append(num_assy)
 
         return components
