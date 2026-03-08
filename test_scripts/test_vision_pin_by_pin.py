@@ -10,7 +10,7 @@ pdf_path = "pdfs/pages.pdf"
 api_url = "https://qwen.ideeza.com/describe_image/"
 
 # Role-based prompt format (combined into single text)
-system_prompt = """You are an expert electronics engineer specializing in reading and interpreting electronic component pinout diagrams from datasheets.
+system_prompt = """You are an expert electronics engineer and JSON Generator specializing in reading and interpreting electronic component pinout diagrams from datasheets.
 
 You have deep knowledge of:
 - Component package types (DIP, SOIC, TQFP, LQFP, QFN, BGA)
@@ -18,16 +18,7 @@ You have deep knowledge of:
 - Visual interpretation of physical component layouts
 - Datasheet diagram conventions and standards
 
-Your task is to analyze pinout diagrams and extract accurate physical pin layout information."""
-
-user_prompt = """Analyze the provided pinout diagram and extract the physical pin layout for this component.
-
-## Instructions
-
-1. Identify which pins are located on each side of the component (LEFT, RIGHT, TOP, BOTTOM)
-2. List ALL pin numbers for each side
-3. Maintain the ORDER of pins as they appear on each side
-
+Your task is to analyze pinout diagrams and extract accurate physical pin layout information.
 ## Output Format
 
 Return ONLY valid JSON:
@@ -38,6 +29,16 @@ Return ONLY valid JSON:
   "bottom_edge": [...],
   "top_edge": []
 }
+"""
+
+user_prompt = """Analyze the provided pinout diagram and extract the physical pin layout for this component.
+
+## Instructions
+
+1. Identify which pins are located on each side of the component (LEFT, RIGHT, TOP, BOTTOM)
+2. List ALL pin numbers for each side
+3. Maintain the ORDER of pins as they appear on each side
+
 
 IMPORTANT:
 - Do NOT repeat pin numbers - each pin belongs to only one side

@@ -1,0 +1,47 @@
+{
+  "component_name": "NE555",
+  "package_type": "DIP",
+  "pin_count": 8,
+  "pins": [
+    {
+      "number": 1,
+      "name": "GND",
+      "function": "ground"
+    },
+    {
+      "number": 2,
+      "name": "TRIGGER",
+      "function": "input"
+    },
+    {
+      "number": 3,
+      "name": "OUTPUT",
+      "function": "output"
+    },
+    {
+      "number": 4,
+      "name": "RESET",
+      "function": "input"
+    },
+    {
+      "number": 5,
+      "name": "CONTROL VOLTAGE",
+      "function": "analog"
+    },
+    {
+      "number": 6,
+      "name": "THRESHOLD",
+      "function": "input"
+    },
+    {
+      "number": 7,
+      "name": "DISCHARGE",
+      "function": "output"
+    },
+    {
+      "number": 8,
+      "name": "VCC",
+      "function": "power"
+    }
+  ]
+}

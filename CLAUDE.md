@@ -203,7 +203,15 @@ test_scripts/                 # Test scripts for each component
 - `package_geometry.py` - Geometry parameters for each package type
 - `pin_layout.py` - Pin layout algorithms for each package type
 - `schematic_builder.py` - CadQuery builder with GLB export
-- `adapter.py` - PinData to SchematicBuilder format conversion
+- **Text Rendering:** Character stacking for vertical text on top/bottom pins (no rotation)
+
+**Text Orientation Notes:**
+- Left/Right pins: Horizontal text, readable from side
+- Top/Bottom pins: Characters stacked vertically (upright), readable from top/down
+- Top pins: Characters stack downward (away from body)
+- Bottom pins: Characters stack upward (away from body)
+- Pin numbers on top/bottom: Positioned OUTSIDE (further from body)
+- Pin names on top/bottom: Positioned INSIDE (closer to body)
 
 #### Supported Package Types
 
@@ -336,6 +344,30 @@ Some components have non-standard layouts that require custom handling:
 
 ---
 
+## RECENT CHANGES (Mar 2026)
+
+### Schematic Text Orientation Fix (Mar 2026)
+
+**Goal:** Fix text readability on top/bottom pins of QFN/LQFP packages
+
+**Problem:** Text rotated 90° for top/bottom pins caused characters to appear sideways/unreadable in 3D viewer
+
+**Solution:** Character stacking instead of rotation
+- For top/bottom pins, stack individual characters vertically without rotation
+- Characters remain upright and readable from top-down view
+- Top edge: Characters stack downward (away from body)
+- Bottom edge: Characters stack upward (away from body)
+- Adjusted text positions: pin numbers outside, pin names inside for top/bottom
+- Added 0.5mm offset to left side text positions for better spacing
+
+**Files Modified:**
+- `src/schematic_generator/schematic_builder.py` - Character stacking for vertical text
+- `src/schematic_generator/pin_layout.py` - Text position offsets
+
+**Result:** Text on all 4 sides of quad packages is now readable and properly positioned
+
+---
+
 ## RECENT CHANGES (Feb 2026)
 
 ### Vision API Testing (Feb 2026)
@@ -457,6 +489,7 @@ All schematics are generated in the `output/` directory:
 - CLI integration
 - Text-based layout extraction for standard packages
 - Vision API testing (determined unsuitable)
+- **Schematic text orientation fix** - Character stacking for vertical text on top/bottom pins
 
 ### In Progress 🚧
 - None
@@ -473,7 +506,7 @@ All schematics are generated in the `output/` directory:
 
 All schematics are generated in the `output/` directory:
 - `NE555_schematic.glb` (1.36 MB)
-- `STM32F103RBT7_schematic.glb` (14.54 MB)
+- `STM32F103RBT7_schematic.glb` (6.4 MB) - LQFP48 with fixed text orientation
 - `74HC595_schematic.glb` (2.09 MB)
 - `MC74HC595A_schematic.glb` (~2 MB)
 - `test_schematic.glb` (9.44 MB)

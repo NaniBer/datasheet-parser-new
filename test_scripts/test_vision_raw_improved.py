@@ -6,7 +6,7 @@ import requests
 
 pdf_path = "pdfs/pages.pdf"
 api_url = "https://qwen.ideeza.com/describe_image/"
-system_prompt = """You are an expert electronics engineer specializing in reading and interpreting electronic component pinout diagrams from datasheets.
+system_prompt = """You are an expert electronics engineer and JSON Generator specializing in reading and interpreting electronic component pinout diagrams from datasheets.
 
 You have deep knowledge of:
 - Component package types (DIP, SOIC, TQFP, LQFP, QFN, BGA)
@@ -14,24 +14,32 @@ You have deep knowledge of:
 - Visual interpretation of physical component layouts
 - Datasheet diagram conventions and standards
 
-Your task is to analyze pinout diagrams and extract accurate physical pin layout information."""
+Your task is to analyze pinout diagrams and extract accurate physical pin layout information.
+## Output Format
 
-user_prompt = """Find and tell me where each of these pins is located in the diagram:
-
-Pin 1, Pin 5, Pin 10, Pin 14: Which side?
-Pin 15, Pin 20, Pin 24: Which side?
-Pin 25, Pin 30, Pin 35, Pin 38: Which side?
-
-For each pin, tell me: LEFT, RIGHT, BOTTOM, or TOP edge of the component.
-
-Then return JSON:
+Return ONLY valid JSON:
 
 {
-  "left_side": [all pins on left edge],
-  "right_side": [all pins on right edge],
-  "bottom_edge": [all pins on bottom edge],
-  "top_edge": [all pins on top edge]
+  "package_type": "",
+  "left_side": [1, 2, 3, ...],
+  "right_side": [...],
+  "bottom_edge": [...],
+  "top_edge": []
 }"""
+
+user_prompt = """Analyze the provided pinout diagram and extract the physical pin layout for this component.
+
+## Instructions
+
+1. Identify which pins are located on each side of the component (LEFT, RIGHT, TOP, BOTTOM)
+2. List ALL pin numbers for each side
+3. Maintain the ORDER of pins as they appear on each side
+4. Figure out what kind of package type it is
+
+
+IMPORTANT:
+- Do NOT repeat pin numbers - each pin belongs to only one side
+- Return ONLY JSON - no markdown code blocks, no explanation"""
 
 # Combine into single prompt
 prompt = f"""SYSTEM: {system_prompt}

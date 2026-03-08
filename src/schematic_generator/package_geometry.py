@@ -24,9 +24,9 @@ class PackageType(Enum):
 @dataclass
 class PinGeometry:
     """Geometry parameters for individual pins."""
-    leg_length: float = 1.0  # Length of pin leg (mm)
-    leg_width: float = 0.15  # Width of pin leg (mm)
-    leg_thickness: float = 0.15  # Extrusion thickness (mm)
+    leg_length: float = 0.5  # Length of pin leg (mm)
+    leg_width: float = 0.10  # Width of pin leg (mm)
+    leg_thickness: float = 0.10  # Extrusion thickness (mm)
     point_size: float = 0.5  # Size of pin point (mm)
 
     # Text positioning
@@ -125,9 +125,9 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
             leg_thickness=0.5,
             point_size=0.5,
             pin_num_size=1.0,
-            pin_num_offset=10.0,  # Pin numbers on the OUTSIDE (further from body)
-            pin_name_size=1.2,  # Reduced from 1.5 for smaller text
-            pin_name_offset=3.0,  # Pin names on the INSIDE (closer to body)
+            pin_num_offset=5.0,  # Pin numbers on the OUTSIDE (further from body)
+            pin_name_size=0.8,  # Reduced from 1.5 for smaller text
+            pin_name_offset=-2.0,  # Pin names on the INSIDE (closer to body)
             pin_name_height=0.5,
             pin_num_height=0.5
         ),

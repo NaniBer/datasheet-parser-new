@@ -79,6 +79,43 @@ class SchematicBuilder:
             "Body: %.1f x %.1f mm" % (self.params.body_width, self.params.body_height)
         )
 
+    def build_pin_markers(self) -> cq.Assembly:
+        """
+        Build pin 1 marker (dot) and orientation notch.
+
+        Returns:
+            Assembly with Pin1Dot and Notch components
+        """
+        markers_assy = cq.Assembly(name="PinMarkers")
+
+        # Pin 1 dot marker - at top-left corner of body
+        dot_radius = 0.6  # Size of dot marker (mm)
+        dot_height = 0.3  # Thickness of dot (mm)
+        dot_offset = 1.5  # Offset from body corner (mm)
+
+        # Dot position: top-left corner of body (inside the body)
+        dot_x = -self.params.body_width / 2 + dot_offset
+        dot_y = self.params.body_height / 2 - dot_offset
+
+        pin1_dot = cq.Workplane("XY").center(dot_x, dot_y).circle(dot_radius).extrude(dot_height)
+        markers_assy.add(pin1_dot, name="Pin1Dot", color=self.BLACK_COLOR)
+
+        # Notch indicator - semicircle on top edge (centered)
+        notch_radius = 2.0  # Size of notch (mm)
+        notch_height = 0.3  # Thickness of notch (mm)
+
+        # Create a semicircle notch centered on top edge
+        # Start from left point, arc to right point, then close
+        notch = (cq.Workplane("XY")
+                 .center(0, self.params.body_height / 2)
+                 .moveTo(-notch_radius, 0)
+                 .threePointArc((0, notch_radius), (notch_radius, 0))
+                 .close()
+                 .extrude(notch_height))
+        markers_assy.add(notch, name="Notch", color=self.BLACK_COLOR)
+
+        return markers_assy
+
     def build_body_border(self) -> cq.Assembly:
         """
         Build wireframe border for IC body.
@@ -329,17 +366,22 @@ class SchematicBuilder:
         body_line = self.build_body_border()
         package_assy.add(body_line, name="BodyLine")
 
-        # 2. Add all pins
+        # 2. Add pin markers (pin 1 dot and notch)
+        logger.info("Building pin markers...")
+        markers = self.build_pin_markers()
+        package_assy.add(markers, name="PinMarkers")
+
+        # 3. Add all pins
         logger.info("Building pins...")
         legs = self.build_all_pins(pin_data)
         package_assy.add(legs, name="Legs")
 
-        # 3. Add designator label
+        # 4. Add designator label
         logger.info("Adding designator label...")
         designator = self.build_designator()
         package_assy.add(designator, name="DesignatorName")
 
-        # 4. Add package value label
+        # 5. Add package value label
         logger.info("Adding package value label...")
         value = self.build_package_value()
         package_assy.add(value, name="PackageValue")
