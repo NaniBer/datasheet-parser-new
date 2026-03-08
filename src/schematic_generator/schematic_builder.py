@@ -170,16 +170,25 @@ class SchematicBuilder:
         leg_thickness = self.params.pin_geometry.leg_thickness
 
         # Create pin leg with correct dimensions based on side
+        # Pin legs start at body edge and extend outwards only
         # Left/Right side: Horizontal pin (left to right) - length is X dimension
         # Top/Bottom side: Vertical pin (top to bottom) - length is Y dimension
         if pin_pos.side in ["left", "right"]:
             # Horizontal pin: leg_length in X, leg_width in Y
-            pin_leg = (cq.Workplane("XY").center(pin_pos.x, pin_pos.y)
+            # Offset rectangle by half length so leg starts at body edge
+            # Left pins: offset +leg_length/2 (leg extends left from body edge)
+            # Right pins: offset -leg_length/2 (leg extends right from body edge)
+            offset = leg_length / 2 if pin_pos.side == "right" else -leg_length / 2
+            pin_leg = (cq.Workplane("XY").center(pin_pos.x + offset, pin_pos.y)
                        .rect(leg_length, leg_width)
                        .extrude(leg_thickness))
         else:  # top or bottom
             # Vertical pin: swap dimensions - leg_width in X, leg_length in Y
-            pin_leg = (cq.Workplane("XY").center(pin_pos.x, pin_pos.y)
+            # Offset rectangle by half length so leg starts at body edge
+            # Top pins: offset -leg_length/2 (leg extends up from body edge)
+            # Bottom pins: offset +leg_length/2 (leg extends down from body edge)
+            offset = -leg_length / 2 if pin_pos.side == "bottom" else leg_length / 2
+            pin_leg = (cq.Workplane("XY").center(pin_pos.x, pin_pos.y + offset)
                        .rect(leg_width, leg_length)
                        .extrude(leg_thickness))
 

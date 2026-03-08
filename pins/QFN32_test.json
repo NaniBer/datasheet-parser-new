@@ -1,0 +1,167 @@
+{
+  "component_name": "TestQFN32",
+  "package_type": "QFN-32",
+  "pin_count": 32,
+  "pins": [
+    {
+      "number": "1",
+      "name": "GPIO0",
+      "function": "io"
+    },
+    {
+      "number": "2",
+      "name": "GPIO1",
+      "function": "io"
+    },
+    {
+      "number": "3",
+      "name": "GPIO2",
+      "function": "io"
+    },
+    {
+      "number": "4",
+      "name": "GPIO3",
+      "function": "io"
+    },
+    {
+      "number": "5",
+      "name": "GPIO4",
+      "function": "io"
+    },
+    {
+      "number": "6",
+      "name": "GPIO5",
+      "function": "io"
+    },
+    {
+      "number": "7",
+      "name": "GPIO6",
+      "function": "io"
+    },
+    {
+      "number": "8",
+      "name": "GPIO7",
+      "function": "io"
+    },
+    {
+      "number": "9",
+      "name": "GPIO8",
+      "function": "io"
+    },
+    {
+      "number": "10",
+      "name": "GPIO9",
+      "function": "io"
+    },
+    {
+      "number": "11",
+      "name": "GPIO10",
+      "function": "io"
+    },
+    {
+      "number": "12",
+      "name": "GPIO11",
+      "function": "io"
+    },
+    {
+      "number": "13",
+      "name": "GPIO12",
+      "function": "io"
+    },
+    {
+      "number": "14",
+      "name": "GPIO13",
+      "function": "io"
+    },
+    {
+      "number": "15",
+      "name": "GPIO14",
+      "function": "io"
+    },
+    {
+      "number": "16",
+      "name": "GPIO15",
+      "function": "io"
+    },
+    {
+      "number": "17",
+      "name": "GPIO16",
+      "function": "io"
+    },
+    {
+      "number": "18",
+      "name": "GPIO17",
+      "function": "io"
+    },
+    {
+      "number": "19",
+      "name": "GPIO18",
+      "function": "io"
+    },
+    {
+      "number": "20",
+      "name": "GPIO19",
+      "function": "io"
+    },
+    {
+      "number": "21",
+      "name": "GPIO20",
+      "function": "io"
+    },
+    {
+      "number": "22",
+      "name": "GPIO21",
+      "function": "io"
+    },
+    {
+      "number": "23",
+      "name": "GPIO22",
+      "function": "io"
+    },
+    {
+      "number": "24",
+      "name": "GPIO23",
+      "function": "io"
+    },
+    {
+      "number": "25",
+      "name": "GPIO24",
+      "function": "io"
+    },
+    {
+      "number": "26",
+      "name": "GPIO25",
+      "function": "io"
+    },
+    {
+      "number": "27",
+      "name": "GPIO26",
+      "function": "io"
+    },
+    {
+      "number": "28",
+      "name": "GPIO27",
+      "function": "io"
+    },
+    {
+      "number": "29",
+      "name": "GPIO28",
+      "function": "io"
+    },
+    {
+      "number": "30",
+      "name": "GPIO29",
+      "function": "io"
+    },
+    {
+      "number": "31",
+      "name": "GPIO30",
+      "function": "io"
+    },
+    {
+      "number": "32",
+      "name": "GPIO31",
+      "function": "io"
+    }
+  ]
+}
