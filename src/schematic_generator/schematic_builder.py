@@ -236,12 +236,30 @@ class SchematicBuilder:
             # Stack characters from outer edge inward
             # Top edge: chars stacked downward (decreasing Y)
             # Bottom edge: chars stacked upward (increasing Y)
-            start_y = pin_pos.num_y
+            leg_end_offset = leg_length if pin_pos.side == "bottom" else -leg_length
+            # Apply extra offset for QFN packages (moves numbers further from body)
+            extra_offset = getattr(self.params.pin_geometry, 'qfn_pin_num_extra_offset', 0)
+            if pin_pos.side == "bottom":
+                extra_offset = -5 # Positive for bottom (further down)
+            else:  # top
+                extra_offset = 5  # Negative for top (further up)
+            start_y = pin_pos.y + leg_end_offset + extra_offset  # Start at leg end + extra offset
+            direction = 1 if pin_pos.side == "top" else -1
+            char_spacing = num_size * 1.2  # Spacing between characters
+
+            print(f"[DEBUG] Processing {pin_pos.side} pin {pin_number}: pin_pos.y={pin_pos.y:.1f}, leg_end_offset={leg_end_offset:.1f}")
+            print(f"[DEBUG]   start_y={start_y:.1f}, direction={'up' if direction==1 else 'down'}")
+
+            for i, char in enumerate(pin_number):
+                char_y = start_y + (i * char_spacing * direction)
+                print(f"[DEBUG] Char {i+1}: char_y={char_y:.1f}")
             direction = -1 if pin_pos.side == "top" else 1
             char_spacing = num_size * 1.2  # Spacing between characters
 
             for i, char in enumerate(pin_number):
                 char_y = start_y + (i * char_spacing * direction)
+                print(f"[DEBUG] Char {i+1}: char_y={char_y:.1f}")
+
                 char_wp = cq.Workplane("XY").center(
                     pin_pos.num_x, char_y
                 ).text(char, num_size, num_height, halign="center")
@@ -252,6 +270,18 @@ class SchematicBuilder:
                 pin_pos.num_x, pin_pos.num_y
             ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
             num_assy.add(num_text, color=self.BLACK_COLOR)
+
+        try:
+            # Log if we completed processing this pin
+            if pin_pos.side in ["top", "bottom"] and i == len(pin_number) - 1:
+                logger.debug(f"Completed {pin_pos.side} pin {pin_number} stacking")
+            else:
+                # Log left/right pin processing
+                logger.debug(f"Processing {pin_pos.side} pin {pin_number}")
+        except Exception as e:
+            logger.error(f"Error processing pin {pin_number}: {e}")
+            import traceback
+            traceback.print_exc()
 
         components.append(num_assy)
 
