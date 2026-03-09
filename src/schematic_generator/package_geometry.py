@@ -268,7 +268,7 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
             pin_name_offset=0.5,  # Pin names on the INSIDE (closer to body)
             pin_name_height=0.2,
             pin_num_height=0.2,
-            qfn_pin_num_extra_offset=1.0  # Extra offset for QFN top/bottom pin numbers (1.0mm further from body)
+            qfn_pin_num_extra_offset=5.0  # Extra offset for QFN top/bottom pin numbers (5.0mm further from body)
         ),
         body_geometry=BodyGeometry(
             border_thickness=0.25,

@@ -238,10 +238,11 @@ class SchematicBuilder:
             # Bottom edge: chars stacked upward (increasing Y)
             leg_end_offset = leg_length if pin_pos.side == "bottom" else -leg_length
             # Extra offset for QFN packages (moves numbers further from body)
+            extra_offset_base = getattr(self.params.pin_geometry, 'qfn_pin_num_extra_offset', 0)
             if pin_pos.side == "bottom":
-                extra_offset = -5  # Further down from body
+                extra_offset = -extra_offset_base  # Further down from body
             else:  # top
-                extra_offset = 5  # Further up from body
+                extra_offset = extra_offset_base  # Further up from body
             start_y = pin_pos.y + leg_end_offset + extra_offset
             direction = -1 if pin_pos.side == "top" else 1
             char_spacing = num_size * 1.2  # Spacing between characters
