@@ -190,9 +190,6 @@ class PinLayout:
             text_x = x + self.params.pin_geometry.pin_name_offset+0.5
             num_x = x + self.params.pin_geometry.pin_num_offset+0.5
 
-            print(f"[DEBUG] Left pin {i+1}: x={x:.1f}, y={y:.1f}")
-            print(f"[DEBUG]   Text positions: name_x={text_x:.1f}, num_x={num_x:.1f}")
-
             positions.append(PinPosition(
                 pin_index=i,
                 pin_number=str(i + 1),
