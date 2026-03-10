@@ -255,9 +255,9 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
             extra_left_num_offset=-6.0,      # Numbers at: x + 2.0 + (-6) = x - 4.0 = further from body = OUTSIDE ✓
             extra_right_name_offset=1.0,     # Names at: x + (-2.0) + 1 = x - 1.0 = closer to body = INSIDE ✓
             extra_right_num_offset=2.0,     # Numbers at: x + 2.0 + (-4) = x - 2.0 = further from body = OUTSIDE ✓ (was -1.5)
-            extra_bottom_name_offset=-2.0,  # Names at: y - (-2.0) + (-2) = y = LOWER (closer to body) = INSIDE ✓
-            extra_bottom_num_offset=-1.0,     # Numbers at: y - 2.0 + (-2) = y - 4.0 = LOWER (further from body) = OUTSIDE ✓
-            extra_top_name_offset=-2.0,      # Names at: y + (-2.0) + (-2) = y - 4.0 = LOWER (closer to body) = INSIDE ✓
+            extra_bottom_name_offset=0.0,  # Names at: y - (-2.0) + (-2) = y = LOWER (closer to body) = INSIDE ✓
+            extra_bottom_num_offset=-2.0,     # Numbers at: y - 2.0 + (-2) = y - 4.0 = LOWER (further from body) = OUTSIDE ✓
+            extra_top_name_offset=0.5,      # Names at: y + (-2.0) + (-2) = y - 4.0 = LOWER (closer to body) = INSIDE ✓
             extra_top_num_offset=4.0         # Numbers at: y + 2.0 + 1 = y + 3.0 = HIGHER (further from body) = OUTSIDE ✓
         ),
         body_geometry=BodyGeometry(
@@ -283,6 +283,15 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
     width = 10.0 + (pins_per_side * pitch)  # Increased from 6.0 for better visibility
     height = width
 
+    print(f"\n=== DEBUG QFN PARAMETERS ===")
+    print(f"pin_count: {pin_count}, pins_per_side: {pins_per_side}")
+    print(f"body_width: {width}, body_height: {height}")
+    print(f"pin_pitch: {pitch}")
+    print(f"Setting extra_bottom_name_offset: -1.0")
+    print(f"Setting extra_bottom_num_offset: 5.0")
+    print(f"Setting extra_top_name_offset: -1.0")
+    print(f"Setting extra_top_num_offset: 5.0")
+
     return SchematicParameters(
         package_type=PackageType.QFN,
         pin_count=pin_count,
@@ -305,10 +314,10 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
             extra_left_num_offset=-5.0,   # Numbers at: x + 2.5 = further from body = OUTSIDE ✓
             extra_right_name_offset=0.0,  # Names at: x + (-0.5) = closer to body = INSIDE ✓
             extra_right_num_offset=0.5,   # Numbers at: x + 2.5 = further from body = OUTSIDE ✓
-            extra_bottom_name_offset=-1.0,  # Names at: y - (-0.5) + (-1) = y + 1.5 = HIGHER (closer to body) = INSIDE ✓
-            extra_bottom_num_offset=-1.0,   # Numbers at: y - 2.5 + (-1) = y - 3.5 = LOWER (further from body) = OUTSIDE ✓
+            extra_bottom_name_offset=1.0,  # Names at: y - (-0.5) + (-1) = y + 1.5 = HIGHER (closer to body) = INSIDE ✓
+            extra_bottom_num_offset=-1.,  # Numbers at: y - 2.5 + (-5) = y - 7.5 = LOWER (further from body) = OUTSIDE ✓
             extra_top_name_offset=-1.0,    # Names at: y + (-0.5) + (-1) = y - 1.5 = LOWER (closer to body) = INSIDE ✓
-            extra_top_num_offset=5.0     # Numbers at: y + 2.5 + 1 = y + 3.5 = HIGHER (further from body) = OUTSIDE ✓
+            extra_top_num_offset=1.0     # Numbers at: y + 2.5 + 5 = y + 7.5 = HIGHER (further from body) = OUTSIDE ✓
         ),
         body_geometry=BodyGeometry(
             border_thickness=0.25,
