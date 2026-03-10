@@ -187,8 +187,8 @@ class PinLayout:
             y = (self.params.body_height / 2) - top_margin - (i * self.params.pin_pitch)
             x = -self.params.body_width / 2
 
-            text_x = x + self.params.pin_geometry.pin_name_offset+0.5
-            num_x = x + self.params.pin_geometry.pin_num_offset+0.5
+            text_x = x + self.params.pin_geometry.pin_name_offset+4
+            num_x = x + self.params.pin_geometry.pin_num_offset-6
 
             positions.append(PinPosition(
                 pin_index=i,
@@ -212,9 +212,9 @@ class PinLayout:
             pin_idx = pins_per_side + i
 
             text_x = x
-            text_y = y - self.params.pin_geometry.pin_num_offset  # Names OUTSIDE (further)
+            text_y = y - self.params.pin_geometry.pin_num_offset +3 # Names INSIDE (closer)
             num_x = x
-            num_y = y - self.params.pin_geometry.pin_name_offset  # Numbers INSIDE (closer)
+            num_y = y - self.params.pin_geometry.pin_name_offset+1   # Numbers OUTSIDE (further)
 
             positions.append(PinPosition(
                 pin_index=pin_idx,
@@ -238,8 +238,8 @@ class PinLayout:
             x = self.params.body_width / 2
             pin_idx = 2 * pins_per_side + i
 
-            text_x = x - self.params.pin_geometry.pin_name_offset
-            num_x = x - self.params.pin_geometry.pin_num_offset
+            text_x = x + self.params.pin_geometry.pin_name_offset+1
+            num_x = x + self.params.pin_geometry.pin_num_offset+2
 
             positions.append(PinPosition(
                 pin_index=pin_idx,
@@ -264,9 +264,9 @@ class PinLayout:
             pin_idx = 3 * pins_per_side + i
 
             text_x = x
-            text_y = y + self.params.pin_geometry.pin_num_offset  # Names OUTSIDE (further)
+            text_y = y + self.params.pin_geometry.pin_name_offset  # Names INSIDE (closer)
             num_x = x
-            num_y = y + self.params.pin_geometry.pin_name_offset  # Numbers INSIDE (closer)
+            num_y = y + self.params.pin_geometry.pin_num_offset +1 # Numbers OUTSIDE (further)
 
             positions.append(PinPosition(
                 pin_index=pin_idx,

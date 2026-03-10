@@ -198,7 +198,7 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
         - TQFP-44: ATmega164A
         - LQFP-64: STM32F103
     """
-    pitch =  0.8 
+    pitch =  2.5 
 
     # Calculate body width based on pin count
     # More pins = larger body
@@ -221,19 +221,19 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
             leg_thickness=0.2,  # Reduced from 0.3 for thinner pins
             point_size=0.3,
             pin_num_size=0.6,  # Reduced from 0.8 for smaller text
-            pin_num_offset=5.0,  # Pin numbers on the OUTSIDE (further from body) - positive value to place correctly
+            pin_num_offset=2,  # Pin numbers on the OUTSIDE (further from body) - positive value to place correctly
             pin_name_size=0.8,  # Reduced from 0.7 for smaller text
             pin_name_offset=-2.0,  # Pin names on the INSIDE (closer to body)
             pin_name_height=0.2,  # Reduced from 0.3 for thinner text
             pin_num_height=0.2,  # Reduced from 0.3 for thinner text
-            qfn_pin_num_extra_offset=0.0  # No extra offset for TQFP
+            qfn_pin_num_extra_offset=5.0  # No extra offset for TQFP
         ),
         body_geometry=BodyGeometry(
             border_thickness=0.2,  # Reduced from 0.3 for thinner border
             border_height=0.2,  # Reduced from 0.3
             designator_size=3.0,
             designator_offset=5.0,
-            top_margin=6.0  # Increased from 4.0 for more space between body and pins
+            top_margin=6.2  # Increased from 4.0 for more space between body and pins
         ),
         pins_per_side=[pins_per_side, pins_per_side, pins_per_side, pins_per_side],
         counter_clockwise=True

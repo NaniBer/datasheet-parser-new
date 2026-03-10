@@ -55,6 +55,10 @@ class PackageDetector:
             r"tqfp",
             r"thin\s*quad\s*flat\s*pack",
         ],
+        "LQFP": [
+            r"lqfp",
+            r"low\s*profile\s*quad\s*flat\s*pack",
+        ],
     }
 
     # Typical dimensions by package type and pin count (in mm)
@@ -77,6 +81,14 @@ class PackageDetector:
         "TSSOP": [
             (3.0, 5.0, 4.0, 8.0),     # 8-20 pins
             (4.0, 6.5, 6.0, 12.0),    # 24-48 pins
+        ],
+        "TQFP": [
+            (5.0, 8.0, 5.0, 10.0),     # 32-100 pins, thinner than LQFP
+            (7.0, 10.0, 7.0, 14.0),    # 144+ pins
+        ],
+        "LQFP": [
+            (7.0, 10.0, 7.0, 14.0),    # 32-144 pins
+            (10.0, 14.0, 10.0, 16.0),   # 176+ pins
         ],
     }
 
@@ -339,9 +351,9 @@ class PackageDetector:
             "SOP": "SOIC",
             "SSOP": "SOIC",
             "MSOP": "SOIC",
-            "TQFP": "QFP",
             "LFBGA": "BGA",
         }
+        # Note: TQFP is kept as distinct from QFP - DO NOT map to QFP
 
         # Check for exact match in aliases
         for alias, standard in aliases.items():
