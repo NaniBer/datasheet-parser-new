@@ -37,6 +37,8 @@ class LLMClient:
         content: str,
         images: Optional[List[bytes]] = None,
         part_number: Optional[str] = None,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
         **kwargs
     ) -> PinData:
         """
@@ -47,6 +49,8 @@ class LLMClient:
             images: Optional list of image data (for multimodal models)
                     Currently not used but kept for interface compatibility
             part_number: Optional specific part number to match package variant
+            max_retries: Maximum number of retry attempts for LLM API calls (default: 3)
+            retry_delay: Initial delay between retries in seconds (default: 1.0)
             **kwargs: Additional parameters
 
         Returns:
@@ -54,12 +58,18 @@ class LLMClient:
 
         Raises:
             ValueError: If LLM response cannot be parsed
+            Exception: If LLM API call fails after all retries
         """
         # Build messages for pin extraction with part number if provided
         messages = build_pin_extraction_prompt(content, part_number=part_number)
 
-        # Call LLM
-        response = get_completion_from_messages(messages, model=self.model)
+        # Call LLM with retry logic
+        response = get_completion_from_messages(
+            messages,
+            model=self.model,
+            max_retries=max_retries,
+            retry_delay=retry_delay
+        )
 
         # Parse response into PinData
         return self._parse_llm_response(response)

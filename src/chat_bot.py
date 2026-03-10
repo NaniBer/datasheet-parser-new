@@ -2,6 +2,7 @@
 
 from openai import OpenAI
 import os
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,15 +24,63 @@ client = OpenAI(
 )
 
 
-def get_completion_from_messages(messages, model="llama-3", temperature=0):
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=8192
-    )
+def get_completion_from_messages(messages, model="llama-3", temperature=0, max_retries=3, retry_delay=1):
+    """
+    Get completion from LLM with retry logic.
 
-    return response.choices[0].message.content
+    Args:
+        messages: List of message dictionaries
+        model: Model name to use
+        temperature: Temperature for sampling
+        max_retries: Maximum number of retry attempts (default: 3)
+        retry_delay: Initial delay between retries in seconds (default: 1)
+
+    Returns:
+        Message content string
+
+    Raises:
+        Exception: If all retries fail
+    """
+    last_exception = None
+
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=8192,
+                timeout=120  # 2 minute timeout
+            )
+            return response.choices[0].message.content
+
+        except Exception as e:
+            last_exception = e
+            # Check if this is a retryable error
+            error_msg = str(e).lower()
+            is_retryable = (
+                "timeout" in error_msg or
+                "connection" in error_msg or
+                "network" in error_msg or
+                "rate limit" in error_msg or
+                "429" in error_msg or  # HTTP 429 - Too Many Requests
+                "500" in error_msg or  # HTTP 500 - Server Error
+                "502" in error_msg or  # HTTP 502 - Bad Gateway
+                "503" in error_msg or  # HTTP 503 - Service Unavailable
+                "504" in error_msg    # HTTP 504 - Gateway Timeout
+            )
+
+            if not is_retryable:
+                raise  # Don't retry for non-retryable errors
+
+            # Exponential backoff: delay doubles each attempt
+            delay = retry_delay * (2 ** attempt)
+            print(f"LLM API call failed (attempt {attempt + 1}/{max_retries}): {e}")
+            print(f"Retrying in {delay:.1f} seconds...")
+            time.sleep(delay)
+
+    # All retries failed
+    raise Exception(f"LLM API call failed after {max_retries} attempts. Last error: {last_exception}")
 
 
 def build_pin_extraction_prompt(datasheet_content: str, part_number: str = None) -> list:
