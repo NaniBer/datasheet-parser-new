@@ -107,8 +107,8 @@ class PinLayout:
 
             # Pin leg points left
             # Text should be OUTSIDE the component (left side)
-            text_x = x - self.params.pin_geometry.pin_name_offset
-            num_x = x - self.params.pin_geometry.pin_num_offset
+            text_x = x - self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_left_name_offset
+            num_x = x - self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_left_num_offset
 
             positions.append(PinPosition(
                 pin_index=i,
@@ -138,8 +138,8 @@ class PinLayout:
 
             # Pin leg points right
             # Text should be OUTSIDE the component (right side)
-            text_x = x + self.params.pin_geometry.pin_name_offset
-            num_x = x + self.params.pin_geometry.pin_num_offset
+            text_x = x + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_right_name_offset
+            num_x = x + self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_right_num_offset
 
             positions.append(PinPosition(
                 pin_index=pins_per_side + i,
@@ -187,8 +187,8 @@ class PinLayout:
             y = (self.params.body_height / 2) - top_margin - (i * self.params.pin_pitch)
             x = -self.params.body_width / 2
 
-            text_x = x + self.params.pin_geometry.pin_name_offset+4
-            num_x = x + self.params.pin_geometry.pin_num_offset-6
+            text_x = x + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_left_name_offset
+            num_x = x + self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_left_num_offset
 
             positions.append(PinPosition(
                 pin_index=i,
@@ -212,9 +212,9 @@ class PinLayout:
             pin_idx = pins_per_side + i
 
             text_x = x
-            text_y = y - self.params.pin_geometry.pin_num_offset +3 # Names INSIDE (closer)
+            text_y = y - self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_bottom_name_offset 
             num_x = x
-            num_y = y - self.params.pin_geometry.pin_name_offset+1   # Numbers OUTSIDE (further)
+            num_y = y - self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_bottom_num_offset -4
 
             positions.append(PinPosition(
                 pin_index=pin_idx,
@@ -238,8 +238,8 @@ class PinLayout:
             x = self.params.body_width / 2
             pin_idx = 2 * pins_per_side + i
 
-            text_x = x + self.params.pin_geometry.pin_name_offset+1
-            num_x = x + self.params.pin_geometry.pin_num_offset+2
+            text_x = x + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_right_name_offset
+            num_x = x + self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_right_num_offset
 
             positions.append(PinPosition(
                 pin_index=pin_idx,
@@ -264,9 +264,9 @@ class PinLayout:
             pin_idx = 3 * pins_per_side + i
 
             text_x = x
-            text_y = y + self.params.pin_geometry.pin_name_offset  # Names INSIDE (closer)
+            text_y = y + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_top_name_offset
             num_x = x
-            num_y = y + self.params.pin_geometry.pin_num_offset +1 # Numbers OUTSIDE (further)
+            num_y = y + self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_top_num_offset
 
             positions.append(PinPosition(
                 pin_index=pin_idx,
@@ -449,10 +449,10 @@ class PinLayout:
                         y=y,
                         side=side,
                         rotation=180,  # Pointing left
-                        text_x=x - self.params.pin_geometry.pin_name_offset,
+                        text_x=x - self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_left_name_offset,
                         text_y=y,
                         text_halign="left",
-                        num_x=x - self.params.pin_geometry.pin_num_offset,
+                        num_x=x - self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_left_num_offset,
                         num_y=y,
                         num_halign="left"
                     ))
@@ -471,10 +471,10 @@ class PinLayout:
                         y=y,
                         side=side,
                         rotation=0,  # Pointing right
-                        text_x=x + self.params.pin_geometry.pin_name_offset,
+                        text_x=x + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_right_name_offset,
                         text_y=y,
                         text_halign="right",
-                        num_x=x + self.params.pin_geometry.pin_num_offset,
+                        num_x=x + self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_right_num_offset,
                         num_y=y,
                         num_halign="right"
                     ))
@@ -494,10 +494,10 @@ class PinLayout:
                         side=side,
                         rotation=270,  # Pointing down
                         text_x=x,
-                        text_y=y - self.params.pin_geometry.pin_name_offset,
+                        text_y=y - self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_bottom_name_offset,
                         text_halign="center",
                         num_x=x,
-                        num_y=y - self.params.pin_geometry.pin_num_offset,
+                        num_y=y - self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_bottom_num_offset,
                         num_halign="center"
                     ))
                     pin_index += 1
@@ -516,10 +516,10 @@ class PinLayout:
                         side=side,
                         rotation=90,  # Pointing up
                         text_x=x,
-                        text_y=y + self.params.pin_geometry.pin_name_offset,
+                        text_y=y + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_top_name_offset,
                         text_halign="center",
                         num_x=x,
-                        num_y=y + self.params.pin_geometry.pin_num_offset,
+                        num_y=y + self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_top_num_offset,
                         num_halign="center"
                     ))
                     pin_index += 1

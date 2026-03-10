@@ -37,8 +37,16 @@ class PinGeometry:
     pin_name_offset: float = 6.0  # Distance from body edge to pin name
     pin_name_height: float = 0.5  # Text height (extrusion)
 
-    # Extra offset for QFN top/bottom pin numbers (moves numbers further from body)
-    qfn_pin_num_extra_offset: float = 0.5  # Additional offset for QFN top/bottom pin numbers (mm)
+    # Package-specific extra text offsets (fine-tuning per package type)
+    # These are added to base offsets for visual adjustment
+    extra_left_name_offset: float = 0.0   # Extra offset for left side pin names
+    extra_left_num_offset: float = 0.0    # Extra offset for left side pin numbers
+    extra_right_name_offset: float = 0.0  # Extra offset for right side pin names
+    extra_right_num_offset: float = 0.0   # Extra offset for right side pin numbers
+    extra_bottom_name_offset: float = 0.0  # Extra offset for bottom side pin names
+    extra_bottom_num_offset: float = 0.0   # Extra offset for bottom side pin numbers
+    extra_top_name_offset: float = 0.0    # Extra offset for top side pin names
+    extra_top_num_offset: float = 0.0     # Extra offset for top side pin numbers
 
 
 @dataclass
@@ -133,14 +141,22 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
             pin_name_offset=-2.0,  # Pin names on the INSIDE (closer to body)
             pin_name_height=0.5,
             pin_num_height=0.5,
-            qfn_pin_num_extra_offset=0.0  # No extra offset for DIP
+            # DIP-specific extra offsets
+            extra_left_name_offset=0.0,
+            extra_left_num_offset=0.0,
+            extra_right_name_offset=0.0,
+            extra_right_num_offset=0.0,
+            extra_bottom_name_offset=0.0,
+            extra_bottom_num_offset=0.0,
+            extra_top_name_offset=0.0,
+            extra_top_num_offset=0.0
         ),
         body_geometry=BodyGeometry(
             border_thickness=0.25,
             border_height=0.5,
             designator_name="U",
             designator_size=3.0,
-            designator_offset=6.0,
+            designator_offset=25.0,
             designator_height=0.5,
             value_size=1.5,
             value_offset=2.5,
@@ -173,11 +189,19 @@ def get_soic_parameters(pin_count: int) -> SchematicParameters:
         pin_geometry=PinGeometry(
             leg_length=4.0,
             leg_width=0.1,
-            pin_name_size=1.0,
-            pin_name_offset=3.0,  # Pin names on the INSIDE (closer to body)
-            pin_num_size=0.8,
-            pin_num_offset=8.0,  # Pin numbers on the OUTSIDE (further from body)
-            qfn_pin_num_extra_offset=0.0  # No extra offset for SOIC
+            pin_name_size=0.7,  # REDUCED from 1.0 for smaller text
+            pin_name_offset=2.0,  # REDUCED from 3.0 to keep text within borders (closer to body)
+            pin_num_size=0.6,  # REDUCED from 0.8 for smaller text
+            pin_num_offset=5.0,  # REDUCED from 8.0 to keep text within borders
+            # SOIC-specific extra offsets
+            extra_left_name_offset=0.0,
+            extra_left_num_offset=0.0,
+            extra_right_name_offset=0.0,
+            extra_right_num_offset=0.0,
+            extra_bottom_name_offset=0.0,
+            extra_bottom_num_offset=0.0,
+            extra_top_name_offset=0.0,
+            extra_top_num_offset=0.0
         ),
         body_geometry=BodyGeometry(top_margin=5.0),
         pins_per_side=[pins_per_side, pins_per_side, 0, 0],
@@ -226,7 +250,15 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
             pin_name_offset=-2.0,  # Pin names on the INSIDE (closer to body)
             pin_name_height=0.2,  # Reduced from 0.3 for thinner text
             pin_num_height=0.2,  # Reduced from 0.3 for thinner text
-            qfn_pin_num_extra_offset=5.0  # No extra offset for TQFP
+            # TQFP-specific extra offsets
+            extra_left_name_offset=4.0,      # Names at: x + (-2.0) + 4 = x + 2.0 = closer to body = INSIDE ✓
+            extra_left_num_offset=-6.0,      # Numbers at: x + 2.0 + (-6) = x - 4.0 = further from body = OUTSIDE ✓
+            extra_right_name_offset=1.0,     # Names at: x + (-2.0) + 1 = x - 1.0 = closer to body = INSIDE ✓
+            extra_right_num_offset=2.0,     # Numbers at: x + 2.0 + (-4) = x - 2.0 = further from body = OUTSIDE ✓ (was -1.5)
+            extra_bottom_name_offset=-2.0,  # Names at: y - (-2.0) + (-2) = y = LOWER (closer to body) = INSIDE ✓
+            extra_bottom_num_offset=-1.0,     # Numbers at: y - 2.0 + (-2) = y - 4.0 = LOWER (further from body) = OUTSIDE ✓
+            extra_top_name_offset=-2.0,      # Names at: y + (-2.0) + (-2) = y - 4.0 = LOWER (closer to body) = INSIDE ✓
+            extra_top_num_offset=4.0         # Numbers at: y + 2.0 + 1 = y + 3.0 = HIGHER (further from body) = OUTSIDE ✓
         ),
         body_geometry=BodyGeometry(
             border_thickness=0.2,  # Reduced from 0.3 for thinner border
@@ -263,12 +295,20 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
             leg_thickness=0.2,  # Reduced from 0.3 for thinner pins
             point_size=0.3,
             pin_num_size=0.6,  # Reduced from 0.8 for smaller text
-            pin_num_offset=-2.5,  # Pin numbers on the OUTSIDE (further from body)
+            pin_num_offset=2.5,  # Pin numbers on the OUTSIDE (further from body) - FIXED: was -2.5
             pin_name_size=0.5,  # Reduced from 0.7 for smaller text
-            pin_name_offset=0.5,  # Pin names on the INSIDE (closer to body)
+            pin_name_offset=-0.5,  # Pin names on the INSIDE (closer to body) - FIXED: was 0.5
             pin_name_height=0.2,
             pin_num_height=0.2,
-            qfn_pin_num_extra_offset=5.0  # Extra offset for QFN top/bottom pin numbers (5.0mm further from body)
+            # QFN-specific extra offsets (may differ from TQFP due to geometry)
+            extra_left_name_offset=2.0,   # Names at: x + (-0.5) = closer to body = INSIDE ✓
+            extra_left_num_offset=-5.0,   # Numbers at: x + 2.5 = further from body = OUTSIDE ✓
+            extra_right_name_offset=0.0,  # Names at: x + (-0.5) = closer to body = INSIDE ✓
+            extra_right_num_offset=0.5,   # Numbers at: x + 2.5 = further from body = OUTSIDE ✓
+            extra_bottom_name_offset=-1.0,  # Names at: y - (-0.5) + (-1) = y + 1.5 = HIGHER (closer to body) = INSIDE ✓
+            extra_bottom_num_offset=-1.0,   # Numbers at: y - 2.5 + (-1) = y - 3.5 = LOWER (further from body) = OUTSIDE ✓
+            extra_top_name_offset=-1.0,    # Names at: y + (-0.5) + (-1) = y - 1.5 = LOWER (closer to body) = INSIDE ✓
+            extra_top_num_offset=5.0     # Numbers at: y + 2.5 + 1 = y + 3.5 = HIGHER (further from body) = OUTSIDE ✓
         ),
         body_geometry=BodyGeometry(
             border_thickness=0.25,
@@ -314,7 +354,15 @@ def get_bga_parameters(pin_count: int) -> SchematicParameters:
             point_size=0.3,
             pin_num_size=0.8,
             pin_name_size=1.2,
-            qfn_pin_num_extra_offset=0.0  # No extra offset for BGA
+            # BGA-specific extra offsets
+            extra_left_name_offset=0.0,
+            extra_left_num_offset=0.0,
+            extra_right_name_offset=0.0,
+            extra_right_num_offset=0.0,
+            extra_bottom_name_offset=0.0,
+            extra_bottom_num_offset=0.0,
+            extra_top_name_offset=0.0,
+            extra_top_num_offset=0.0
         ),
         body_geometry=BodyGeometry(top_margin=3.0),
         pins_per_side=[grid_size, grid_size, grid_size, grid_size],
@@ -398,8 +446,6 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
         return get_soic_parameters(pin_count)
     elif ptype == PackageType.TQFP or ptype == PackageType.LQFP:
         return get_tqfp_parameters(pin_count)
-    elif ptype == PackageType.QFN:
-        return get_qfn_parameters(pin_count)
     elif ptype == PackageType.QFN:
         return get_qfn_parameters(pin_count)
     elif ptype == PackageType.BGA:
