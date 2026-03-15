@@ -130,122 +130,87 @@ class Pcb2dBuilder:
             "Initialized 2D PCB schematic builder for %s (%d pins)" % (package_type, pin_count)
         )
 
-    def calculate_pin_positions_2d(self) -> List[Dict[str, Any]]:
+    def calculate_pin_positions_2d(self) -> List[PinPosition]:
         """
-        Calculate pin positions for 2D PCB schematic.
+        Get pin positions for 2D PCB schematic using the existing 3D pin layout.
 
         Returns:
-            List of pin position dicts with 'number', 'x', 'y', 'side' keys
+            List of PinPosition objects
         """
-        pin_positions = []
-
-        if self.package_type.startswith("DIP"):
-            # For DIP packages, use standard 2.54mm (0.1") pitch
-            pitch = 2.54  # mm
-            pins_per_side = self.pin_count // 2
-
-            # Pin X positions (ON the body line)
-            pin_left_x = -self.BODY_HALF_WIDTH
-            pin_right_x = self.BODY_HALF_WIDTH
-
-            # Left side: pins 1 to pins_per_side, top to bottom
-            # Y positions centered around 0, starting from top
-            start_y_left = (pins_per_side - 1) * pitch / 2
-            for i in range(pins_per_side):
-                pin_num = str(i + 1)
-                y = start_y_left - (i * pitch)
-                pin_positions.append({
-                    "number": pin_num,
-                    "x": pin_left_x,
-                    "y": y,
-                    "side": "left"
-                })
-
-            # Right side: pins pins_per_side+1 to pin_count, bottom to top
-            # Y positions centered around 0, starting from bottom
-            start_y_right = -(pins_per_side - 1) * pitch / 2
-            for i in range(pins_per_side):
-                pin_num = str(pins_per_side + i + 1)
-                y = start_y_right + (i * pitch)
-                pin_positions.append({
-                    "number": pin_num,
-                    "x": pin_right_x,
-                    "y": y,
-                    "side": "right"
-                })
-        else:
-            # For other package types (SOIC, TQFP, QFN), use the pin layout
-            for pos in self.pin_positions:
-                pin_positions.append({
-                    "number": pos.pin_number,
-                    "x": pos.x,
-                    "y": pos.y,
-                    "side": pos.side
-                })
-
-        return pin_positions
+        # Use the same pin layout as 3D schematic
+        return self.pin_positions
 
     def build_body_line(self) -> cq.Assembly:
         """
         Build wireframe border for component body.
 
         Creates thin rectangles on each side of the body.
+        Uses the same body dimensions as the 3D schematic.
         Returns BodyLine assembly with 4 border children.
         """
         body_line = cq.Assembly(name="BodyLine")
 
+        # Use the same body dimensions as 3D schematic
+        body_width = self.params.body_width
+        body_height = self.params.body_height
+        line_thickness = self.params.body_geometry.border_thickness
+        line_height = self.params.body_geometry.border_height
+
         # Calculate line lengths
-        top_line_length = self.BODY_HALF_WIDTH * 2
-        left_line_length = self.BODY_HALF_HEIGHT * 2
+        top_line_length = body_width
+        left_line_length = body_height
 
         # Top line
-        top_line = cq.Workplane("XY").center(0, self.BODY_HALF_HEIGHT).rect(
-            top_line_length, self.LINE_THICKNESS
-        ).extrude(self.LINE_HEIGHT)
+        top_line = cq.Workplane("XY").center(0, body_height / 2).rect(
+            top_line_length, line_thickness
+        ).extrude(line_height)
         top_line_assy = cq.Assembly(name="BodyLine_Top")
         top_line_assy.add(top_line, color=self.BLACK_COLOR)
         body_line.add(top_line_assy)
 
         # Bottom line
-        bottom_line = cq.Workplane("XY").center(0, -self.BODY_HALF_HEIGHT).rect(
-            top_line_length, self.LINE_THICKNESS
-        ).extrude(self.LINE_HEIGHT)
+        bottom_line = cq.Workplane("XY").center(0, -body_height / 2).rect(
+            top_line_length, line_thickness
+        ).extrude(line_height)
         bottom_line_assy = cq.Assembly(name="BodyLine_Bottom")
         bottom_line_assy.add(bottom_line, color=self.BLACK_COLOR)
         body_line.add(bottom_line_assy)
 
         # Left line
-        left_line = cq.Workplane("XY").center(-self.BODY_HALF_WIDTH, 0).rect(
-            self.LINE_THICKNESS, left_line_length
-        ).extrude(self.LINE_HEIGHT)
+        left_line = cq.Workplane("XY").center(-body_width / 2, 0).rect(
+            line_thickness, left_line_length
+        ).extrude(line_height)
         left_line_assy = cq.Assembly(name="BodyLine_Left")
         left_line_assy.add(left_line, color=self.BLACK_COLOR)
         body_line.add(left_line_assy)
 
         # Right line
-        right_line = cq.Workplane("XY").center(self.BODY_HALF_WIDTH, 0).rect(
-            self.LINE_THICKNESS, left_line_length
-        ).extrude(self.LINE_HEIGHT)
+        right_line = cq.Workplane("XY").center(body_width / 2, 0).rect(
+            line_thickness, left_line_length
+        ).extrude(line_height)
         right_line_assy = cq.Assembly(name="BodyLine_Right")
         right_line_assy.add(right_line, color=self.BLACK_COLOR)
         body_line.add(right_line_assy)
 
         return body_line
 
-    def build_first_pin_marker(self, pin_positions: List[Dict[str, Any]]) -> Optional[cq.Assembly]:
+    def build_first_pin_marker(self, pin_positions: List[PinPosition]) -> Optional[cq.Assembly]:
         """
         Build pin 1 marker (dot/circle).
+
+        Args:
+            pin_positions: List of PinPosition objects
 
         Returns:
             Assembly with silk_firstPinMarker and fab_firstPinMarker, or None if no pin 1
         """
-        pin1_pos = next((p for p in pin_positions if p["number"] == "1"), None)
+        pin1_pos = next((p for p in pin_positions if p.pin_number == "1"), None)
         if pin1_pos is None:
             return None
 
         markers_assy = cq.Assembly(name="FirstPinMarker")
 
-        x, y = pin1_pos["x"], pin1_pos["y"]
+        x, y = pin1_pos.x, pin1_pos.y
 
         # Silk layer marker
         silk_marker = cq.Workplane("XY").center(x, y).circle(
@@ -265,12 +230,12 @@ class Pcb2dBuilder:
 
         return markers_assy
 
-    def build_pin(self, pin_pos: Dict[str, Any], pin_name: str = "", pin_number: str = "") -> cq.Assembly:
+    def build_pin(self, pin_pos: PinPosition, pin_name: str = "", pin_number: str = "") -> cq.Assembly:
         """
         Build pin components (leg, text, pin number).
 
         Args:
-            pin_pos: Pin position dict with 'x', 'y', 'side'
+            pin_pos: Pin position from PinPosition object
             pin_name: Pin function name (e.g., "GND", "VCC")
             pin_number: Pin number (e.g., "1", "A1")
 
@@ -279,7 +244,7 @@ class Pcb2dBuilder:
         """
         pin_assy = cq.Assembly(name=pin_number)
 
-        x, y = pin_pos["x"], pin_pos["y"]
+        x, y = pin_pos.x, pin_pos.y
 
         # SolderMask (brown, largest)
         solder_mask_radius = self.SOLDER_MASK_DIAMETER / 2
@@ -299,22 +264,26 @@ class Pcb2dBuilder:
         copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
         pin_assy.add(copper_pad_assy)
 
-        # HoleCylinderPin (black)
-        hole_radius = self.HOLE_DIAMETER / 2
-        hole_cylinder = cq.Workplane("XY").center(
-            x, y
-        ).circle(hole_radius).extrude(self.PIN_CYLINDER_HEIGHT)
-        hole_cylinder_assy = cq.Assembly(name="HoleCylinderPin")
-        hole_cylinder_assy.add(hole_cylinder, color=self.BLACK_COLOR)
-        pin_assy.add(hole_cylinder_assy)
+        # Check if through-hole (DIP) or surface mount (SOIC/TQFP/QFN)
+        is_through_hole = self.package_type.startswith("DIP")
 
-        # CopperCylinderPin (red)
-        copper_cylinder = cq.Workplane("XY").center(
-            x, y
-        ).circle(hole_radius).extrude(self.PIN_CYLINDER_HEIGHT)
-        copper_cylinder_assy = cq.Assembly(name="CopperCylinderPin")
-        copper_cylinder_assy.add(copper_cylinder, color=self.RED_COLOR)
-        pin_assy.add(copper_cylinder_assy)
+        if is_through_hole:
+            # HoleCylinderPin (black) - for through-hole packages only
+            hole_radius = self.HOLE_DIAMETER / 2
+            hole_cylinder = cq.Workplane("XY").center(
+                x, y
+            ).circle(hole_radius).extrude(self.PIN_CYLINDER_HEIGHT)
+            hole_cylinder_assy = cq.Assembly(name="HoleCylinderPin")
+            hole_cylinder_assy.add(hole_cylinder, color=self.BLACK_COLOR)
+            pin_assy.add(hole_cylinder_assy)
+
+            # CopperCylinderPin (red) - for through-hole packages only
+            copper_cylinder = cq.Workplane("XY").center(
+                x, y
+            ).circle(hole_radius).extrude(self.PIN_CYLINDER_HEIGHT)
+            copper_cylinder_assy = cq.Assembly(name="CopperCylinderPin")
+            copper_cylinder_assy.add(copper_cylinder, color=self.RED_COLOR)
+            pin_assy.add(copper_cylinder_assy)
 
         # Pin number text
         text_size = 0.8
@@ -328,13 +297,13 @@ class Pcb2dBuilder:
 
         return pin_assy
 
-    def build_all_pins(self, pin_data: List[Dict[str, Any]], pin_positions: List[Dict[str, Any]]) -> cq.Assembly:
+    def build_all_pins(self, pin_data: List[Dict[str, Any]], pin_positions: List[PinPosition]) -> cq.Assembly:
         """
         Build all pins and organize into Legs assembly.
 
         Args:
             pin_data: List of pin dictionaries with 'number', 'name'
-            pin_positions: List of pin position dicts
+            pin_positions: List of PinPosition objects
 
         Returns:
             Legs assembly containing all pins
@@ -342,7 +311,7 @@ class Pcb2dBuilder:
         legs_assy = cq.Assembly(name="Legs")
 
         # Create a mapping from pin number to position
-        pin_map = {p["number"]: p for p in pin_positions}
+        pin_map = {pos.pin_number: pos for pos in pin_positions}
 
         logger.info("Building %d pins" % len(pin_data))
 
@@ -374,7 +343,7 @@ class Pcb2dBuilder:
         # Main package assembly
         package_assy = cq.Assembly(name="Package")
 
-        # Calculate pin positions for 2D layout
+        # Get pin positions using the same 3D pin layout
         pin_positions = self.calculate_pin_positions_2d()
 
         # Add body line
