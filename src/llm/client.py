@@ -5,6 +5,7 @@ import json
 
 from ..models.pin_data import PinData, Pin, PackageInfo
 from ..chat_bot import get_completion_from_messages, build_pin_extraction_prompt
+from ..exceptions import LLMExtractionError, ValidationError, APICredentialsError, ErrorCodes
 
 
 class LLMClient:
@@ -154,12 +155,28 @@ class LLMClient:
         except json.JSONDecodeError as e:
             # Show a snippet of the response for debugging
             response_preview = clean_response[:200] if len(clean_response) > 200 else clean_response
-            raise ValueError(f"Failed to parse LLM response as JSON: {e}\nResponse preview: {response_preview}")
+            raise LLMExtractionError(
+                message=f"Failed to parse LLM response as JSON: {e}",
+                error_code=ErrorCodes.LLM_PARSE_ERROR,
+                details={
+                    "error_type": "JSONDecodeError",
+                    "error_message": str(e),
+                    "response_preview": response_preview
+                }
+            )
         except Exception as e:
             # Show more detail about the error
             import traceback
             error_details = f"{e}\n{traceback.format_exc()}"
-            raise ValueError(f"Failed to parse PinData from LLM response: {error_details}")
+            raise LLMExtractionError(
+                message=f"Failed to parse PinData from LLM response: {error_details}",
+                error_code=ErrorCodes.LLM_PARSE_ERROR,
+                details={
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "traceback": traceback.format_exc()
+                }
+            )
 
     def set_api_key(self, api_key: str) -> None:
         """

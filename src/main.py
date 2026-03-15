@@ -16,7 +16,7 @@ from typing import Optional
 from .pdf_extractor import PageDetector, ContentExtractor
 from .llm import LLMClient
 from .llm.image_ocr_client import ImageOCRClient
-from .schematic_generator import build_schematic_from_pin_data
+from .schematic_generator import build_schematic_from_pin_data, build_pcb_2d_schematic
 from .utils import PackageDetector
 from .models import PinData, Pin, PackageInfo
 
@@ -33,15 +33,21 @@ def validate_input_file(input_path: Path) -> None:
         input_path: Path to input file
 
     Raises:
-        SystemExit: If validation fails
+        ValidationError: If validation fails
     """
     if not input_path.exists():
-        print(f"Error: Input file not found: {input_path}")
-        sys.exit(1)
+        raise ValidationError(
+            message=f"Input file not found: {input_path}",
+            error_code=ErrorCodes.FILE_NOT_FOUND,
+            details={"input_path": str(input_path)}
+        )
 
     if input_path.suffix.lower() != ".pdf":
-        print("Error: Input file must be a PDF")
-        sys.exit(1)
+        raise ValidationError(
+            message="Input file must be a PDF",
+            error_code=ErrorCodes.INVALID_PDF_FILE,
+            details={"actual_suffix": input_path.suffix}
+        )
 
 
 def get_api_key(args) -> str:
@@ -55,9 +61,19 @@ def get_api_key(args) -> str:
         API key string
 
     Raises:
-        SystemExit: If API key not found
+        APICredentialsError: If API key not found
     """
     api_key = args.api_key or os.environ.get("DATASHEET_PARSER_API_KEY") or os.environ.get("FASTCHAT_API_KEY")
+
+    if not api_key:
+        raise APICredentialsError(
+            message="API key required for pin data extraction",
+            error_code=ErrorCodes.MISSING_API_KEY,
+            details={
+                "env_vars_checked": ["DATASHEET_PARSER_API_KEY", "FASTCHAT_API_KEY"],
+                "cli_arg_provided": args.api_key is not None
+            }
+        )
 
     # Set FASTCHAT_API_KEY if provided via argument
     if args.api_key:
@@ -296,6 +312,7 @@ def process_datasheet(
     api_key: str,
     model: str,
     layout_mode: bool = False,
+    pcb_2d_mode: bool = False,
     min_confidence: int = 5,
     verbose: bool = False
 ) -> bool:
@@ -308,6 +325,7 @@ def process_datasheet(
         api_key: API key for LLM service
         model: Model name to use
         layout_mode: Enable Vision API layout extraction
+        pcb_2d_mode: Enable 2D PCB schematic generation
         min_confidence: Minimum confidence score for page detection
         verbose: Enable verbose output
 
@@ -321,7 +339,12 @@ def process_datasheet(
     if verbose:
         print(f"Processing: {input_path}")
         print(f"Output: {output_path}")
-        mode = "Layout Mode (LLM + Vision)" if layout_mode else "Standard Mode (LLM only)"
+        if pcb_2d_mode:
+            mode = "2D PCB Mode (2D PCB schematic)"
+        elif layout_mode:
+            mode = "Layout Mode (LLM + Vision, 3D schematic)"
+        else:
+            mode = "Standard Mode (LLM only, 3D schematic)"
         print(f"Mode: {mode}")
 
     # Pipeline steps
@@ -355,16 +378,33 @@ def process_datasheet(
 
         # Step 7: Generate schematic
         if verbose:
-            print(f"\n[5] Generating schematic...")
+            if pcb_2d_mode:
+                print(f"\n[5] Generating 2D PCB schematic...")
+            else:
+                print(f"\n[5] Generating 3D schematic...")
 
-        result = build_schematic_from_pin_data(
-            pin_data=pin_data,
-            output_path=str(output_path),
-            custom_layout=custom_layout
-        )
+        # Choose schematic builder based on mode
+        if pcb_2d_mode:
+            result = build_pcb_2d_schematic(
+                package_type=pin_data.package.type,
+                pin_count=pin_data.package.pin_count,
+                component_name=pin_data.component_name,
+                pin_data=[{"number": p.number, "name": p.name} for p in pin_data.pins],
+                output_path=str(output_path),
+                custom_layout=custom_layout
+            )
+        else:
+            result = build_schematic_from_pin_data(
+                pin_data=pin_data,
+                output_path=str(output_path),
+                custom_layout=custom_layout
+            )
 
         if not result:
-            print("Error: Failed to generate schematic")
+            if pcb_2d_mode:
+                print("Error: Failed to generate 2D PCB schematic")
+            else:
+                print("Error: Failed to generate 3D schematic")
             return False
 
         print(f"\nSuccess! Schematic generated: {output_path}")
@@ -376,19 +416,47 @@ def process_datasheet(
 
         return True
 
+    except ValidationError as e:
+        print(f"Validation error: {e}")
+        if verbose:
+            print(f"Error code: {e.error_code}")
+            if e.details:
+                print(f"Details: {e.details}")
+        sys.exit(1)
+
+    except APICredentialsError as e:
+        print(f"API credentials error: {e}")
+        if verbose:
+            print(f"Error code: {e.error_code}")
+            if e.details:
+                print(f"Details: {e.details}")
+        sys.exit(1)
+
     except FileNotFoundError as e:
         print(f"Error: File not found - {e}")
         sys.exit(1)
+
     except ImportError as e:
         print(f"Error: Missing dependency - {e}")
         print("Install required packages: pip install -r requirements.txt")
         sys.exit(1)
+
     except NotImplementedError as e:
         print(f"Error: {e}")
         sys.exit(1)
+
     except RuntimeError as e:
         print(f"Error: {e}")
         sys.exit(1)
+
+    except DatasheetParserError as e:
+        print(f"Datasheet parser error: {e}")
+        if verbose:
+            print(f"Error code: {e.error_code}")
+            if e.details:
+                print(f"Details: {e.details}")
+        sys.exit(1)
+
     except Exception as e:
         print(f"Unexpected error: {e}")
         if verbose:
@@ -408,8 +476,11 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic usage
+  # Basic usage (3D schematic)
   python -m src.main datasheet.pdf output.glb
+
+  # 2D PCB schematic generation
+  python -m src.main datasheet.pdf output.glb --pcb-2d
 
   # With LLM API key
   python -m src.main datasheet.pdf output.glb --api-key YOUR_API_KEY
@@ -460,6 +531,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--pcb-2d",
+        action="store_true",
+        help="Generate 2D PCB-style schematic (instead of 3D schematic)"
+    )
+
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose output"
@@ -490,6 +567,7 @@ def main():
         api_key=api_key,
         model=args.model,
         layout_mode=args.layout_mode,
+        pcb_2d_mode=args.pcb_2d,
         min_confidence=args.min_confidence,
         verbose=args.verbose
     )

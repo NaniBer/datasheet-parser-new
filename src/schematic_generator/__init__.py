@@ -30,6 +30,11 @@ from .adapter import (
     build_schematic_from_pin_data,
 )
 
+from .pcb_2d_builder import (
+    Pcb2dBuilder,
+    build_pcb_2d_schematic,
+)
+
 __all__ = [
     "PackageType",
     "PinGeometry",
@@ -50,4 +55,6 @@ __all__ = [
     "builder_build_schematic",
     "pin_data_to_builder_format",
     "build_schematic_from_pin_data",
+    "Pcb2dBuilder",
+    "build_pcb_2d_schematic",
 ]

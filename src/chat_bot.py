@@ -5,6 +5,8 @@ import os
 import time
 from dotenv import load_dotenv
 
+from .exceptions import LLMExtractionError, ErrorCodes
+
 load_dotenv()
 
 import nest_asyncio
@@ -39,7 +41,7 @@ def get_completion_from_messages(messages, model="llama-3", temperature=0, max_r
         Message content string
 
     Raises:
-        Exception: If all retries fail
+        LLMExtractionError: If all retries fail
     """
     last_exception = None
 
@@ -56,22 +58,22 @@ def get_completion_from_messages(messages, model="llama-3", temperature=0, max_r
 
         except Exception as e:
             last_exception = e
-            # Check if this is a retryable error
-            error_msg = str(e).lower()
-            is_retryable = (
-                "timeout" in error_msg or
-                "connection" in error_msg or
-                "network" in error_msg or
-                "rate limit" in error_msg or
-                "429" in error_msg or  # HTTP 429 - Too Many Requests
-                "500" in error_msg or  # HTTP 500 - Server Error
-                "502" in error_msg or  # HTTP 502 - Bad Gateway
-                "503" in error_msg or  # HTTP 503 - Service Unavailable
-                "504" in error_msg    # HTTP 504 - Gateway Timeout
+
+            # Create LLMExtractionError with retry information
+            llm_error = LLMExtractionError(
+                message=f"LLM API call failed on attempt {attempt + 1}: {e}",
+                error_code=ErrorCodes.LLM_API_ERROR,
+                details={
+                    "attempt": attempt + 1,
+                    "max_retries": max_retries,
+                    "exception_type": type(e).__name__,
+                    "exception_message": str(e)
+                }
             )
 
-            if not is_retryable:
-                raise  # Don't retry for non-retryable errors
+            # Check if this is a retryable error
+            if not llm_error.is_retryable:
+                raise llm_error
 
             # Exponential backoff: delay doubles each attempt
             delay = retry_delay * (2 ** attempt)
@@ -80,7 +82,15 @@ def get_completion_from_messages(messages, model="llama-3", temperature=0, max_r
             time.sleep(delay)
 
     # All retries failed
-    raise Exception(f"LLM API call failed after {max_retries} attempts. Last error: {last_exception}")
+    raise LLMExtractionError(
+        message=f"LLM API call failed after {max_retries} attempts. Last error: {last_exception}",
+        error_code=ErrorCodes.LLM_API_ERROR,
+        details={
+            "max_retries": max_retries,
+            "final_exception_type": type(last_exception).__name__ if last_exception else None,
+            "final_exception_message": str(last_exception) if last_exception else None
+        }
+    )
 
 
 def build_pin_extraction_prompt(datasheet_content: str, part_number: str = None) -> list:
