@@ -150,9 +150,9 @@ class SchematicBuilder:
 
     def build_pin(
         self, pin_pos: PinPosition, pin_name: str = "", pin_number: str = ""
-    ) -> List[cq.Assembly]:
+    ) -> cq.Assembly:
         """
-        Build pin components (leg, text, pin number).
+        Build pin assembly containing all components (leg, text, pinName, boundingBox).
 
         Args:
             pin_pos: Pin position from layout algorithm
@@ -160,9 +160,10 @@ class SchematicBuilder:
             pin_number: Pin number (e.g., "1", "A1")
 
         Returns:
-            List of assemblies: [leg, pin_name_text, pin_number_text]
+            Single assembly containing all pin components as children
         """
-        components = []
+        # Create pin assembly with all components as nested children
+        pin_assy = cq.Assembly(name=pin_number)
 
         # Pin leg (thin rectangle)
         leg_length = self.params.pin_geometry.leg_length
@@ -192,9 +193,7 @@ class SchematicBuilder:
                        .rect(leg_width, leg_length)
                        .extrude(leg_thickness))
 
-        leg_assy = cq.Assembly(name="%s_leg" % pin_number)
-        leg_assy.add(pin_leg, color=self.PIN_COLOR)
-        components.append(leg_assy)
+        pin_assy.add(pin_leg, name="leg", color=self.PIN_COLOR)
 
         # Pin name text (function name) - Vertical on top/bottom, horizontal on left/right
         if pin_name:
@@ -224,7 +223,7 @@ class SchematicBuilder:
                 ).text(pin_name[:30], txt_size, txt_height, halign=pin_pos.text_halign)
                 name_assy.add(pin_name_text, color=self.BLACK_COLOR)
 
-            components.append(name_assy)
+            pin_assy.add(name_assy, name="pinName")
 
         # Pin number text - Vertical on top/bottom, horizontal on left/right
         num_size = self.params.pin_geometry.pin_num_size
@@ -257,9 +256,9 @@ class SchematicBuilder:
             ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
             num_assy.add(num_text, color=self.BLACK_COLOR)
 
-        components.append(num_assy)
+        pin_assy.add(num_assy, name="text")
 
-        return components
+        return pin_assy
 
     def build_all_pins(
         self, pin_data: List[Dict[str, Any]]
@@ -307,12 +306,11 @@ class SchematicBuilder:
 
             logger.info("Building pin %s (%s) at (%.1f, %.1f) side=%s" % (pin_num, pin_name, pin_pos.x, pin_pos.y, pin_pos.side))
 
-            # Build pin components
-            pin_components = self.build_pin(pin_pos, pin_name, pin_num)
+            # Build pin assembly (returns single assembly with nested children)
+            pin_assy = self.build_pin(pin_pos, pin_name, pin_num)
 
-            # Add all components to Legs assembly
-            for comp in pin_components:
-                legs_assy.add(comp)
+            # Add pin assembly to Legs assembly
+            legs_assy.add(pin_assy)
 
         return legs_assy
 
