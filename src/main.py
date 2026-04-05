@@ -19,6 +19,7 @@ from .llm.image_ocr_client import ImageOCRClient
 from .schematic_generator import build_schematic_from_pin_data, build_pcb_2d_schematic
 from .utils import PackageDetector
 from .models import PinData, Pin, PackageInfo
+from .exceptions import ValidationError, ErrorCodes
 
 
 # ============================================================================
