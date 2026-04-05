@@ -21,6 +21,7 @@ except ImportError:
 @dataclass
 class PinoutExtractionResult:
     """Result of pinout extraction from an image."""
+
     component_name: str
     package_type: str
     pin_count: int
@@ -36,7 +37,7 @@ class ImageOCRClient:
     """
 
     # API configuration
-    API_URL = "https://qwen.ideeza.com/describe_image/"
+    API_URL = "https://qwen1.ideeza.com/describe_image_llm"
     DEFAULT_OUTPUT_TOKEN = 4096
     DEFAULT_TIMEOUT = 120
 
@@ -91,12 +92,7 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
 - For pins with alternative names (e.g., "PD0/USART0_RX"), include the primary name
 - Return ONLY JSON - no explanations or additional text"""
 
-    def __init__(
-        self,
-        api_url: str = None,
-        output_token: int = None,
-        timeout: int = None
-    ):
+    def __init__(self, api_url: str = None, output_token: int = None, timeout: int = None):
         """
         Initialize the OCR client.
 
@@ -106,27 +102,73 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
             timeout: Optional request timeout in seconds
         """
         if requests is None:
-            raise ImportError(
-                "requests library is required. Install with: pip install requests"
-            )
+            raise ImportError("requests library is required. Install with: pip install requests")
 
         self.api_url = api_url or self.API_URL
         self.output_token = output_token or self.DEFAULT_OUTPUT_TOKEN
         self.timeout = timeout or self.DEFAULT_TIMEOUT
 
-    def _build_prompt(self, part_number: str = None) -> str:
+    def _build_system_prompt(self) -> str:
         """
-        Build the prompt for pinout extraction.
+        Build the system prompt for pinout extraction.
+
+        Returns:
+            System prompt string
+        """
+        return """You are an expert at reading electronic component pinout diagrams from datasheet images. You extract structured JSON data about physical pin layouts and individual pin information."""
+
+    def _build_user_prompt(self, part_number: str = None) -> str:
+        """
+        Build the user prompt for pinout extraction.
 
         Args:
             part_number: Optional part number to match
 
         Returns:
-            Prompt string
+            User prompt string
         """
-        prompt = self.DEFAULT_PROMPT
-        if part_number:
-            prompt = prompt + f"\n\nTarget component: {part_number}"
+        prompt = f"""Analyze this pinout diagram and extract the complete pinout information.
+
+{f'Target component: {part_number}' if part_number else ''}
+
+## Your Task:
+
+1. **Identify the component** (e.g., ATmega164A, NE555, STM32F103, ESP32-WROOM-32)
+
+2. **Determine the package type** (e.g., PDIP-40, DIP-8, TQFP-44, LQFP-64, SOIC-16, QFN-38)
+
+3. **Extract ALL pins** with their numbers, names, and functions:
+   - For DIP packages: Pin 1 is top-left, numbering goes DOWN left side, then UP right side
+   - For SOIC/TQFP/LQFP: Pin 1 is top-left, numbering is counter-clockwise
+   - For QFN: Pin 1 is top-left, numbering is counter-clockwise on all 4 sides
+   - Include ALL pins (not just a sample)
+
+4. **For each pin**, identify which side it's on (left, right, top, bottom) if applicable
+
+## Output Format:
+
+Return ONLY valid JSON (no markdown code blocks, no additional text):
+
+{
+  "component_name": "Component Name",
+  "package_type": "Package Type",
+  "pin_count": 40,
+  "pins": [
+    {"number": 1, "name": "PB0", "function": "Port B bit 0", "side": "left"},
+    {"number": 2, "name": "PB1", "function": "Port B bit 1", "side": "left"},
+    ...
+  ],
+  "extraction_confidence": 0.95,
+  "notes": "Optional notes about extraction quality"
+}
+
+## Important Rules:
+
+- Extract ALL pins for the package shown
+- Verify pin count matches package type (e.g., DIP-8 must have exactly 8 pins)
+- Include the "side" field for each pin when the layout is visible
+- If pin names are abbreviated, use the name as shown
+- Return ONLY JSON - no explanations or additional text"""
         return prompt
 
     def extract_pinout_from_image(
@@ -134,7 +176,7 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
         image_data: bytes,
         page_number: int = None,
         part_number: str = None,
-        prompt: str = None
+        prompt: str = None,
     ) -> PinoutExtractionResult:
         """
         Extract pinout information from a single page image.
@@ -152,21 +194,20 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
             print(f"[ImageOCRClient] Processing page {page_number}...")
         print(f"[ImageOCRClient] Image size: {len(image_data)} bytes")
 
-        # Build prompt
-        prompt_text = prompt or self._build_prompt(part_number)
+        # Build prompts
+        user_prompt_text = prompt or self._build_user_prompt(part_number)
+        system_prompt_text = self._build_system_prompt()
 
         # Create multipart form data
         # The API expects:
         # - file: image file upload
-        # - text: prompt
-        # - output_token: integer
+        # - system_prompt: system prompt string
+        # - user_prompt: user prompt string
 
-        files = {
-            "file": ("image.png", io.BytesIO(image_data), "image/png")
-        }
+        files = {"file": ("image.png", io.BytesIO(image_data), "image/png")}
         data = {
-            "text": prompt_text,
-            "output_token": str(self.output_token)
+            "system_prompt": system_prompt_text,
+            "user_prompt": user_prompt_text,
         }
 
         try:
@@ -176,7 +217,7 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
                 headers={"accept": "application/json"},
                 files=files,
                 data=data,
-                timeout=self.timeout
+                timeout=self.timeout,
             )
 
             # Raise error on non-2xx
@@ -191,19 +232,20 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
         except requests.HTTPError as e:
             print(f"[ImageOCRClient] HTTP Error: {e}")
             # Try to get more info from response
-            if hasattr(e, 'response') and e.response is not None:
+            if hasattr(e, "response") and e.response is not None:
                 body_preview = e.response.text[:2000] if e.response.text else ""
                 print(f"[ImageOCRClient] Response body: {body_preview}")
             return self._empty_result()
         except Exception as e:
             print(f"[ImageOCRClient] Error: {e}")
             import traceback
+
             traceback.print_exc()
             return self._empty_result()
 
     def _parse_api_response(self, response: Dict[str, Any]) -> PinoutExtractionResult:
         """
-        Parse the API response and extract pinout data.
+        Parse API response and extract pinout data.
 
         Args:
             response: Raw API response as dict
@@ -216,6 +258,7 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
         # Format 2: {"description": "```json\n{...}\n```"}
         # Format 3: {"raw_text": "..."}
         # Format 4: Direct JSON object
+        # Format 5: Side-based layout {"left_side": [1,2,3], "bottom_edge": [...] ...}
 
         import re
 
@@ -225,50 +268,95 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
 
             # If description is already a dict, use it directly
             if isinstance(description, dict):
+                # Check for side-based layout format (left_side, bottom_edge, right_side, top_edge)
+                side_keys = ["left_side", "bottom_edge", "right_side", "top_edge"]
+                if any(key in description for key in side_keys):
+                    print(f"[ImageOCRClient] Found side-based layout format in description")
+                    pins = self._convert_side_layout_to_pins(description)
+                    return PinoutExtractionResult(
+                        component_name=description.get("component_name", ""),
+                        package_type=description.get("package_type", ""),
+                        pin_count=description.get("pin_count", 0),
+                        pins=pins,
+                        confidence=description.get("extraction_confidence", 0.0),
+                        notes=description.get("notes", ""),
+                    )
+
+                # Standard format with pins list
                 return PinoutExtractionResult(
                     component_name=description.get("component_name", ""),
                     package_type=description.get("package_type", ""),
                     pin_count=description.get("pin_count", 0),
                     pins=description.get("pins", []),
                     confidence=description.get("extraction_confidence", 0.0),
-                    notes=description.get("notes", "")
+                    notes=description.get("notes", ""),
                 )
 
             # If description is a string, look for JSON in markdown code blocks
             if isinstance(description, str):
-                # Look for JSON in markdown code blocks
-                json_match = re.search(r'```(?:json)?\s*\n?(\{.*?\})\n?```', description, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(1)
-                else:
-                    # Try to find JSON object directly
-                    json_match = re.search(r'\{[\s\S]*\}', description)
-                    if json_match:
-                        json_str = json_match.group(0)
+                # Try to parse as JSON directly (new endpoint returns plain JSON string)
+                try:
+                    data = json.loads(description)
+                    # Check for side-based layout format
+                    side_keys = ["left_side", "bottom_edge", "right_side", "top_edge"]
+                    if any(key in data for key in side_keys):
+                        print(f"[ImageOCRClient] Found side-based layout format in parsed JSON string")
+                        pins = self._convert_side_layout_to_pins(data)
+                    else:
+                        pins = data.get("pins", [])
 
-                if json_str:
-                    try:
-                        data = json.loads(json_str)
-                        return PinoutExtractionResult(
-                            component_name=data.get("component_name", ""),
-                            package_type=data.get("package_type", ""),
-                            pin_count=data.get("pin_count", 0),
-                            pins=data.get("pins", []),
-                            confidence=data.get("extraction_confidence", 0.0),
-                            notes=data.get("notes", "")
-                        )
-                    except json.JSONDecodeError as e:
-                        print(f"[ImageOCRClient] Failed to parse JSON: {e}")
-                        print(f"[ImageOCRClient] JSON string: {json_str[:500]}...")
+                    return PinoutExtractionResult(
+                        component_name=data.get("component_name", ""),
+                        package_type=data.get("package_type", ""),
+                        pin_count=data.get("pin_count", 0),
+                        pins=pins,
+                        confidence=data.get("extraction_confidence", 0.0),
+                        notes=data.get("notes", ""),
+                    )
+                except json.JSONDecodeError:
+                    # Look for JSON in markdown code blocks (fallback)
+                    json_match = re.search(r"```(?:json)?\s*\n?(\{.*?\})\n?```", description, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(1)
+                    else:
+                        # Try to find JSON object directly
+                        json_match = re.search(r"\{[\s\S]*\}", description)
+                        if json_match:
+                            json_str = json_match.group(0)
+                        else:
+                            json_str = None
+
+                    if json_str:
+                        try:
+                            data = json.loads(json_str)
+                            # Check for side-based layout format
+                            side_keys = ["left_side", "bottom_edge", "right_side", "top_edge"]
+                            if any(key in data for key in side_keys):
+                                print(f"[ImageOCRClient] Found side-based layout format in markdown JSON")
+                                pins = self._convert_side_layout_to_pins(data)
+                            else:
+                                pins = data.get("pins", [])
+
+                            return PinoutExtractionResult(
+                                component_name=data.get("component_name", ""),
+                                package_type=data.get("package_type", ""),
+                                pin_count=data.get("pin_count", 0),
+                                pins=pins,
+                                confidence=data.get("extraction_confidence", 0.0),
+                                notes=data.get("notes", ""),
+                            )
+                        except json.JSONDecodeError as e:
+                            print(f"[ImageOCRClient] Failed to parse JSON: {e}")
+                            print(f"[ImageOCRClient] JSON string: {json_str[:500]}...")
 
         # Try Format 3: raw_text field
         if "raw_text" in response:
             response_text = response.get("raw_text", "")
-            json_match = re.search(r'```(?:json)?\s*\n?(\{.*?\})\n?```', response_text, re.DOTALL)
+            json_match = re.search(r"```(?:json)?\s*\n?(\{.*?\})\n?```", response_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
             else:
-                json_match = re.search(r'\{[\s\S]*\}', response_text)
+                json_match = re.search(r"\{[\s\S]*\}", response_text)
                 if json_match:
                     json_str = json_match.group(0)
 
@@ -281,7 +369,7 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
                         pin_count=data.get("pin_count", 0),
                         pins=data.get("pins", []),
                         confidence=data.get("extraction_confidence", 0.0),
-                        notes=data.get("notes", "")
+                        notes=data.get("notes", ""),
                     )
                 except json.JSONDecodeError as e:
                     print(f"[ImageOCRClient] Failed to parse JSON: {e}")
@@ -295,11 +383,59 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
                 pin_count=response.get("pin_count", 0),
                 pins=response.get("pins", []),
                 confidence=response.get("extraction_confidence", 0.0),
-                notes=response.get("notes", "")
+                notes=response.get("notes", ""),
+            )
+
+        # Format 5: Side-based layout (left_side, bottom_edge, right_side, top_edge)
+        side_keys = ["left_side", "bottom_edge", "right_side", "top_edge"]
+        if any(key in response for key in side_keys):
+            print(f"[ImageOCRClient] Found side-based layout format in direct response")
+            # Convert side-based layout to pin list
+            pins = self._convert_side_layout_to_pins(response)
+            return PinoutExtractionResult(
+                component_name=response.get("component_name", ""),
+                package_type=response.get("package_type", ""),
+                pin_count=response.get("pin_count", 0),
+                pins=pins,
+                confidence=response.get("extraction_confidence", 0.0),
+                notes=response.get("notes", ""),
             )
 
         print(f"[ImageOCRClient] Could not extract valid JSON from response")
         return self._empty_result()
+
+    def _convert_side_layout_to_pins(self, side_layout: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Convert side-based layout to pin list format.
+
+        Args:
+            side_layout: Dict with left_side, bottom_edge, right_side, top_edge arrays
+
+        Returns:
+            List of pin dicts in format [{"number": 1, "name": "PA0"}, ...]
+        """
+        pins = []
+
+        # Get side arrays
+        left_side = side_layout.get("left_side", [])
+        bottom_edge = side_layout.get("bottom_edge", [])
+        right_side = side_layout.get("right_side", [])
+        top_edge = side_layout.get("top_edge", [])
+
+        # Add pins with side information
+        for pin_num in left_side:
+            pins.append({"number": pin_num, "name": f"Pin{pin_num}", "side": "left"})
+
+        for pin_num in bottom_edge:
+            pins.append({"number": pin_num, "name": f"Pin{pin_num}", "side": "bottom"})
+
+        for pin_num in right_side:
+            pins.append({"number": pin_num, "name": f"Pin{pin_num}", "side": "right"})
+
+        for pin_num in top_edge:
+            pins.append({"number": pin_num, "name": f"Pin{pin_num}", "side": "top"})
+
+        return pins
 
     def _empty_result(self) -> PinoutExtractionResult:
         """Return an empty result."""
@@ -309,13 +445,11 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
             pin_count=0,
             pins=[],
             confidence=0.0,
-            notes="Failed to extract data from API response"
+            notes="Failed to extract data from API response",
         )
 
     def extract_pinout_from_images(
-        self,
-        images: List[tuple],
-        part_number: str = None
+        self, images: List[tuple], part_number: str = None
     ) -> PinoutExtractionResult:
         """
         Extract pinout information from multiple page images.
@@ -335,9 +469,7 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
 
         for page_num, img_data in images:
             result = self.extract_pinout_from_image(
-                img_data,
-                page_number=page_num,
-                part_number=part_number
+                img_data, page_number=page_num, part_number=part_number
             )
 
             if result.confidence > best_confidence:
@@ -356,7 +488,7 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
         Returns:
             Base64 encoded string
         """
-        return base64.b64encode(image_data).decode('utf-8')
+        return base64.b64encode(image_data).decode("utf-8")
 
 
 # Backward compatibility alias

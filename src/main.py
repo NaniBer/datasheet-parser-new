@@ -19,7 +19,7 @@ from .llm.image_ocr_client import ImageOCRClient
 from .schematic_generator import build_schematic_from_pin_data, build_pcb_2d_schematic
 from .utils import PackageDetector
 from .models import PinData, Pin, PackageInfo
-from .exceptions import ValidationError, ErrorCodes
+from .exceptions import ValidationError, ErrorCodes, APICredentialsError
 
 
 # ============================================================================
@@ -209,10 +209,9 @@ def extract_layout_with_vision(input_path: str, candidates: list, verbose: bool 
         verbose: Enable verbose output
 
     Returns:
-        Dict with layout information or None
+        Dict with side-based layout or None. Format: {"left_side": [1,2,3], ...}
     """
-    layout_text = None
-    layout_data = {}
+    from .pdf_extractor.content_extractor import ContentExtractor
 
     # Get pinout pages
     pinout_pages = [c.page_number for c in candidates]
@@ -220,37 +219,127 @@ def extract_layout_with_vision(input_path: str, candidates: list, verbose: bool 
     # Use first pinout page for layout
     layout_page = pinout_pages[0] if pinout_pages else None
 
-    if layout_page:
-        if verbose:
-            print("\n[4/5] Extracting layout structure with Vision API...")
-
-        # Import Vision layout extraction function
-        from .main import extract_layout_with_vision as extract_layout
-
-        layout_text = extract_layout(input_path, layout_page, verbose)
-
-        if verbose and layout_text:
-            print(f"Layout text extracted:")
-            print(layout_text)
-            print()
-
-            # Parse layout text
-            from .main import parse_layout_text
-            layout_data = parse_layout_text(layout_text)
-
-            print(f"Parsed layout data:")
-            print(f"  Package type: {layout_data.get('package_type', 'Unknown')}")
-            print(f"  Pin count: {layout_data.get('pin_count', 0)}")
-            print(f"  Sections found: {len(layout_data.get('sections', {}))}")
-            for section_name, section_info in layout_data.get('sections', {}).items():
-                print(f"  Section: {section_name}")
-                print(f"    Pins: {section_info.get('pins', [])}")
-                print(f"    Count: {section_info.get('count', 0)}")
-    else:
+    if not layout_page:
         if verbose:
             print("Warning: No pinout pages found for layout extraction")
+        return None
 
-    return layout_data if layout_data and layout_data.get('sections') else None
+    if verbose:
+        print("\n[4/5] Extracting layout structure with Vision API...")
+
+    try:
+        # Extract image from the pinout page
+        with ContentExtractor(input_path) as extractor:
+            # Create a single page candidate for image extraction
+            page_candidate = [c for c in candidates if c.page_number == layout_page][0]
+            content = extractor.extract_content([page_candidate])
+
+        if not content.images:
+            if verbose:
+                print("Warning: No images found on pinout page")
+            return None
+
+        # Use the first image for layout extraction
+        image_data = content.images[0]
+
+        # Initialize Vision API client
+        vision_client = ImageOCRClient()
+
+        # Extract layout with prompt for side-based layout
+        layout_prompt = """Analyze this electronic component pinout diagram and extract the physical pin layout.
+
+## Your Task:
+Identify which pins are on each side of the component package.
+
+## Expected Layout Types:
+- **DIP/SOIC**: Pins on left and right sides only
+- **QFP/LQFP**: Pins on all 4 sides (left, right, top, bottom)
+- **QFN**: Pins on all 4 sides (some may have no pins on one side)
+- **BGA**: Grid layout
+
+## Output Format:
+Return ONLY valid JSON (no markdown, no explanations):
+{
+  "component_name": "Component Name",
+  "package_type": "Package Type",
+  "pin_count": 38,
+  "left_side": [1, 2, 3, ...],
+  "bottom_edge": [15, 16, 17, ...],
+  "right_side": [25, 26, 27, ...],
+  "top_edge": [],
+  "extraction_confidence": 0.95,
+  "notes": "Description of layout quality"
+}
+
+Return ONLY the JSON object."""
+
+        result = vision_client.extract_pinout_from_image(
+            image_data=image_data,
+            page_number=layout_page,
+            prompt=layout_prompt
+        )
+
+        # Convert Vision API result to custom_layout format
+        if result.confidence < 0.5:
+            if verbose:
+                print(f"Warning: Low confidence layout extraction ({result.confidence:.2f})")
+            return None
+
+        # Build custom_layout dict from Vision API result
+        # Look for side information in the pins or extract from result.notes
+        custom_layout = {}
+
+        # First check if pins have 'side' field
+        if result.pins and result.pins[0].get('side'):
+            # Build layout from pin side information
+            side_map = {"left": "left_side", "right": "right_side", "top": "top_edge", "bottom": "bottom_edge"}
+            for pin in result.pins:
+                side = pin.get('side', '')
+                if side and side in side_map:
+                    layout_side = side_map[side]
+                    if layout_side not in custom_layout:
+                        custom_layout[layout_side] = []
+                    custom_layout[layout_side].append(pin.get('number'))
+
+        else:
+            # Try to parse from notes (for side-based layout format)
+            import re
+            notes = result.notes.lower()
+
+            # Look for patterns like "left side has 14 pins (1-14)"
+            left_match = re.search(r'left.*?(\d+)[\s-]*(\d+)', notes)
+            bottom_match = re.search(r'bottom.*?(\d+)[\s-]*(\d+)', notes)
+            right_match = re.search(r'right.*?(\d+)[\s-]*(\d+)', notes)
+            top_match = re.search(r'top.*?(\d+)[\s-]*(\d+)', notes)
+
+            if left_match:
+                custom_layout['left_side'] = list(range(int(left_match.group(1)), int(left_match.group(2)) + 1))
+            if bottom_match:
+                custom_layout['bottom_edge'] = list(range(int(bottom_match.group(1)), int(bottom_match.group(2)) + 1))
+            if right_match:
+                custom_layout['right_side'] = list(range(int(right_match.group(1)), int(right_match.group(2)) + 1))
+            if top_match:
+                custom_layout['top_edge'] = list(range(int(top_match.group(1)), int(top_match.group(2)) + 1))
+
+        if custom_layout:
+            if verbose:
+                print(f"Layout extracted from Vision API:")
+                print(f"  Package: {result.package_type}")
+                print(f"  Pin count: {result.pin_count}")
+                print(f"  Confidence: {result.confidence:.2f}")
+                for side, pins in custom_layout.items():
+                    print(f"  {side}: {pins[:10]}{'...' if len(pins) > 10 else ''}")
+            return custom_layout
+        else:
+            if verbose:
+                print("Warning: Could not parse layout from Vision API response")
+                print(f"  Notes: {result.notes[:100]}")
+            return None
+
+    except Exception as e:
+        if verbose:
+            print(f"Error extracting layout with Vision API: {e}")
+        return None
 
 
 def normalize_package(pin_data: PinData, verbose: bool = False):
@@ -275,32 +364,6 @@ def normalize_package(pin_data: PinData, verbose: bool = False):
         print(f"Normalized package type: {normalized_pkg}")
 
     return pin_data
-
-
-def prepare_custom_layout(layout_data: dict, verbose: bool = False) -> Optional[dict]:
-    """
-    Convert Vision API layout data to format expected by PinLayout.
-
-    Args:
-        layout_data: Parsed layout data from Vision API
-        verbose: Enable verbose output
-
-    Returns:
-        Dict with section names mapped to pin numbers, or None
-    """
-    if not layout_data or not layout_data.get('sections'):
-        return None
-
-    custom_layout = {}
-    for section_name, section_info in layout_data['sections'].items():
-        custom_layout[section_name] = section_info.get('pins', [])
-
-    if verbose:
-        print(f"Custom layout prepared:")
-        for section_name, pins in custom_layout.items():
-            print(f"  {section_name}: {pins}")
-
-    return custom_layout
 
 
 # ============================================================================
@@ -367,10 +430,9 @@ def process_datasheet(
         # Step 5: Validate and normalize package
         pin_data = normalize_package(pin_data, verbose)
 
-        # Step 6: Prepare custom layout if available
-        custom_layout = None
-        if layout_data:
-            custom_layout = prepare_custom_layout(layout_data, verbose)
+        # Step 6: Use Vision layout if available
+        custom_layout = layout_data  # Already in correct format {"left_side": [...], ...}
+        if custom_layout:
             if verbose:
                 print("Note: Using hybrid flow (LLM pins + Vision layout)")
         else:
