@@ -1,6 +1,8 @@
 """Extract content from identified relevant pages for LLM processing."""
 
 import io
+import json
+import tempfile
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from pathlib import Path
@@ -9,6 +11,11 @@ try:
     import pdfplumber
 except ImportError:
     pdfplumber = None
+
+try:
+    import opendataloader_pdf
+except ImportError:
+    opendataloader_pdf = None
 
 from .page_detector import PageCandidate
 from .pinout_filter import PinoutFilter
@@ -31,11 +38,12 @@ class ContentExtractor:
         Initialize content extractor.
 
         Args:
-            pdf_path: Path to the PDF datasheet
+            pdf_path: Path to PDF datasheet
         """
         self.pdf_path = pdf_path
         self.pdf = None
         self._open_pdf()
+        self.opendataloader_cache = None  # Cache for OpenDataLoader results
 
     def _open_pdf(self) -> None:
         """Open the PDF file."""
@@ -162,7 +170,7 @@ class ContentExtractor:
         self, page, page_num: int
     ) -> List[Tuple[int, List]]:
         """
-        Extract tables from a page.
+        Extract tables from a page using OpenDataLoader (hybrid mode).
 
         Args:
             page: pdfplumber Page object
@@ -171,29 +179,128 @@ class ContentExtractor:
         Returns:
             List of (page_number, table_data) tuples
         """
-        tables = []
-        extracted_tables = page.extract_tables()
-        if not extracted_tables:
-            return tables
+        if opendataloader_pdf is None:
+            raise ImportError(
+                "opendataloader-pdf is required for table extraction. "
+                "Install with: pip install opendataloader-pdf"
+            )
 
-        for table_data in extracted_tables:
-            if table_data and len(table_data) >= 2:  # Header + at least 1 row
-                tables.append((page_num, table_data))
+        tables = []
+
+        # Use cached OpenDataLoader results if available
+        if self.opendataloader_cache is None:
+            self.opendataloader_cache = self._extract_with_opendataloader()
+
+        # Find tables for this page from OpenDataLoader results
+        for element in self.opendataloader_cache:
+            if element.get("type") == "table" and element.get("page number") == page_num:
+                # Convert OpenDataLoader table to our format
+                table_data = self._convert_opendataloader_table(element)
+                if table_data and len(table_data) >= 2:  # Header + at least 1 row
+                    tables.append((page_num, table_data))
 
         return tables
 
-    def format_for_llm(self, content: ExtractedContent) -> str:
+    def _extract_with_opendataloader(self) -> dict:
+        """
+        Extract all content using OpenDataLoader (for table extraction).
+
+        Returns:
+            Dict containing OpenDataLoader results
+        """
+        import os
+
+        # Create temporary directory for output
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Extract to temporary directory
+            try:
+                opendataloader_pdf.convert(
+                    input_path=[self.pdf_path],
+                    output_dir=temp_dir,
+                    format="json"
+                )
+
+                # Read the JSON output
+                output_file = os.path.join(temp_dir, f"{Path(self.pdf_path).stem}.json")
+                if not os.path.exists(output_file):
+                    return {}
+
+                with open(output_file, 'r') as f:
+                    data = json.load(f)
+
+                # Return the 'kids' array which contains all elements
+                return data.get("kids", [])
+
+            except Exception as e:
+                print(f"Warning: OpenDataLoader extraction failed: {e}")
+                return {}
+
+    def _convert_opendataloader_table(self, odl_table: dict) -> List[List]:
+        """
+        Convert OpenDataLoader table format to our internal format.
+
+        Args:
+            odl_table: OpenDataLoader table element
+
+        Returns:
+            2D list of table cells (rows x columns)
+        """
+        rows_data = odl_table.get("rows", [])
+        if not rows_data:
+            return []
+
+        # Convert each row
+        converted_table = []
+        for row in rows_data:
+            cells = row.get("cells", [])
+            row_data = []
+
+            # Convert each cell
+            for cell in cells:
+                # Extract text from kids (paragraphs)
+                cell_text = ""
+                kids = cell.get("kids", [])
+                if kids:
+                    for kid in kids:
+                        if kid.get("type") == "paragraph":
+                            cell_text = kid.get("content", "")
+                            break
+                row_data.append(cell_text)
+
+            converted_table.append(row_data)
+
+        return converted_table
+
+    @staticmethod
+    def format_for_llm(content: ExtractedContent, tables_only: bool = False) -> str:
         """
         Format extracted content for LLM input.
 
         Args:
             content: ExtractedContent object
+            tables_only: If True, extract and format ONLY table data (no text/images)
 
         Returns:
             Formatted string ready for LLM processing
         """
         formatted_parts = []
 
+        # Table-only mode: Extract ONLY table data (clean input for LLM)
+        if tables_only and content.tables:
+            formatted_parts.append("--- PINOUT TABLE DATA ---\n")
+            formatted_parts.append("Extract the following pin configuration table to generate structured PinData:\n\n")
+
+            for page_num, table in content.tables:
+                formatted_parts.append(f"Table from page {page_num}:")
+                if table and len(table) > 0:
+                    # Send full table structure - let LLM figure it out
+                    table_json = json.dumps(table, indent=2)
+                    formatted_parts.append(table_json)
+                formatted_parts.append("")
+
+            return "\n".join(formatted_parts)
+
+        # Normal mode: text + tables + images
         # Add page numbers
         formatted_parts.append(f"Relevant pages: {', '.join(map(str, content.pages))}\n")
 
@@ -203,23 +310,15 @@ class ContentExtractor:
             formatted_parts.append(content.text_content)
             formatted_parts.append("")
 
-        # Add tables (filtered to pinout tables)
+        # Add tables as JSON (structured format)
         if content.tables:
-            formatted_parts.append("\n--- Pinout Tables ---\n")
+            formatted_parts.append("\n--- Pinout Tables (JSON) ---\n")
             for page_num, table in content.tables:
                 formatted_parts.append(f"\nTable from page {page_num}:")
                 if table and len(table) > 0:
-                    # Header
-                    header = " | ".join(str(cell) for cell in table[0])
-                    formatted_parts.append(f"| {header} |")
-                    # Data rows (limit to 15 for context)
-                    for row_idx, row in enumerate(table):
-                        if row_idx < 15:
-                            row_text = " | ".join(str(cell) for cell in row)
-                            formatted_parts.append(f"| {row_text} |")
-                        elif row_idx == 15:
-                            formatted_parts.append("| ... (truncated)")
-                            break
+                    # Convert to JSON for structured parsing
+                    table_json = json.dumps(table, indent=2)
+                    formatted_parts.append(table_json)
 
         # Note about images
         if content.images:

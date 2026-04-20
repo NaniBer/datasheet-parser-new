@@ -58,3 +58,18 @@ htmlcov/
 # API keys
 .env
 .env.local
+output/
+
+# OpenDataLoader outputs
+*.json
+*_images/
+
+# Virtual environments
+datasheet/bin/
+datasheet/include/
+datasheet/lib/
+chandra_env/
+
+# Test outputs
+definition.json
+model*.png

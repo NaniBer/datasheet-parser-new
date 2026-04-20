@@ -177,7 +177,28 @@ def extract_pin_data(content, api_key: str, model: str, verbose: bool = False) -
         print("\n[3/5] Extracting pin data with LLM...")
 
     llm_client = LLMClient(api_key=api_key, model=model)
-    pin_data = llm_client.extract_pin_data(content=content.text_content)
+
+    # Determine if we should use table-only mode
+    # Use table-only mode when we have tables but no images (diagrams)
+    tables_only_mode = len(content.tables) > 0 and len(content.images) == 0
+
+    if verbose and tables_only_mode:
+        print(f"Using table-only mode (tables detected, no diagrams)")
+
+    # Format content for LLM using the appropriate mode
+    from .pdf_extractor.content_extractor import ContentExtractor
+    formatted_content = ContentExtractor.format_for_llm(content, tables_only=tables_only_mode)
+
+    if verbose and tables_only_mode:
+        print(f"Sending {len(formatted_content)} characters of table data to LLM")
+    elif verbose:
+        print(f"Sending {len(formatted_content)} characters of content to LLM")
+
+    # Extract pin data using appropriate mode
+    pin_data = llm_client.extract_pin_data(
+        content=formatted_content,
+        tables_only_mode=tables_only_mode
+    )
 
     if verbose:
         print(f"Extracted pin data:")

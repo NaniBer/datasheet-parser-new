@@ -38,6 +38,7 @@ class LLMClient:
         content: str,
         images: Optional[List[bytes]] = None,
         part_number: Optional[str] = None,
+        tables_only_mode: bool = False,
         max_retries: int = 3,
         retry_delay: float = 1.0,
         **kwargs
@@ -49,9 +50,10 @@ class LLMClient:
             content: Text content extracted from datasheet
             images: Optional list of image data (for multimodal models)
                     Currently not used but kept for interface compatibility
-            part_number: Optional specific part number to match package variant
+            part_number: Optional specific part number to match (e.g., "STM32F103RBT7")
+            tables_only_mode: If True, content is ONLY table data (use specialized table prompt)
             max_retries: Maximum number of retry attempts for LLM API calls (default: 3)
-            retry_delay: Initial delay between retries in seconds (default: 1.0)
+            retry_delay: Initial delay between retries in seconds (default: 1)
             **kwargs: Additional parameters
 
         Returns:
@@ -61,8 +63,17 @@ class LLMClient:
             ValueError: If LLM response cannot be parsed
             Exception: If LLM API call fails after all retries
         """
-        # Build messages for pin extraction with part number if provided
-        messages = build_pin_extraction_prompt(content, part_number=part_number)
+        # Build messages for pin extraction
+        # Use specialized table prompt for table-only mode
+        if tables_only_mode:
+            from ..chat_bot import build_table_extraction_prompt
+            messages = build_table_extraction_prompt(content)
+        else:
+            messages = build_pin_extraction_prompt(
+                content,
+                part_number=part_number,
+                table_only_mode=tables_only_mode
+            )
 
         # Call LLM with retry logic
         response = get_completion_from_messages(

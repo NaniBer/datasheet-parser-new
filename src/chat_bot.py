@@ -93,13 +93,108 @@ def get_completion_from_messages(messages, model="llama-3", temperature=0, max_r
     )
 
 
-def build_pin_extraction_prompt(datasheet_content: str, part_number: str = None) -> list:
+def build_table_extraction_prompt(table_data: str) -> list:
+    """
+    Build specialized prompt for table-only extraction.
+
+    Args:
+        table_data: JSON-formatted table data
+
+    Returns:
+        List of message dictionaries for LLM API call
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a specialized Table Parser for electronic component pinout data. "
+                "Your ONLY job is to parse pin configuration tables accurately.\n\n"
+
+                "TABLE STRUCTURE ANALYSIS (STEP 1 - CRITICAL):\n"
+                "1. COUNT HEADER ROWS: Look at the first 2-3 rows to identify headers\n"
+                "2. IDENTIFY COLUMNS: Determine what each column represents\n"
+                "3. DETECT VARIANTS: Check if there are MULTIPLE PACKAGE TYPES in the table\n"
+                "   - Look for 'SOIC', 'PDIP', 'LCCC', 'QFP', 'TQFP', 'QFN' in headers\n"
+                "   - These indicate multiple pin number columns for different packages\n\n"
+
+                "VARIANT SELECTION (STEP 2):\n"
+                "IF MULTIPLE VARIANTS DETECTED:\n"
+                "- CHOOSE ONE variant (prefer SOIC or PDIP - most common)\n"
+                "- Extract ONLY pins for that ONE variant\n"
+                "- Example: If SOIC-16, extract exactly 16 pins using SOIC column numbers\n"
+                "- DO NOT mix SOIC and LCCC pins together!\n\n"
+
+                "IF SINGLE VARIANT:\n"
+                "- Extract all pins from the table\n\n"
+
+                "PIN EXTRACTION RULES (STEP 3):\n"
+                "1. EXACT NAMES: Use pin names EXACTLY as shown (QA, QB, QC - NOT Q1, Q2, Q3)\n"
+                "2. CORRECT NUMBERS: Use pin numbers from the CHOSEN variant column only\n"
+                "3. VERIFY COUNT: Pin count must match package type (SOIC-16 = 16 pins)\n"
+                "4. NO DUPLICATES: Each pin number should appear only once\n"
+                "5. ALL PINS: Extract EVERY pin, not just a sample\n\n"
+
+                "FUNCTION CLASSIFICATION:\n"
+                "- power: VCC, VDD, AVCC, VEE\n"
+                "- ground: GND, VSS, AGND, DGND\n"
+                "- input: SER, DATA, DIN, CLK, RCLK, SRCLK\n"
+                "- output: QA, QB, QC, QD, QE, QF, QG, QH, QH', QOUT\n"
+                "- control: OE, ENABLE, RESET, CLEAR, SRCLR\n"
+                "- none: NC (no connection)\n\n"
+
+                "OUTPUT FORMAT (JSON ONLY):\n"
+                "{\n"
+                "  \"component_name\": \"Component name (e.g., 74HC595, STM32F103)\",\n"
+                "  \"package\": {\n"
+                "    \"type\": \"Package type with pin count (e.g., SOIC-16, PDIP-16)\",\n"
+                "    \"pin_count\": exact_number_of_pins,\n"
+                "    \"width\": null,\n"
+                "    \"height\": null,\n"
+                "    \"pitch\": null\n"
+                "  },\n"
+                "  \"pins\": [\n"
+                "    {\"number\": 1, \"name\": \"VCC\", \"function\": \"power\"},\n"
+                "    {\"number\": 2, \"name\": \"QA\", \"function\": \"output\"},\n"
+                "    ...\n"
+                "  ],\n"
+                "  \"extraction_method\": \"Table\"\n"
+                "}\n\n"
+
+                "ABSOLUTE REQUIREMENTS:\n"
+                "- Return ONLY raw JSON (no ```json, no explanations)\n"
+                "- Extract pin names EXACTLY as in table\n"
+                "- If multiple variants, choose ONE and extract ONLY that\n"
+                "- Verify pin count matches package type\n"
+                "- No duplicate pin numbers\n"
+            )
+        },
+        {
+            "role": "user",
+            "content": (
+                "Parse this pin configuration table and extract PinData.\n\n"
+                "INSTRUCTIONS:\n"
+                "1. Analyze table structure (header rows, columns, variants)\n"
+                "2. If multiple package variants exist, choose ONE (prefer SOIC or PDIP)\n"
+                "3. Extract pins for the chosen variant ONLY\n"
+                "4. Verify pin count matches the package type\n"
+                "5. Use exact pin names from the table\n\n"
+                "--- TABLE DATA ---\n"
+                f"{table_data}\n"
+                "--- END TABLE DATA ---"
+            )
+        }
+    ]
+    return messages
+
+
+def build_pin_extraction_prompt(datasheet_content: str, part_number: str = None, table_only_mode: bool = False) -> list:
     """
     Build messages for PinData extraction from datasheet content.
 
     Args:
         datasheet_content: The extracted text/content from relevant datasheet pages
         part_number: Optional specific part number to match (e.g., "STM32F103RBT7")
+        table_only_mode: If True, content is ONLY table data (simplified prompt)
 
     Returns:
         List of message dictionaries for LLM API call
@@ -113,22 +208,16 @@ def build_pin_extraction_prompt(datasheet_content: str, part_number: str = None)
         "4. Note the extraction method (Table, Diagram, or Mixed).\n"
     )
 
-    if part_number:
-        extraction_tasks += (
-            f"\n"
-            f"CRITICAL: This datasheet contains multiple package variants. "
-            f"You MUST match the specific part number '{part_number}' to its corresponding package variant.\n\n"
-            f"COMMON PACKAGE VARIANTS AND PART NUMBERS:\n"
-            f"- ATmega164A: Available in PDIP-40, TQFP-44, MLF-44, VFBGA-32\n"
-            f"- If no suffix specified, PDIP-40 is the DEFAULT variant\n"
-            f"- Look for 'Ordering Code' or 'Package Option' sections\n"
-            f"- Look for package mapping tables that list available variants\n"
-            f"- Match the part number suffix to the package (e.g., if 'PDIP' is in datasheet and part has no suffix, use PDIP variant)\n"
-            f"- Extract pins ONLY for the package variant that matches '{part_number}'\n"
-            f"- Do NOT extract pins for other package variants\n"
-            f"- If PDIP-40 is the expected package, IGNORE TQFP/QFN variants even if they appear first\n"
-        )
+    # CRITICAL INSTRUCTION: Do not generate sequential pin names.
+    # When pinout table data is present in text content, use exact names from table.
+    # If table contains explicit pin names like QA, QB, QC, QH, use THOSE EXACTLY.
+    # DO NOT create sequential names (Q1, Q2, Q3...) when table provides actual names.
 
+    # Table-only mode: Use specialized table extraction prompt
+    if table_only_mode:
+        return build_table_extraction_prompt(datasheet_content)
+
+    # Normal mode: Full prompt for diagrams + tables
     messages = [
         {
             "role": "system",
@@ -203,7 +292,6 @@ def build_pin_extraction_prompt(datasheet_content: str, part_number: str = None)
                 "Extract complete PinData from the datasheet content provided below. "
                 "This data will be used to generate 3D CAD models.\n\n"
                 f"{extraction_tasks}\n\n"
-
                 "--- DATASHEET CONTENT START ---\n"
                 f"{datasheet_content}\n"
                 "--- DATASHEET CONTENT END ---"
