@@ -31,6 +31,20 @@ class PinoutExtractionResult:
     notes: str = ""
 
 
+@dataclass
+class TableExtractionResult:
+    """Result of table extraction from an image."""
+
+    component_name: str
+    package_type: str
+    pin_count: int
+    table_data: List[List[str]]  # Raw table rows
+    pins: List[dict]  # Parsed pins from table
+    confidence: float
+    extraction_method: str = "vision_table"
+    notes: str = ""
+
+
 class ImageOCRClient:
     """
     API client for image-based pinout extraction using qwen.ideeza.com.
@@ -477,6 +491,246 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
                 best_confidence = result.confidence
 
         return best_result or self._empty_result()
+
+    def _build_table_extraction_prompt(self) -> str:
+        """
+        Build prompt for table extraction from pinout images.
+
+        Returns:
+            User prompt string for table extraction
+        """
+        return """Extract this pinout table and return the complete table data.
+
+## Your Task:
+1. **Identify the component** (e.g., SN74HC595, ATmega164A, NE555)
+2. **Determine the package type** (e.g., SOIC-16, DIP-8, TQFP-44, LQFP-64, QFN-38)
+3. **Extract the complete table** - all rows and all columns:
+   - Read every row in the table
+   - Preserve the exact text from each cell
+   - Include column headers
+4. **For each pin row**, extract:
+   - Pin number (usually first column)
+   - Pin name (QA, QB, GND, VCC, etc.)
+   - Pin function or description (if present)
+   - Package variant pin numbers (if multiple columns for different packages)
+
+## Output Format:
+Return ONLY valid JSON (no markdown code blocks, no additional text):
+
+{
+  "component_name": "Component Name",
+  "package_type": "Package Type",
+  "pin_count": 16,
+  "table": [
+    ["HEADER 1", "HEADER 2", "HEADER 3", ...],
+    ["Pin 1", "GND", "Ground Pin", ...],
+    ["Pin 2", "VCC", "Power Pin", ...],
+    ...
+  ],
+  "pins": [
+    {"number": 1, "name": "GND", "function": "ground"},
+    {"number": 2, "name": "VCC", "function": "power"},
+    ...
+  ],
+  "extraction_confidence": 0.95,
+  "notes": "Description of extraction quality"
+}
+
+## Important Rules:
+- Extract ALL rows from the table, not just a sample
+- Preserve exact pin names (QA, QB, QC, QH' - do not simplify to Q1, Q2, Q3)
+- If the table has multi-row headers, include all header rows
+- If pin names contain special characters (like QH'), preserve them
+- For multiple package variants, extract all pin number columns if present
+- Return ONLY JSON - no explanations or additional text"""
+
+    def extract_table_from_image(
+        self,
+        image_data: bytes,
+        page_number: int = None,
+        prompt: str = None,
+    ) -> TableExtractionResult:
+        """
+        Extract table data from a pinout table image.
+
+        Args:
+            image_data: Image data as bytes (PNG/JPEG)
+            page_number: Optional page number for logging
+            prompt: Optional custom prompt (uses default if not provided)
+
+        Returns:
+            TableExtractionResult with extracted table data
+        """
+        if page_number is not None:
+            print(f"[ImageOCRClient] Extracting table from page {page_number}...")
+        print(f"[ImageOCRClient] Image size: {len(image_data)} bytes")
+
+        # Build prompts
+        user_prompt_text = prompt or self._build_table_extraction_prompt()
+        system_prompt_text = "You are an expert at reading electronic component pinout tables from datasheet images. You extract structured table data."
+
+        # Create multipart form data
+        files = {"file": ("image.png", io.BytesIO(image_data), "image/png")}
+        data = {
+            "system_prompt": system_prompt_text,
+            "user_prompt": user_prompt_text,
+        }
+
+        try:
+            # Call API
+            response = requests.post(
+                self.api_url,
+                headers={"accept": "application/json"},
+                files=files,
+                data=data,
+                timeout=self.timeout,
+            )
+
+            # Raise error on non-2xx
+            response.raise_for_status()
+
+            # Parse JSON response
+            result = response.json()
+
+            # Try to parse response text for table data
+            return self._parse_table_api_response(result)
+
+        except requests.HTTPError as e:
+            print(f"[ImageOCRClient] HTTP Error: {e}")
+            # Try to get more info from response
+            if hasattr(e, "response") and e.response is not None:
+                body_preview = e.response.text[:2000] if e.response.text else ""
+                print(f"[ImageOCRClient] Response body: {body_preview}")
+            return self._empty_table_result()
+        except Exception as e:
+            print(f"[ImageOCRClient] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return self._empty_table_result()
+
+    def _parse_table_api_response(self, response: Dict[str, Any]) -> TableExtractionResult:
+        """
+        Parse API response and extract table data.
+
+        Args:
+            response: Raw API response as dict
+
+        Returns:
+            TableExtractionResult
+        """
+        import re
+
+        # Try Format 1: description field is a dict with actual data
+        if "description" in response:
+            description = response.get("description")
+
+            # If description is already a dict, use it directly
+            if isinstance(description, dict):
+                return TableExtractionResult(
+                    component_name=description.get("component_name", ""),
+                    package_type=description.get("package_type", ""),
+                    pin_count=description.get("pin_count", 0),
+                    table_data=description.get("table", []),
+                    pins=description.get("pins", []),
+                    confidence=description.get("extraction_confidence", 0.0),
+                    notes=description.get("notes", ""),
+                )
+
+            # If description is a string, try to parse JSON
+            if isinstance(description, str):
+                try:
+                    data = json.loads(description)
+                    return TableExtractionResult(
+                        component_name=data.get("component_name", ""),
+                        package_type=data.get("package_type", ""),
+                        pin_count=data.get("pin_count", 0),
+                        table_data=data.get("table", []),
+                        pins=data.get("pins", []),
+                        confidence=data.get("extraction_confidence", 0.0),
+                        notes=data.get("notes", ""),
+                    )
+                except json.JSONDecodeError:
+                    # Look for JSON in markdown code blocks (fallback)
+                    json_match = re.search(r"```(?:json)?\s*\n?(\{.*?\})\n?```", description, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(1)
+                    else:
+                        json_match = re.search(r"\{[\s\S]*\}", description)
+                        if json_match:
+                            json_str = json_match.group(0)
+                        else:
+                            json_str = None
+
+                    if json_str:
+                        try:
+                            data = json.loads(json_str)
+                            return TableExtractionResult(
+                                component_name=data.get("component_name", ""),
+                                package_type=data.get("package_type", ""),
+                                pin_count=data.get("pin_count", 0),
+                                table_data=data.get("table", []),
+                                pins=data.get("pins", []),
+                                confidence=data.get("extraction_confidence", 0.0),
+                                notes=data.get("notes", ""),
+                            )
+                        except json.JSONDecodeError as e:
+                            print(f"[ImageOCRClient] Failed to parse JSON: {e}")
+
+        # Try Format 4: Direct JSON (entire response is data)
+        if "component_name" in response or "package_type" in response or "table" in response:
+            return TableExtractionResult(
+                component_name=response.get("component_name", ""),
+                package_type=response.get("package_type", ""),
+                pin_count=response.get("pin_count", 0),
+                table_data=response.get("table", []),
+                pins=response.get("pins", []),
+                confidence=response.get("extraction_confidence", 0.0),
+                notes=response.get("notes", ""),
+            )
+
+        print(f"[ImageOCRClient] Could not extract valid table data from response")
+        return self._empty_table_result()
+
+    def _empty_table_result(self) -> TableExtractionResult:
+        """Return an empty table result."""
+        return TableExtractionResult(
+            component_name="",
+            package_type="",
+            pin_count=0,
+            table_data=[],
+            pins=[],
+            confidence=0.0,
+            notes="Failed to extract table data from API response",
+        )
+
+    def extract_table_from_images(
+        self, images: List[tuple]
+    ) -> TableExtractionResult:
+        """
+        Extract table data from multiple page images.
+
+        Args:
+            images: List of (page_number, image_data) tuples
+
+        Returns:
+            TableExtractionResult with best extraction from all images
+        """
+        print(f"[ImageOCRClient] Processing {len(images)} images for table extraction...")
+
+        # Process each image and return the best result
+        best_result = None
+        best_confidence = 0.0
+
+        for page_num, img_data in images:
+            result = self.extract_table_from_image(
+                img_data, page_number=page_num
+            )
+
+            if result.confidence > best_confidence:
+                best_result = result
+                best_confidence = result.confidence
+
+        return best_result or self._empty_table_result()
 
     def encode_image_base64(self, image_data: bytes) -> str:
         """

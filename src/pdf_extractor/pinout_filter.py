@@ -70,6 +70,48 @@ class PinoutFilter:
 
         return pinout_kw_count >= 2
 
+    def filter_text_content(self, text_content: str, pages: List[int]) -> str:
+        """
+        Filter only text content, preserving all text from pages with tables.
+
+        Args:
+            text_content: Combined text from all pages
+            pages: List of page numbers
+
+        Returns:
+            Filtered text content (all text preserved)
+        """
+        if not text_content:
+            return ""
+
+        # Split text by page markers
+        text_blocks = []
+        current_page = None
+        current_block = []
+
+        for line in text_content.split('\n'):
+            if line.strip().startswith('--- Page'):
+                if current_page is not None and current_block:
+                    text_blocks.append((current_page, "\n".join(current_block)))
+                current_block = []
+                try:
+                    current_page = int(line.strip().replace('--- Page', '').replace('---', '').strip())
+                except:
+                    current_page = None
+            elif current_page is not None:
+                current_block.append(line)
+
+        # Add last block
+        if current_page is not None and current_block:
+            text_blocks.append((current_page, "\n".join(current_block)))
+
+        # Combine all text blocks (no filtering on table pages)
+        filtered_text = "\n\n".join(
+            block_text for page_num, block_text in text_blocks
+        )
+
+        return filtered_text
+
     def is_pinout_section(self, text: str) -> bool:
         """Check if text block is from a pinout section."""
         if not text:

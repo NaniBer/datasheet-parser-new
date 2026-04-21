@@ -45,8 +45,8 @@ Created `build_table_extraction_prompt()` specifically for table-only mode:
 **Key Features:**
 - Intelligently analyzes table structure
 - Detects multiple package variants in same table
-- Chooses ONE variant (prefers SOIC/PDIP)
-- Verifies pin count matches package type
+- Extracts ALL variants (not just one)
+- Verifies pin count matches package type for each variant
 - Enforces exact pin names (QA, QB, QC - not Q1, Q2, Q3)
 
 **Handles:**
@@ -54,6 +54,26 @@ Created `build_table_extraction_prompt()` specifically for table-only mode:
 - Multiple package variants
 - Different column orders
 - Variable table structures
+
+**Output Structure:**
+```json
+{
+  "component_name": "74HC595",
+  "packages": [
+    {
+      "type": "SOIC-16",
+      "pin_count": 16,
+      "pins": [...]
+    },
+    {
+      "type": "LCCC-20",
+      "pin_count": 20,
+      "pins": [...]
+    }
+  ],
+  "extraction_method": "Table"
+}
+```
 
 ## Architecture Changes
 

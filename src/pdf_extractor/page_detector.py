@@ -50,6 +50,9 @@ class PageDetector:
         r"description",
         r"signal\s*name",
         r"symbol",
+        # NEW: Handle I/O columns and multi-row headers
+        r"i/o",
+        r"input/output",
     ]
 
     # Keywords that indicate pinout content
@@ -218,14 +221,24 @@ class PageDetector:
             if not table or len(table) < 2:  # Need at least header + 1 row
                 continue
 
-            # Check first row (header) for pinout column patterns
-            header = [str(cell or "").lower() for cell in table[0]]
-            header_text = " ".join(header)
-
+            # Check multiple rows (rows 0-2) for pinout column patterns
+            # Some tables have multi-row headers
             pattern_matches = 0
-            for pattern in self.PINOUT_TABLE_PATTERNS:
-                if re.search(pattern, header_text, re.IGNORECASE):
-                    pattern_matches += 1
+            header_text_all = ""
+
+            # Check first 3 rows for patterns
+            for row_idx in [0, 1, 2]:
+                if row_idx >= len(table):
+                    break
+
+                row = table[row_idx]
+                header = [str(cell or "").lower() for cell in row]
+                header_text = " ".join(header)
+                header_text_all += header_text + " "
+
+                for pattern in self.PINOUT_TABLE_PATTERNS:
+                    if re.search(pattern, header_text, re.IGNORECASE):
+                        pattern_matches += 1
 
             if pattern_matches >= 2:  # At least 2 pattern matches
                 return 4, True, f"Contains pinout table with {pattern_matches} matching columns"

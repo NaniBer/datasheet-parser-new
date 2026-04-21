@@ -30,6 +30,7 @@ class PinData:
     """Complete pin data extracted from a datasheet."""
 
     component_name: str
-    package: PackageInfo
-    pins: List[Pin]
-    extraction_method: str  # Table, Diagram, Mixed
+    package: Optional[PackageInfo] = None  # Single package (legacy format)
+    pins: Optional[List[Pin]] = None  # Single package pins (legacy format)
+    packages: Optional[List[dict]] = None  # Multiple packages with their pins (new format)
+    extraction_method: str = "Table"  # Table, Diagram, Mixed

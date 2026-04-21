@@ -94,6 +94,44 @@ Each day should follow this structure:
 
 ---
 
+## 2026-04-21 - Day 2
+
+### What We Did
+- ✅ Modified table extraction prompt to extract ALL variants (not just one)
+- ✅ Updated output structure to use packages array instead of single package object
+- ✅ Changed JSON format from `{package, pins}` to `{packages: [{type, pins}]}`
+- ✅ Updated PinData model to support both single-package (legacy) and multi-package (new) formats
+- ✅ Updated adapter to handle both formats with package_index parameter
+- ✅ Updated LLM client parser to detect and handle both formats
+- ✅ Tested all-variants extraction on multiple PDFs (MAX1487, MPU-6000, NE555)
+- ✅ Made component_name extraction optional (not required for PCB generation)
+- ✅ Updated plan.md to reflect new all-variants extraction behavior
+
+### Issues Encountered
+- **Issue 1**: 74HC595 table is messy (broken rows, pin conflicts)
+  - **Status**: Identified as edge case, not a prompt issue
+  - **Resolution**: All-variants approach works perfectly on clean tables
+- **Issue 2**: Component name extraction failing
+  - **Resolution**: Made optional - not required for PCB/schematic generation
+
+### What We Learned
+- All-variant extraction provides more comprehensive pin data
+- Users can access all package types from single table extraction
+- Component name is optional for PCB generation (package type, pins, pin counts are critical)
+- Clean tables work flawlessly with new all-variants approach
+- Messy tables (like 74HC595) are edge cases that may need post-processing
+
+### Tomorrow's Plan
+- Test the new all-variants extraction on 74HC595 PDF
+- Verify that both SOIC-16 and LCCC-20 variants are extracted correctly
+- Update any code that expects single package structure
+- Add option to select which package variant to use for schematic generation
+- Document the new all-variants behavior in plan.md
+- Test pin position calculation with real PDF workflows
+- Validate that SOIC and LCCC position calculations are correct
+
+---
+
 ## Template for Future Days
 
 ```markdown

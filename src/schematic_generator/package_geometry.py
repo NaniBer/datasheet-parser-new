@@ -19,6 +19,8 @@ class PackageType(Enum):
     QFN = "QFN"  # Quad Flat No-leads
     LQFP = "LQFP"  # Low-profile Quad Flat Package
     BGA = "BGA"  # Ball Grid Array
+    LCCC = "LCCC"  # Leadless Ceramic Chip Carrier
+    CDIP = "CDIP"  # Ceramic Dual Inline Package
 
 
 @dataclass
@@ -379,6 +381,90 @@ def get_bga_parameters(pin_count: int) -> SchematicParameters:
     )
 
 
+def get_lccc_parameters(pin_count: int) -> SchematicParameters:
+    """
+    Get schematic parameters for LCCC (Leadless Ceramic Chip Carrier).
+
+    LCCC packages are ceramic with no pins - pins are on the bottom.
+    Similar to BGA but different footprint.
+    """
+    # Calculate grid size (roughly square)
+    grid_size = int((pin_count) ** 0.5)
+
+    pitch = 1.27  # Similar to SOIC pitch
+    width = (grid_size - 1) * pitch + 4.0
+    height = width
+
+    return SchematicParameters(
+        package_type=PackageType.LCCC,
+        pin_count=pin_count,
+        pin_pitch=pitch,
+        body_width=width,
+        body_height=height,
+        pin_geometry=PinGeometry(
+            leg_length=0.0,  # LCCC has no pins
+            leg_width=0.0,
+            leg_thickness=0.0,
+            point_size=0.5,  # Larger pads for LCCC
+            pin_num_size=0.8,
+            pin_name_size=1.2,
+            # LCCC-specific extra offsets
+            extra_left_name_offset=0.0,
+            extra_left_num_offset=0.0,
+            extra_right_name_offset=0.0,
+            extra_right_num_offset=0.0,
+            extra_bottom_name_offset=0.0,
+            extra_bottom_num_offset=0.0,
+            extra_top_name_offset=0.0,
+            extra_top_num_offset=0.0
+        ),
+        body_geometry=BodyGeometry(top_margin=3.0),
+        pins_per_side=[grid_size, grid_size, grid_size, grid_size],
+        counter_clockwise=True
+    )
+
+
+def get_cdip_parameters(pin_count: int) -> SchematicParameters:
+    """
+    Get schematic parameters for CDIP (Ceramic Dual Inline Package).
+
+    CDIP is similar to DIP but ceramic construction.
+    """
+    pitch = 2.54  # Same as DIP
+    width = 20.0  # Slightly narrower than DIP
+
+    pins_per_side = pin_count // 2
+    height = (pins_per_side - 1) * pitch + 20.0
+
+    return SchematicParameters(
+        package_type=PackageType.CDIP,
+        pin_count=pin_count,
+        pin_pitch=pitch,
+        body_width=width,
+        body_height=height,
+        pin_geometry=PinGeometry(
+            leg_length=2.0,
+            leg_width=0.15,
+            leg_thickness=0.5,
+            point_size=0.5,
+            pin_num_size=1.0,
+            pin_name_size=0.8,
+            # CDIP-specific extra offsets
+            extra_left_name_offset=0.0,
+            extra_left_num_offset=0.0,
+            extra_right_name_offset=0.0,
+            extra_right_num_offset=0.0,
+            extra_bottom_name_offset=0.0,
+            extra_bottom_num_offset=0.0,
+            extra_top_name_offset=0.0,
+            extra_top_num_offset=0.0
+        ),
+        body_geometry=BodyGeometry(top_margin=5.0),
+        pins_per_side=[pins_per_side, pins_per_side, 0, 0],
+        counter_clockwise=True
+    )
+
+
 # ============================================================================
 # Parameter Lookup
 # ============================================================================
@@ -387,7 +473,7 @@ PACKAGE_TYPE_ALIASES = {
     # DIP aliases
     "DIP": PackageType.DIP,
     "PDIP": PackageType.DIP,
-    "CDIP": PackageType.DIP,
+    "CDIP": PackageType.CDIP,
 
     # SOIC aliases
     "SOIC": PackageType.SOIC,
@@ -407,6 +493,9 @@ PACKAGE_TYPE_ALIASES = {
     # BGA aliases
     "BGA": PackageType.BGA,
     "LGA": PackageType.BGA,
+
+    # LCCC aliases
+    "LCCC": PackageType.LCCC,
 }
 
 
@@ -438,7 +527,7 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
         pin_count: Number of pins
 
     Returns:
-        SchematicParameters for the package
+        SchematicParameters for package
 
     Example:
         >>> params = get_schematic_parameters("DIP-8", 8)
@@ -459,6 +548,16 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
         return get_qfn_parameters(pin_count)
     elif ptype == PackageType.BGA:
         return get_bga_parameters(pin_count)
+    elif ptype == PackageType.LCCC:
+        return get_lccc_parameters(pin_count)
+    elif ptype == PackageType.CDIP:
+        return get_cdip_parameters(pin_count)
+    elif ptype == PackageType.SOIC:
+        return get_soic_parameters(pin_count)
+    elif ptype == PackageType.TQFP or ptype == PackageType.LQFP:
+        return get_tqfp_parameters(pin_count)
+    elif ptype == PackageType.QFN:
+        return get_qfn_parameters(pin_count)
     else:
         # Default to DIP
         return get_dip_parameters(pin_count)
@@ -500,8 +599,23 @@ def calculate_pin_position(
             y = -(params.body_height / 2) + params.body_geometry.top_margin + (right_index * params.pin_pitch)
             return (params.body_width / 2, y, "right")
 
-    # For TQFP, distribute pins on all 4 sides
-    elif params.package_type in [PackageType.TQFP, PackageType.LQFP]:
+    # For SOIC, distribute pins on 2 sides (left and right)
+    elif params.package_type == PackageType.SOIC:
+        pins_per_side = params.pin_count // 2
+
+        if pin_index < pins_per_side:
+            # Left side (top to bottom)
+            y = (params.body_height / 2) - params.body_geometry.top_margin - (pin_index * params.pin_pitch)
+            return (-params.body_width / 2, y, "left")
+        else:
+            # Right side (bottom to top)
+            right_index = pin_index - pins_per_side
+            y = -(params.body_height / 2) + params.body_geometry.top_margin + (right_index * params.pin_pitch)
+            return (params.body_width / 2, y, "right")
+
+    # For TQFP/LCCC/CDIP, distribute pins on all 4 sides
+    elif params.package_type in [PackageType.TQFP, PackageType.LQFP, PackageType.LCCC, PackageType.CDIP]:
+        pins_per_side = params.pin_count // 4
         pins_per_side = params.pin_count // 4
 
         if pin_index < pins_per_side:

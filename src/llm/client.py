@@ -90,6 +90,10 @@ class LLMClient:
         """
         Parse LLM response into PinData object.
 
+        Handles both legacy single-package format and new multi-package format:
+        - Legacy: {"package": {...}, "pins": [...]}
+        - New: {"packages": [{"type": "...", "pin_count": N, "pins": [...]}, ...]}
+
         Args:
             response: Raw response from LLM
 
@@ -113,53 +117,97 @@ class LLMClient:
             # Parse JSON
             data = json.loads(clean_response)
 
-            # Parse package info - handle None values
-            package_data = data.get("package", {})
-            width = package_data.get("width")
-            height = package_data.get("height")
+            # Handle new multi-package format
+            if "packages" in data and data["packages"]:
+                packages = data["packages"]
 
-            # Convert to float if not None, otherwise use 0
-            width_val = float(width) if width is not None else 0.0
-            height_val = float(height) if height is not None else 0.0
+                # Convert packages to the format expected by adapter
+                packages_list = []
+                for pkg_data in packages:
+                    pkg_info = {
+                        "type": pkg_data.get("type", "Unknown"),
+                        "pin_count": pkg_data.get("pin_count", 0),
+                        "width": float(pkg_data.get("width", 0)),
+                        "height": float(pkg_data.get("height", 0)),
+                        "pitch": pkg_data.get("pitch"),
+                        "thickness": pkg_data.get("thickness"),
+                        "pins": []
+                    }
 
-            package = PackageInfo(
-                type=package_data.get("type", "Unknown"),
-                pin_count=package_data.get("pin_count", 0),
-                width=width_val,
-                height=height_val,
-                pitch=package_data.get("pitch"),
-                thickness=package_data.get("thickness"),
-            )
+                    # Parse pins for this package
+                    pins_data = pkg_data.get("pins", [])
+                    for pin_data in pins_data:
+                        # Handle both string and int pin numbers
+                        pin_number = pin_data.get("number")
+                        if isinstance(pin_number, str):
+                            import re
+                            match = re.search(r'\d+', pin_number)
+                            pin_number = int(match.group(0)) if match else 0
+                        else:
+                            pin_number = int(pin_number)
 
-            # Parse pins
-            pins_data = data.get("pins", [])
-            pins = []
-            for pin_data in pins_data:
-                # Handle both string and int pin numbers
-                pin_number = pin_data.get("number")
-                if isinstance(pin_number, str):
-                    # Try to extract number from string like "1" or "Pin 1"
-                    import re
-                    match = re.search(r'\d+', pin_number)
-                    pin_number = int(match.group(0)) if match else 0
-                else:
-                    pin_number = int(pin_number)
+                        pkg_info["pins"].append({
+                            "number": pin_number,
+                            "name": pin_data.get("name", ""),
+                            "function": pin_data.get("function")
+                        })
 
-                pins.append(
-                    Pin(
-                        number=pin_number,
-                        name=pin_data.get("name", ""),
-                        function=pin_data.get("function"),
-                    )
+                    packages_list.append(pkg_info)
+
+                # Create PinData with new multi-package format
+                pin_data = PinData(
+                    component_name=data.get("component_name", "Unknown"),
+                    packages=packages_list,
+                    extraction_method=data.get("extraction_method", "Unknown"),
                 )
 
-            # Create PinData
-            pin_data = PinData(
-                component_name=data.get("component_name", "Unknown"),
-                package=package,
-                pins=pins,
-                extraction_method=data.get("extraction_method", "Unknown"),
-            )
+            else:
+                # Handle legacy single-package format
+                package_data = data.get("package", {})
+                width = package_data.get("width")
+                height = package_data.get("height")
+
+                # Convert to float if not None, otherwise use 0
+                width_val = float(width) if width is not None else 0.0
+                height_val = float(height) if height is not None else 0.0
+
+                package = PackageInfo(
+                    type=package_data.get("type", "Unknown"),
+                    pin_count=package_data.get("pin_count", 0),
+                    width=width_val,
+                    height=height_val,
+                    pitch=package_data.get("pitch"),
+                    thickness=package_data.get("thickness"),
+                )
+
+                # Parse pins
+                pins_data = data.get("pins", [])
+                pins = []
+                for pin_data in pins_data:
+                    # Handle both string and int pin numbers
+                    pin_number = pin_data.get("number")
+                    if isinstance(pin_number, str):
+                        import re
+                        match = re.search(r'\d+', pin_number)
+                        pin_number = int(match.group(0)) if match else 0
+                    else:
+                        pin_number = int(pin_number)
+
+                    pins.append(
+                        Pin(
+                            number=pin_number,
+                            name=pin_data.get("name", ""),
+                            function=pin_data.get("function"),
+                        )
+                    )
+
+                # Create PinData with legacy single-package format
+                pin_data = PinData(
+                    component_name=data.get("component_name", "Unknown"),
+                    package=package,
+                    pins=pins,
+                    extraction_method=data.get("extraction_method", "Unknown"),
+                )
 
             return pin_data
 

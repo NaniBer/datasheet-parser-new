@@ -10,40 +10,66 @@ from src.models.pin_data import PinData, Pin
 from .schematic_builder import build_schematic_from_pin_data as build_schematic
 
 
-def pin_data_to_builder_format(pin_data: PinData) -> tuple:
+def pin_data_to_builder_format(pin_data: PinData, package_index: int = 0) -> tuple:
     """
     Convert PinData to format expected by SchematicBuilder.
 
     Args:
         pin_data: PinData object from pin extraction
+        package_index: Index of package to use (default 0) when multiple packages exist
 
     Returns:
         Tuple of (package_type, pin_count, component_name, pin_data_list)
 
     Example:
+        >>> # Single package format (legacy)
         >>> pin_data = PinData(
         ...     component_name="NE555",
         ...     package=PackageInfo(type="DIP-8", pin_count=8, ...),
         ...     pins=[Pin(number="1", name="GND"), ...]
         ... )
         >>> pkg_type, count, name, pins = pin_data_to_builder_format(pin_data)
-        >>> pkg_type
-        "DIP-8"
-        >>> name
-        "NE555"
-        >>> len(pins)
-        8
+
+        >>> # Multiple packages format (new)
+        >>> pin_data = PinData(
+        ...     component_name="74HC595",
+        ...     packages=[
+        ...         {"type": "SOIC-16", "pin_count": 16, "pins": [...]},
+        ...         {"type": "LCCC-20", "pin_count": 20, "pins": [...]}
+        ...     ]
+        ... )
+        >>> # Use first package (SOIC-16)
+        >>> pkg_type, count, name, pins = pin_data_to_builder_format(pin_data)
+        >>> # Use second package (LCCC-20)
+        >>> pkg_type, count, name, pins = pin_data_to_builder_format(pin_data, package_index=1)
     """
-    # Extract package info
-    package_type = pin_data.package.type
-    pin_count = pin_data.package.pin_count
     component_name = pin_data.component_name
 
-    # Convert pins to builder format: List[Dict[str, Any]]
-    pins_for_builder = [
-        {"number": str(pin.number), "name": pin.name}
-        for pin in pin_data.pins
-    ]
+    # Handle new multi-package format
+    if pin_data.packages and len(pin_data.packages) > package_index:
+        package_data = pin_data.packages[package_index]
+        package_type = package_data["type"]
+        pin_count = package_data["pin_count"]
+
+        # Convert pins to builder format: List[Dict[str, Any]]
+        pins_for_builder = [
+            {"number": str(pin["number"]), "name": pin["name"]}
+            for pin in package_data["pins"]
+        ]
+
+    # Handle legacy single package format
+    elif pin_data.package:
+        package_type = pin_data.package.type
+        pin_count = pin_data.package.pin_count
+
+        # Convert pins to builder format: List[Dict[str, Any]]
+        pins_for_builder = [
+            {"number": str(pin.number), "name": pin.name}
+            for pin in pin_data.pins
+        ]
+
+    else:
+        raise ValueError("PinData must have either 'package' (legacy) or 'packages' (new format)")
 
     return package_type, pin_count, component_name, pins_for_builder
 
