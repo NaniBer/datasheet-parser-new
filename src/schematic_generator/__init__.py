@@ -1,5 +1,5 @@
 """Schematic generator module for creating IC schematic symbols."""
-from .package_geometry import (
+from ..package_types import (
     PackageType,
     PinGeometry,
     BodyGeometry,

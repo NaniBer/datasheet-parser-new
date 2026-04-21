@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional
 
 import cadquery as cq
 
-from .package_geometry import (
+from ..package_types import (
     PackageType,
     SchematicParameters,
     get_schematic_parameters,

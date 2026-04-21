@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
 import math
 
-from .package_geometry import SchematicParameters, PackageType
+from ..package_types import SchematicParameters, PackageType
 
 
 @dataclass
