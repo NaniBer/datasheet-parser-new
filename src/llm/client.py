@@ -122,15 +122,24 @@ class LLMClient:
                 packages = data["packages"]
 
                 # Convert packages to the format expected by adapter
+                packages = data["packages"]
+
+                # Convert packages to the format expected by adapter
                 packages_list = []
                 for pkg_data in packages:
+                    # Get values with defaults for missing fields
+                    width_val = pkg_data.get("width")
+                    height_val = pkg_data.get("height")
+                    pitch_val = pkg_data.get("pitch")
+                    thickness_val = pkg_data.get("thickness")
+
                     pkg_info = {
                         "type": pkg_data.get("type", "Unknown"),
                         "pin_count": pkg_data.get("pin_count", 0),
-                        "width": float(pkg_data.get("width", 0)),
-                        "height": float(pkg_data.get("height", 0)),
-                        "pitch": pkg_data.get("pitch"),
-                        "thickness": pkg_data.get("thickness"),
+                        "width": float(width_val) if width_val is not None else 0,
+                        "height": float(height_val) if height_val is not None else 0,
+                        "pitch": pitch_val,
+                        "thickness": thickness_val,
                         "pins": []
                     }
 
