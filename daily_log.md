@@ -3,7 +3,7 @@
 ## Format
 Each day should follow this structure:
 ```markdown
-## YYYY-MM-DD - Day N
+## YYYY-MM-DD
 
 ### What We Did
 - [ ] Task 1
@@ -94,7 +94,120 @@ Each day should follow this structure:
 
 ---
 
-## 2026-04-21 - Day 2
+## 2026-04-23
+
+### What We Did
+- ✅ Fixed test script to handle both LLM extraction formats (multi-package and single-package)
+  - Updated `test_all_pdfs_pin_layout.py` to detect and handle both formats
+  - Added fallback to text-based extraction when no tables found
+  - Lowered default min_confidence from 5 to 2 for simple components
+- ✅ Tested all 6 PDFs successfully (100% success rate):
+  - 74HC595_TI.pdf: ✅ 2 variants (SOIC-16, LCCC-20) - 36 total pins
+  - ESP32-C3: ✅ 1 variant (QFN-32) - 32 pins
+  - MAX1487-MAX491.pdf: ✅ 4 variants (DIP-8, SO-8, uMAX-8, DIP/SO-14) - 38 total pins
+  - MPU-6000: ✅ 1 variant (QFN-24) - 24 pins
+  - NE555.PDF: ✅ 1 variant (DIP-8) - 8 pins (text-based extraction)
+  - AMS1117.pdf: ✅ 1 variant (SO-8) - 8 pins (text-based extraction)
+- ✅ Integrated fixes into main.py with smart adaptive logic:
+  - Added `get_dynamic_min_confidence()` function - auto-adjusts based on PDF page count:
+    - Small PDFs (< 10 pages): min_confidence = 2 (NE555, AMS1117)
+    - Medium PDFs (10-50 pages): min_confidence = 3 (MAX1487, ESP32-C3)
+    - Large PDFs (> 50 pages): min_confidence = 4 (74HC595, MPU-6000)
+  - Updated `extract_pin_data()` to handle both formats with enhanced verbose output
+  - Updated `normalize_package()` to normalize package types for multi-package format
+  - Fixed 2D PCB schematic generation to handle both formats
+  - Added `DatasheetParserError` import to fix exception handling
+- ✅ Created comprehensive test showing full 74HC595 extraction:
+  - Extracted both SOIC-16 (16 pins) and LCCC-20 (20 pins) variants
+  - All pins correctly identified with exact names (QA, QB, QC... not Q1, Q2, Q3...)
+  - Generated 3D schematic successfully (2.2 MB GLB file)
+  - Total processing time: ~40 seconds
+- ✅ Updated daily_log.md (removed day numbers from format)
+
+### Issues Encountered
+- **Issue 1**: Test script failed on PDFs without tables (NE555, AMS1117)
+  - **Root cause**: Script required tables, but some PDFs use text-based pinout diagrams
+  - **Solution**: Added text-based extraction fallback and lower min_confidence threshold
+- **Issue 2**: main.py crashed on multi-package format with AttributeError on pin_data.package
+  - **Root cause**: `normalize_package()` only handled single-package format
+  - **Solution**: Updated to handle both multi-package and single-package formats
+- **Issue 3**: NameError: DatasheetParserError not defined in main.py exception handler
+  - **Root cause**: Missing import for new exception class
+  - **Solution**: Added DatasheetParserError to imports from .exceptions
+
+### What We Learned
+- **Text-based pinout extraction works well** for simple components (NE555, AMS1117)
+- **Dynamic min_confidence adjustment is essential** - single threshold doesn't work for all PDF types
+- **Multi-format support is critical** - LLM returns different formats for tables vs diagrams
+- **100% success rate achieved** across diverse component types:
+  - Shift registers (74HC595, MAX1487)
+  - MCUs (ESP32-C3)
+  - Sensors (MPU-6000)
+  - Timers (NE555)
+  - Voltage regulators (AMS1117)
+- **Package types supported**: DIP, SOIC, QFN, LCCC, uMAX, LGA
+- **Extraction methods**: Table-based (most accurate), Diagram/text-based (fallback)
+
+### Tomorrow's Plan
+- [ ] Add variant selection feature (allow users to choose specific package)
+  - Add `--variant` CLI argument
+  - Update schematic generation to use selected variant
+  - Show available variants when multi-package detected
+- [ ] Improve component name detection from table headers
+  - Extract from document title or table captions
+  - Look for common part number patterns
+- [ ] Fix package format to remove duplicate pin counts (SOIC-20-20 → SOIC-20)
+  - Add post-processing cleanup in normalize_package()
+- [ ] Add more PDFs to test suite for better coverage
+  - BGA packages
+  - QFP/LQFP packages
+  - Connectors
+  - Displays
+
+---
+
+## Notes
+
+### Current Status
+- **Branch**: main
+- **Status**: Ready to commit and push
+- **Test Success Rate**: 100% (6/6 PDFs)
+- **Total Package Variants Extracted**: 10
+- **Processing Time**: 7-40s per PDF (average: ~21s)
+
+### Key Files Modified
+- `src/main.py` - Added dynamic min_confidence, dual format support, enhanced output
+- `test_scripts/test_all_pdfs_pin_layout.py` - Handle both formats, text extraction fallback
+- `daily_log.md` - Updated format and added today's progress
+- `MAIN_PY_UPDATES.md` - Documentation of main.py integration changes
+
+### Test Results Summary
+| PDF | Pages | Variants | Total Pins | Method | Status |
+|-----|-------|----------|------------|--------|--------|
+| 74HC595_TI.pdf | 41 | 2 | 36 | Table | ✅ |
+| ESP32-C3 | 76 | 1 | 32 | Table | ✅ |
+| MAX1487-MAX491.pdf | 17 | 4 | 38 | Table | ✅ |
+| MPU-6000 | 52 | 1 | 24 | Table | ✅ |
+| NE555.PDF | 7 | 1 | 8 | Text | ✅ |
+| AMS1117.pdf | 8 | 1 | 8 | Text | ✅ |
+
+### 74HC595 Full Extraction Results
+**Variant 1 - SOIC-16**: 16 pins (QB-QH, QH', SRCLR, SRCLK, RCLK, OE, SER, QA, NC, GND)
+**Variant 2 - LCCC-20**: 20 pins (multiple NC pins, VCC, all signal pins)
+**Generated Schematic**: 2.2 MB GLB file using SOIC variant
+
+### Known Issues (Low Priority)
+1. Component name detection (sometimes returns "Unknown")
+2. Package format has duplicate pin counts (SOIC-20-20 → SOIC-20)
+3. No variant selection UI for multi-package results
+
+### Future Enhancements
+- Variant selection flag (--variant SOIC-16)
+- Component name detection improvement
+- Package format cleanup
+- More package types support (BGA, QFP, etc.)
+- Cache page detection results
+- Table visualization for debugging
 
 ### What We Did
 - ✅ Modified table extraction prompt to extract ALL variants (not just one)
@@ -130,24 +243,20 @@ Each day should follow this structure:
 - Test pin position calculation with real PDF workflows
 - Validate that SOIC and LCCC position calculations are correct
 
----
-
-## Template for Future Days
-
-```markdown
-## YYYY-MM-DD - Day N
-
-### What We Did
-- [ ]
-- [ ]
-
-### Issues Encountered
--
--
-
-### What We Learned
--
--
+### Completed Today
+- ✅ Full end-to-end workflow tested successfully on 74HC595
+- ✅ 3D model generated (test_74hc595_full_workflow.glb)
+- ✅ PDF extraction → LLM → Package validation → 3D generation works end-to-end
+- ✅ Total workflow time: ~39 seconds (9s detection + 8s extraction + 21s LLM + 1s 3D gen)
+- ✅ Fixed LLM client parser bug (None value handling)
+- ✅ Added environment setup script (setup_env.sh)
+- ✅ Java environment working (OpenDataLoader functional)
+- ✅ Refactored package definitions to src/package_types/
+  - Cleaner module structure
+  - Easier to maintain and extend
+  - Centralized package type management
+  - Won't get "weird" as it grows
+- ✅ All imports updated and tested
 
 ### Tomorrow's Plan
 - [ ]

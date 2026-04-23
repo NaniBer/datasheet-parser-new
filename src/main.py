@@ -19,7 +19,9 @@ from .llm.image_ocr_client import ImageOCRClient
 from .schematic_generator import build_schematic_from_pin_data, build_pcb_2d_schematic
 from .utils import PackageDetector
 from .models import PinData, Pin, PackageInfo
-from .exceptions import ValidationError, ErrorCodes, APICredentialsError
+from .exceptions import (
+    ValidationError, ErrorCodes, APICredentialsError, DatasheetParserError
+)
 
 
 # ============================================================================
@@ -182,17 +184,25 @@ def extract_pin_data(content, api_key: str, model: str, verbose: bool = False) -
     # Use table-only mode when we have tables but no images (diagrams)
     tables_only_mode = len(content.tables) > 0 and len(content.images) == 0
 
-    if verbose and tables_only_mode:
-        print(f"Using table-only mode (tables detected, no diagrams)")
+    # Check if we have sufficient content for extraction
+    if not tables_only_mode and not content.text_content:
+        print("Error: No tables or text content found for extraction")
+        sys.exit(1)
+
+    if verbose:
+        if tables_only_mode:
+            print(f"Using table-only mode (tables detected, no diagrams)")
+        elif len(content.tables) == 0:
+            print(f"Using text-based extraction (no tables found)")
+        else:
+            print(f"Using mixed mode (tables + diagrams)")
 
     # Format content for LLM using the appropriate mode
     from .pdf_extractor.content_extractor import ContentExtractor
     formatted_content = ContentExtractor.format_for_llm(content, tables_only=tables_only_mode)
 
-    if verbose and tables_only_mode:
-        print(f"Sending {len(formatted_content)} characters of table data to LLM")
-    elif verbose:
-        print(f"Sending {len(formatted_content)} characters of content to LLM")
+    if verbose:
+        print(f"Sending {len(formatted_content)} characters to LLM")
 
     # Extract pin data using appropriate mode
     pin_data = llm_client.extract_pin_data(
@@ -201,21 +211,39 @@ def extract_pin_data(content, api_key: str, model: str, verbose: bool = False) -
     )
 
     if verbose:
-        print(f"Extracted pin data:")
+        print(f"\nExtracted pin data:")
         print(f"  Component: {pin_data.component_name}")
-        print(f"  Package: {pin_data.package.type}-{pin_data.package.pin_count}")
-        if pin_data.package.width > 0:
-            print(f"  Dimensions: {pin_data.package.width}mm x {pin_data.package.height}mm")
-        else:
-            print(f"  Dimensions: N/A (will be estimated from package type)")
-        print(f"  Pin count: {len(pin_data.pins)}")
         print(f"  Extraction method: {pin_data.extraction_method}")
+        
+        # Handle both multi-package and single-package formats
+        if pin_data.packages and len(pin_data.packages) > 0:
+            print(f"  Format: Multi-package ({len(pin_data.packages)} variants)")
+            for i, pkg in enumerate(pin_data.packages, 1):
+                print(f"  Package {i}: {pkg['type']}-{pkg['pin_count']} ({len(pkg['pins'])} pins)")
+        elif pin_data.package:
+            print(f"  Format: Single-package")
+            print(f"  Package: {pin_data.package.type}-{pin_data.package.pin_count}")
+            if pin_data.package.width > 0:
+                print(f"  Dimensions: {pin_data.package.width}mm x {pin_data.package.height}mm")
+            else:
+                print(f"  Dimensions: N/A (will be estimated from package type)")
+            print(f"  Pin count: {len(pin_data.pins)}")
 
-        if verbose and len(pin_data.pins) > 0:
-            print(f"  Pins (all {len(pin_data.pins)} pins):")
-            for i, pin in enumerate(pin_data.pins, 1):
-                func = f" ({pin.function})" if pin.function else ""
-                print(f"    {i:2d}. Pin {pin.number}: {pin.name}{func}")
+        # Show sample pins
+        pins_list = []
+        if pin_data.packages and len(pin_data.packages) > 0:
+            pins_list = pin_data.packages[0]['pins'][:5]  # First 5 pins from first package
+        elif pin_data.pins:
+            pins_list = pin_data.pins[:5]
+        
+        if pins_list:
+            print(f"  Sample pins:")
+            for pin in pins_list:
+                pin_num = pin.get('number') if isinstance(pin, dict) else pin.number
+                pin_name = pin.get('name') if isinstance(pin, dict) else pin.name
+                pin_func = pin.get('function') if isinstance(pin, dict) else pin.function
+                func = f" ({pin_func})" if pin_func else ""
+                print(f"    Pin {pin_num}: {pin_name}{func}")
 
     return pin_data
 
@@ -378,11 +406,30 @@ def normalize_package(pin_data: PinData, verbose: bool = False):
         print("\n[4] Validating package and generating schematic...")
 
     detector = PackageDetector()
-    normalized_pkg = detector.normalize_package_name(pin_data.package.type)
-    pin_data.package.type = normalized_pkg
-
-    if verbose:
-        print(f"Normalized package type: {normalized_pkg}")
+    
+    # Handle multi-package format
+    if pin_data.packages and len(pin_data.packages) > 0:
+        if verbose:
+            print(f"Normalizing {len(pin_data.packages)} package types...")
+        
+        for pkg in pin_data.packages:
+            pkg_type = pkg.get('type', '')
+            if pkg_type:
+                normalized = detector.normalize_package_name(pkg_type)
+                pkg['type'] = normalized
+                if verbose:
+                    print(f"  {pkg_type} → {normalized}")
+        
+        if verbose:
+            print(f"Normalized package types")
+    
+    # Handle legacy single-package format
+    elif pin_data.package:
+        normalized_pkg = detector.normalize_package_name(pin_data.package.type)
+        pin_data.package.type = normalized_pkg
+        
+        if verbose:
+            print(f"Normalized package type: {normalized_pkg}")
 
     return pin_data
 
@@ -390,6 +437,50 @@ def normalize_package(pin_data: PinData, verbose: bool = False):
 # ============================================================================
 # Main Orchestration
 # ============================================================================
+
+def get_dynamic_min_confidence(pdf_path: Path, user_min_confidence: int = 5, verbose: bool = False) -> int:
+    """
+    Dynamically adjust min_confidence based on PDF characteristics.
+
+    - Small/simple PDFs (< 10 pages): Lower threshold (2) to catch simple components
+    - Medium PDFs (10-50 pages): Standard threshold (3-4)
+    - Large/complex PDFs (> 50 pages): Higher threshold (5+) to reduce false positives
+
+    Args:
+        pdf_path: Path to PDF file
+        user_min_confidence: User-specified minimum confidence
+        verbose: Enable verbose output
+
+    Returns:
+        Adjusted minimum confidence score
+    """
+    try:
+        import pdfplumber
+        with pdfplumber.open(pdf_path) as pdf:
+            page_count = len(pdf.pages)
+            
+            # Auto-adjust based on page count
+            if page_count < 10:
+                auto_min = 2  # Simple components (NE555, AMS1117)
+            elif page_count < 50:
+                auto_min = 3  # Medium complexity
+            else:
+                auto_min = 4  # Large datasheets
+            
+            # Use the minimum of user-specified and auto-adjusted value
+            # (user can increase threshold if needed, but we won't force it higher)
+            adjusted_min = min(user_min_confidence, auto_min)
+            
+            if verbose and adjusted_min != user_min_confidence:
+                print(f"Auto-adjusted min_confidence: {user_min_confidence} → {adjusted_min} (PDF has {page_count} pages)")
+            
+            return adjusted_min
+            
+    except Exception as e:
+        if verbose:
+            print(f"Warning: Could not determine PDF page count, using default min_confidence: {e}")
+        return user_min_confidence
+
 
 def process_datasheet(
     input_path: Path,
@@ -434,8 +525,9 @@ def process_datasheet(
 
     # Pipeline steps
     try:
-        # Step 1: Detect relevant pages
-        candidates = detect_relevant_pages(str(input_path), min_confidence, verbose)
+        # Step 1: Detect relevant pages with dynamic min_confidence
+        adjusted_min_confidence = get_dynamic_min_confidence(input_path, min_confidence, verbose)
+        candidates = detect_relevant_pages(str(input_path), adjusted_min_confidence, verbose)
 
         # Step 2: Extract content
         content = extract_content(str(input_path), candidates, verbose)
@@ -469,15 +561,29 @@ def process_datasheet(
 
         # Choose schematic builder based on mode
         if pcb_2d_mode:
+            # Handle both multi-package and single-package formats for 2D mode
+            if pin_data.packages and len(pin_data.packages) > 0:
+                # Use first package for 2D schematic
+                pkg = pin_data.packages[0]
+                package_type = pkg['type']
+                pin_count = pkg['pin_count']
+                pin_data_list = [{"number": p['number'], "name": p['name']} for p in pkg['pins']]
+            else:
+                # Legacy single-package format
+                package_type = pin_data.package.type
+                pin_count = pin_data.package.pin_count
+                pin_data_list = [{"number": p.number, "name": p.name} for p in pin_data.pins]
+            
             result = build_pcb_2d_schematic(
-                package_type=pin_data.package.type,
-                pin_count=pin_data.package.pin_count,
+                package_type=package_type,
+                pin_count=pin_count,
                 component_name=pin_data.component_name,
-                pin_data=[{"number": p.number, "name": p.name} for p in pin_data.pins],
+                pin_data=pin_data_list,
                 output_path=str(output_path),
                 custom_layout=custom_layout
             )
         else:
+            # 3D mode - adapter handles both formats
             result = build_schematic_from_pin_data(
                 pin_data=pin_data,
                 output_path=str(output_path),

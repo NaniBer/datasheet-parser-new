@@ -102,6 +102,15 @@ class ContentExtractor:
         if not filtered.text_content and extracted.text_content:
             filtered = extracted
 
+        # Determine tables_only mode based on detection AND extraction
+        # Don't just check if tables were extracted, also check if we detected them
+        detected_tables = any(c.has_table for c in candidates)
+        extracted_tables = len(filtered.tables) > 0
+        no_images = len(filtered.images) == 0
+
+        # tables_only if we detected tables AND successfully extracted them AND no images
+        tables_only = detected_tables and extracted_tables and no_images
+
         # Return filtered content
         return ExtractedContent(
             pages=filtered.pages,
@@ -172,6 +181,8 @@ class ContentExtractor:
         """
         Extract tables from a page using OpenDataLoader (hybrid mode).
 
+        Falls back to pdfplumber if OpenDataLoader fails.
+
         Args:
             page: pdfplumber Page object
             page_num: Page number for reference
@@ -179,25 +190,79 @@ class ContentExtractor:
         Returns:
             List of (page_number, table_data) tuples
         """
-        if opendataloader_pdf is None:
-            raise ImportError(
-                "opendataloader-pdf is required for table extraction. "
-                "Install with: pip install opendataloader-pdf"
-            )
-
+        # Try OpenDataLoader first
         tables = []
 
-        # Use cached OpenDataLoader results if available
-        if self.opendataloader_cache is None:
-            self.opendataloader_cache = self._extract_with_opendataloader()
+        try:
+            if opendataloader_pdf is None:
+                raise ImportError(
+                    "opendataloader-pdf is required for table extraction. "
+                    "Install with: pip install opendataloader-pdf"
+                )
 
-        # Find tables for this page from OpenDataLoader results
-        for element in self.opendataloader_cache:
-            if element.get("type") == "table" and element.get("page number") == page_num:
-                # Convert OpenDataLoader table to our format
-                table_data = self._convert_opendataloader_table(element)
-                if table_data and len(table_data) >= 2:  # Header + at least 1 row
+            # Use cached OpenDataLoader results if available
+            if self.opendataloader_cache is None:
+                self.opendataloader_cache = self._extract_with_opendataloader()
+
+            # Find tables for this page from OpenDataLoader results
+            for element in self.opendataloader_cache:
+                if element.get("type") == "table" and element.get("page number") == page_num:
+                    # Convert OpenDataLoader table to our format
+                    table_data = self._convert_opendataloader_table(element)
+                    if table_data and len(table_data) >= 2:  # Header + at least 1 row
+                        tables.append((page_num, table_data))
+
+        except ImportError:
+            # OpenDataLoader not installed - skip it
+            pass
+        except Exception as e:
+            # OpenDataLoader failed (Java issue) - fall back to pdfplumber
+            print(f"Warning: OpenDataLoader failed, falling back to pdfplumber: {e}")
+            pass
+
+        # Fallback: If OpenDataLoader failed or returned no tables, try pdfplumber
+        if not tables:
+            tables = self._extract_tables_with_pdfplumber(page, page_num)
+
+        return tables
+
+    def _extract_tables_with_pdfplumber(
+        self, page, page_num: int
+    ) -> List[Tuple[int, List]]:
+        """
+        Extract tables using pdfplumber as fallback when OpenDataLoader fails.
+
+        Args:
+            page: pdfplumber Page object
+            page_num: Page number for reference
+
+        Returns:
+            List of (page_number, table_data) tuples
+        """
+        tables = []
+
+        try:
+            # Find tables on the page
+            page_tables = page.find_tables()
+
+            if not page_tables:
+                return tables
+
+            for table in page_tables:
+                # Convert table to our internal format
+                table_data = []
+
+                # Extract rows
+                for row in table.extract():
+                    row_data = [cell.extract() if cell else "" for cell in row]
+                    if any(row_data):  # Only add non-empty rows
+                        table_data.append(row_data)
+
+                if table_data:
                     tables.append((page_num, table_data))
+
+        except Exception as e:
+            print(f"Warning: pdfplumber table extraction failed: {e}")
 
         return tables
 
