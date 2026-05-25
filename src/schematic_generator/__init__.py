@@ -1,4 +1,4 @@
-"""Schematic generator module for creating IC schematic symbols."""
+"""Schematic generator module for creating IC schematics and PCB footprints."""
 from ..package_types import (
     PackageType,
     PinGeometry,
@@ -20,9 +20,9 @@ from .pin_layout import (
     layout_pins,
 )
 
-from .schematic_builder import (
-    SchematicBuilder,
-    build_schematic_from_pin_data as builder_build_schematic,
+from .pinout_diagram_builder import (
+    PinoutDiagramBuilder,
+    build_pinout_diagram,
 )
 
 from .adapter import (
@@ -30,10 +30,14 @@ from .adapter import (
     build_schematic_from_pin_data,
 )
 
-from .pcb_2d_builder import (
-    Pcb2dBuilder,
-    build_pcb_2d_schematic,
+from .pcb_footprint_builder import (
+    PcbFootprintBuilder,
+    build_pcb_footprint,
 )
+
+# Alias for backward compatibility
+build_pcb_2d_schematic = build_pcb_footprint
+build_schematic = build_schematic_from_pin_data
 
 __all__ = [
     "PackageType",
@@ -51,10 +55,12 @@ __all__ = [
     "PinPosition",
     "PinLayout",
     "layout_pins",
-    "SchematicBuilder",
-    "builder_build_schematic",
+    "PinoutDiagramBuilder",
+    "build_pinout_diagram",
     "pin_data_to_builder_format",
     "build_schematic_from_pin_data",
-    "Pcb2dBuilder",
+    "build_schematic",
+    "PcbFootprintBuilder",
+    "build_pcb_footprint",
     "build_pcb_2d_schematic",
 ]

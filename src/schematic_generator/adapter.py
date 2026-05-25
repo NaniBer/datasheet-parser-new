@@ -1,18 +1,18 @@
 """
-Adapter to convert PinData model to SchematicBuilder format.
+Adapter to convert PinData model to PinoutDiagramBuilder format.
 
 This module provides functions to convert between the PinData model
-(from the pin extraction pipeline) and the format expected by SchematicBuilder.
+(from the pin extraction pipeline) and the format expected by PinoutDiagramBuilder.
 """
 
 from typing import List, Dict, Any, Optional
 from src.models.pin_data import PinData, Pin
-from .schematic_builder import build_schematic_from_pin_data as build_schematic
+from .pinout_diagram_builder import build_pinout_diagram as build_schematic
 
 
 def pin_data_to_builder_format(pin_data: PinData, package_index: int = 0) -> tuple:
     """
-    Convert PinData to format expected by SchematicBuilder.
+    Convert PinData to format expected by PinoutDiagramBuilder.
 
     Args:
         pin_data: PinData object from pin extraction

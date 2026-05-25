@@ -4,7 +4,11 @@ Extract pin data from electronic component datasheets and generate 3D CAD models
 
 ## Overview
 
-This tool reads PDF datasheets for electronic components, identifies relevant pinout pages using a hybrid detection system (rules-based + LLM fallback), extracts pin information, and generates 3D CAD models using cadquery.
+This tool reads PDF datasheets for electronic components, identifies relevant pinout pages using a hybrid detection system (rules-based + LLM fallback), extracts pin information, and generates:
+- **Pinout Diagrams** (schematic symbols for circuit diagrams)
+- **PCB Footprints** (manufacturing layouts with copper pads, solder masks, etc.)
+
+Both outputs are in GLB format (3D geometry with extruded text).
 
 ## Features
 
@@ -105,7 +109,9 @@ python -m src.main datasheet.pdf output.glb --verbose
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│          Model Generator (model_generator)                  │
+│          Model Generator (schematic_generator)              │
+│  - PinoutDiagramBuilder (schematic symbols)                  │
+│  - PcbFootprintBuilder (PCB manufacturing)                   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -123,9 +129,11 @@ datasheet-parser-new/
 │   ├── llm/
 │   │   ├── client.py           # LLM API client (you provide)
 │   │   └── page_verifier.py    # LLM page verification
-│   ├── model_generator/
-│   │   ├── cadquery_builder.py # Generate cadquery code
-│   │   └── glb_exporter.py     # Export to GLB/STEP/STL
+│   ├── schematic_generator/
+│   │   ├── pinout_diagram_builder.py  # Schematic symbol builder
+│   │   ├── pcb_footprint_builder.py   # PCB footprint builder
+│   │   ├── pin_layout.py              # Pin position calculator
+│   │   └── adapter.py                 # PinData adapter
 │   └── utils/
 │       └── package_detector.py # Detect package types
 ├── tests/                      # Tests
