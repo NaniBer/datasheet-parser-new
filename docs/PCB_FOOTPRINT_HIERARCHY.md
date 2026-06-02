@@ -221,29 +221,31 @@ Package (main assembly)
 │   └── fab_firstPinMarker (F.Fab layer)
 ├── Legs (all pins)
 │   ├── 1
-│   │   ├── CopperCirclePin      # DIP only - bottom pad (B.Cu)
+│   │   ├── CopperCirclePad      # Top pad (F.Cu)
 │   │   ├── SolderMask           # Opening in solder mask
 │   │   ├── HoleCylinderPin      # DIP only - drilled hole
 │   │   ├── CopperCylinderPin    # DIP only - plated hole walls
-│   │   ├── CopperCirclePad      # Top pad (F.Cu)
+│   │   ├── CopperCirclePin      # DIP only - bottom pad (B.Cu)
 │   │   └── text                 # Pin number
 │   ├── 2 (same structure)
 │   └── ...
 └── Body
     ├── fab_layer (F.Fab)
-    │   ├── BodyLine (top)
-    │   ├── BodyLine (bottom)
-    │   ├── BodyLine (left)
-    │   └── BodyLine (right)
+    │   ├── BodyLine
+    │   ├── BodyLine
+    │   ├── BodyLine
+    │   └── BodyLine
     ├── silk_layer (F.SilkS)
-    │   ├── BodyLine (top)
-    │   └── BodyLine (bottom)
+    │   ├── BodyLine
+    │   └── BodyLine
     └── crtyd_layer (courtyard)
-        ├── BodyLine (top)
-        ├── BodyLine (bottom)
-        ├── BodyLine (left)
-        └── BodyLine (right)
+        ├── BodyLine
+        ├── BodyLine
+        ├── BodyLine
+        └── BodyLine
 ```
+
+The reference `2d.glb` uses the same `BodyLine` node name for every outline segment; the segment identity comes from child order within each layer.
 
 ### Top-Level Package Children (5 items)
 
@@ -261,11 +263,11 @@ Package (main assembly)
 - None
 
 ### Current Code Has:
-- SolderMask ✅
-- CopperCirclePin ✅
 - CopperCirclePad ✅
+- SolderMask ✅
 - HoleCylinderPin ✅ (DIP only)
 - CopperCylinderPin ✅ (DIP only)
+- CopperCirclePin ✅
 - text ✅
 
 ---

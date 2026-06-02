@@ -27,6 +27,7 @@ from ..package_types import (
     get_schematic_parameters,
 )
 from ..core import (
+    normalize_pcb_footprint_bodyline_names,
     optimize_glb_hierarchy,
     validate_glb_similarity_to_reference,
     validate_pcb_footprint_glb,
@@ -108,18 +109,18 @@ class PcbFootprintBuilder:
         Hierarchy:
         Body
         ├── fab_layer
-        │   ├── BodyLine (top)
-        │   ├── BodyLine (bottom)
-        │   ├── BodyLine (left)
-        │   └── BodyLine (right)
+        │   ├── BodyLine
+        │   ├── BodyLine
+        │   ├── BodyLine
+        │   └── BodyLine
         ├── silk_layer
-        │   ├── BodyLine (top)
-        │   └── BodyLine (bottom)
+        │   ├── BodyLine
+        │   └── BodyLine
         └── crtyd_layer
-            ├── BodyLine (top)
-            ├── BodyLine (bottom)
-            ├── BodyLine (left)
-            └── BodyLine (right)
+            ├── BodyLine
+            ├── BodyLine
+            ├── BodyLine
+            └── BodyLine
 
         Returns:
             Body assembly with proper layer hierarchy
@@ -138,6 +139,10 @@ class PcbFootprintBuilder:
         # 1. fab_layer - Complete outline (4 lines)
         fab_layer = cq.Assembly(name="fab_layer")
         
+        # CadQuery requires unique sibling names during construction.
+        # The exported GLB is normalized later so the final hierarchy uses the
+        # repeated "BodyLine" names found in 2d.glb.
+        # The side identity comes from the order: top, bottom, left, right.
         # Top line
         top_line = cq.Workplane("XY").center(0, body_height / 2).rect(
             top_line_length, line_thickness
@@ -355,18 +360,18 @@ class PcbFootprintBuilder:
         is_through_hole = self.package_type.startswith("DIP")
 
         if is_through_hole:
-            # For through-hole packages, add ALL copper layers
-            # Order: CopperCirclePin (B.Cu), HoleCylinderPin, CopperCylinderPin, CopperCirclePad (F.Cu)
-            
-            # CopperCirclePin (B.Cu layer) - bottom layer copper pad
-            # This is the copper pad on the BOTTOM side of the PCB
-            copper_circle_pin_radius = self.COPPER_PAD_DIAMETER / 2
-            copper_circle_pin = cq.Workplane("XY").workplane(offset=-self.PIN_CYLINDER_HEIGHT/2).center(
+            # For through-hole packages, preserve the reference GLB order exactly:
+            # CopperCirclePad, SolderMask, HoleCylinderPin, CopperCylinderPin,
+            # CopperCirclePin, text.
+
+            # CopperCirclePad (F.Cu layer) - top layer copper pad
+            copper_pad_radius = self.COPPER_PAD_DIAMETER / 2
+            copper_pad = cq.Workplane("XY").workplane(offset=self.PIN_CYLINDER_HEIGHT/2).center(
                 x, y
-            ).circle(copper_circle_pin_radius).extrude(self.PAD_HEIGHT)
-            copper_circle_pin_assy = cq.Assembly(name="CopperCirclePin")
-            copper_circle_pin_assy.add(copper_circle_pin, color=self.RED_COLOR)
-            pin_assy.add(copper_circle_pin_assy)
+            ).circle(copper_pad_radius).extrude(self.PAD_HEIGHT)
+            copper_pad_assy = cq.Assembly(name="CopperCirclePad")
+            copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
+            pin_assy.add(copper_pad_assy)
 
             # SolderMask (brown, largest)
             solder_mask_radius = self.SOLDER_MASK_DIAMETER / 2
@@ -394,14 +399,15 @@ class PcbFootprintBuilder:
             copper_cylinder_assy.add(copper_cylinder, color=self.RED_COLOR)
             pin_assy.add(copper_cylinder_assy)
 
-            # CopperCirclePad (F.Cu layer) - top layer copper pad
-            copper_pad_radius = self.COPPER_PAD_DIAMETER / 2
-            copper_pad = cq.Workplane("XY").workplane(offset=self.PIN_CYLINDER_HEIGHT/2).center(
+            # CopperCirclePin (B.Cu layer) - bottom layer copper pad
+            # This is the copper pad on the BOTTOM side of the PCB
+            copper_circle_pin_radius = self.COPPER_PAD_DIAMETER / 2
+            copper_circle_pin = cq.Workplane("XY").workplane(offset=-self.PIN_CYLINDER_HEIGHT/2).center(
                 x, y
-            ).circle(copper_pad_radius).extrude(self.PAD_HEIGHT)
-            copper_pad_assy = cq.Assembly(name="CopperCirclePad")
-            copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
-            pin_assy.add(copper_pad_assy)
+            ).circle(copper_circle_pin_radius).extrude(self.PAD_HEIGHT)
+            copper_circle_pin_assy = cq.Assembly(name="CopperCirclePin")
+            copper_circle_pin_assy.add(copper_circle_pin, color=self.RED_COLOR)
+            pin_assy.add(copper_circle_pin_assy)
         else:
             # For surface mount packages (SOIC/TQFP/QFN)
             # SolderMask (brown, largest)
@@ -484,19 +490,19 @@ class PcbFootprintBuilder:
         │   └── fab_firstPinMarker
         ├── Legs
         │   └── 1, 2, 3, ...
-        │       ├── CopperCirclePin (B.Cu) [DIP only]
+        │       ├── CopperCirclePad (F.Cu)
         │       ├── SolderMask
         │       ├── HoleCylinderPin [DIP only]
         │       ├── CopperCylinderPin [DIP only]
-        │       ├── CopperCirclePad (F.Cu)
+        │       ├── CopperCirclePin (B.Cu) [DIP only]
         │       └── text
         └── Body
             ├── fab_layer
-            │   └── BodyLine (x4)
+            │   └── BodyLine (x4, repeated names in reference order)
             ├── silk_layer
-            │   └── BodyLine (x2)
+            │   └── BodyLine (x2, repeated names in reference order)
             └── crtyd_layer
-                └── BodyLine (x4)
+                └── BodyLine (x4, repeated names in reference order)
 
         Args:
             pin_data: List of pin dictionaries with 'number', 'name'
@@ -567,6 +573,11 @@ class PcbFootprintBuilder:
                 logger.info(
                     "Optimized GLB hierarchy: %d -> %d nodes"
                     % (original_nodes, simplified_nodes)
+                )
+                renamed_nodes = normalize_pcb_footprint_bodyline_names(output_path)
+                logger.info(
+                    "Normalized PCB body line names to reference style: %d nodes"
+                    % renamed_nodes
                 )
             except Exception as exc:
                 logger.warning("Skipping GLB hierarchy optimization: %s" % exc)

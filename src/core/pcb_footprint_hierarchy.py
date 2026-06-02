@@ -45,6 +45,46 @@ def _expect_child_order(
         )
 
 
+def normalize_pcb_footprint_bodyline_names(glb_path: str) -> int:
+    """
+    Rename PCB footprint body outline nodes to match the reference 2d.glb.
+
+    CadQuery requires unique names during construction, so the exporter emits
+    temporary names like BodyLine_Top and then normalizes them here to the
+    repeated BodyLine naming used by the reference GLB.
+
+    Returns:
+        Number of body-line nodes renamed.
+    """
+    if GLTF2 is None:
+        raise ImportError("pygltflib is required for PCB footprint normalization")
+
+    gltf = GLTF2().load_binary(str(Path(glb_path)))
+    if not gltf.scenes or not gltf.scenes[0].nodes:
+        return 0
+
+    package_index = gltf.scenes[0].nodes[0]
+    body_index = _find_named_child(gltf, package_index, "Body")
+    if body_index is None:
+        gltf.save(str(Path(glb_path)))
+        return 0
+
+    renamed = 0
+    for layer_name in ["fab_layer", "silk_layer", "crtyd_layer"]:
+        layer_index = _find_named_child(gltf, body_index, layer_name)
+        if layer_index is None:
+            continue
+
+        for child_index in (gltf.nodes[layer_index].children or []):
+            child_node = gltf.nodes[child_index]
+            if child_node.name != "BodyLine":
+                child_node.name = "BodyLine"
+                renamed += 1
+
+    gltf.save(str(Path(glb_path)))
+    return renamed
+
+
 def validate_pcb_footprint_hierarchy(
     gltf: "GLTF2",
     pin_count: Optional[int] = None,
@@ -116,7 +156,7 @@ def validate_pcb_footprint_hierarchy(
             _expect_child_order(
                 gltf,
                 fab_index,
-                ["BodyLine_Top", "BodyLine_Bottom", "BodyLine_Left", "BodyLine_Right"],
+                ["BodyLine", "BodyLine", "BodyLine", "BodyLine"],
                 errors,
             )
         else:
@@ -126,7 +166,7 @@ def validate_pcb_footprint_hierarchy(
             _expect_child_order(
                 gltf,
                 silk_index,
-                ["BodyLine_Top", "BodyLine_Bottom"],
+                ["BodyLine", "BodyLine"],
                 errors,
             )
         else:
@@ -136,7 +176,7 @@ def validate_pcb_footprint_hierarchy(
             _expect_child_order(
                 gltf,
                 crtyd_index,
-                ["BodyLine_Top", "BodyLine_Bottom", "BodyLine_Left", "BodyLine_Right"],
+                ["BodyLine", "BodyLine", "BodyLine", "BodyLine"],
                 errors,
             )
         else:
@@ -159,11 +199,11 @@ def validate_pcb_footprint_hierarchy(
 
     if through_hole:
         expected_pin_children = [
-            "CopperCirclePin",
+            "CopperCirclePad",
             "SolderMask",
             "HoleCylinderPin",
             "CopperCylinderPin",
-            "CopperCirclePad",
+            "CopperCirclePin",
             "text",
         ]
     else:
@@ -204,4 +244,3 @@ def validate_pcb_footprint_glb(
         through_hole=through_hole,
     )
     return len(errors) == 0, errors
-

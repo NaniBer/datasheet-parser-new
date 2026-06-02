@@ -1,4 +1,4 @@
-"""Validate PCB footprint hierarchy similarity against a reference GLB."""
+"""Validate PCB footprint hierarchy against a reference GLB."""
 
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -33,26 +33,56 @@ def _get_root_node(gltf: "GLTF2") -> Optional[int]:
     return scene.nodes[0]
 
 
-def _normalize_body_line_names(names: List[str]) -> List[str]:
-    normalized: List[str] = []
-    for name in names:
-        if name and name.startswith("BodyLine"):
-            normalized.append("BodyLine")
-        else:
-            normalized.append(name)
-    return normalized
+def _compare_child_subtrees(
+    actual_gltf: "GLTF2",
+    actual_children: List[int],
+    reference_gltf: "GLTF2",
+    reference_children: List[int],
+    path: str,
+    errors: List[str],
+) -> None:
+    """Recursively compare two child lists for exact name/order/shape parity."""
+    if len(actual_children) != len(reference_children):
+        errors.append(
+            "%s children count mismatch: expected %d, got %d"
+            % (path, len(reference_children), len(actual_children))
+        )
+        return
+
+    for index, (actual_child, reference_child) in enumerate(
+        zip(actual_children, reference_children)
+    ):
+        actual_node = actual_gltf.nodes[actual_child]
+        reference_node = reference_gltf.nodes[reference_child]
+        child_path = "%s/%s[%d]" % (path, reference_node.name or "<unnamed>", index)
+
+        if actual_node.name != reference_node.name:
+            errors.append(
+                "%s name mismatch: expected %r, got %r"
+                % (child_path, reference_node.name, actual_node.name)
+            )
+
+        _compare_child_subtrees(
+            actual_gltf,
+            actual_node.children or [],
+            reference_gltf,
+            reference_node.children or [],
+            child_path,
+            errors,
+        )
 
 
 def validate_pcb_footprint_similarity_to_reference(
     gltf: "GLTF2", reference_gltf: "GLTF2"
 ) -> List[str]:
     """
-    Validate structural similarity to a reference footprint GLB.
+    Validate structural equality to the reference footprint GLB, while allowing
+    the output to use a different pin count.
 
     This comparison is intentionally shape-focused:
     - Allows any pin count
-    - Allows either BodyLine or BodyLine_* naming
-    - Allows pin child order differences as long as required names exist
+    - Requires the body, designator, value, and marker trees to match exactly
+    - Requires through-hole pin child order and names to match exactly
     """
     errors: List[str] = []
 
@@ -80,7 +110,7 @@ def validate_pcb_footprint_similarity_to_reference(
             % (ref_top, output_top)
         )
 
-    # Validate container children for shared named sections.
+    # Validate container children for shared named sections exactly.
     for section_name in ["DesignatorName", "PackageValue", "FirstPinMarker", "Body"]:
         ref_section = _find_named_child(reference_gltf, ref_root, section_name)
         out_section = _find_named_child(gltf, output_root, section_name)
@@ -90,36 +120,14 @@ def validate_pcb_footprint_similarity_to_reference(
             errors.append("Missing top-level section: %s" % section_name)
             continue
 
-        ref_children = _child_names(reference_gltf, ref_section)
-        out_children = _child_names(gltf, out_section)
-        if out_children != ref_children:
-            errors.append(
-                "%s children mismatch: expected %s, got %s"
-                % (section_name, ref_children, out_children)
-            )
-
-    # Validate body line structure with normalized line names.
-    ref_body = _find_named_child(reference_gltf, ref_root, "Body")
-    out_body = _find_named_child(gltf, output_root, "Body")
-    if ref_body is not None and out_body is not None:
-        for layer_name in _child_names(reference_gltf, ref_body):
-            ref_layer = _find_named_child(reference_gltf, ref_body, layer_name)
-            out_layer = _find_named_child(gltf, out_body, layer_name)
-            if ref_layer is None:
-                continue
-            if out_layer is None:
-                errors.append("Body missing layer: %s" % layer_name)
-                continue
-
-            ref_lines = _normalize_body_line_names(
-                _child_names(reference_gltf, ref_layer)
-            )
-            out_lines = _normalize_body_line_names(_child_names(gltf, out_layer))
-            if out_lines != ref_lines:
-                errors.append(
-                    "%s lines mismatch (normalized): expected %s, got %s"
-                    % (layer_name, ref_lines, out_lines)
-                )
+        _compare_child_subtrees(
+            gltf,
+            [out_section],
+            reference_gltf,
+            [ref_section],
+            section_name,
+            errors,
+        )
 
     ref_legs = _find_named_child(reference_gltf, ref_root, "Legs")
     out_legs = _find_named_child(gltf, output_root, "Legs")
@@ -152,21 +160,26 @@ def validate_pcb_footprint_similarity_to_reference(
         errors.append("Could not resolve reference pin node")
         return errors
 
-    expected_pin_child_names = _child_names(reference_gltf, ref_pin)
-    expected_pin_child_set = set(expected_pin_child_names)
+    expected_pin_children = reference_gltf.nodes[ref_pin].children or []
 
-    for pin_name in out_pin_names:
+    for index, pin_name in enumerate(out_pin_names, start=1):
         out_pin = _find_named_child(gltf, out_legs, pin_name)
         if out_pin is None:
             errors.append("Missing pin node: %s" % pin_name)
             continue
-        out_pin_children = _child_names(gltf, out_pin)
-        out_pin_child_set = set(out_pin_children)
-        if out_pin_child_set != expected_pin_child_set:
+        if pin_name != str(index):
             errors.append(
-                "Pin %s children mismatch: expected names %s, got %s"
-                % (pin_name, sorted(expected_pin_child_set), sorted(out_pin_child_set))
+                "Leg name mismatch: expected %r, got %r"
+                % (str(index), pin_name)
             )
+        _compare_child_subtrees(
+            gltf,
+            gltf.nodes[out_pin].children or [],
+            reference_gltf,
+            expected_pin_children,
+            "Legs/%s" % pin_name,
+            errors,
+        )
 
     return errors
 

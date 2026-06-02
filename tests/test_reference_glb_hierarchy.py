@@ -26,6 +26,20 @@ def test_generated_dip8_is_similar_to_reference_2d_glb(tmp_path):
     assert is_similar, errors
 
 
+def test_generated_dip28_matches_reference_2d_glb_structure(tmp_path):
+    """A 28-pin DIP export should match the reference 2d.glb hierarchy."""
+    output_path = tmp_path / "dip28_reference_similarity.glb"
+    pins = [
+        {"number": pin_number, "name": f"PIN{pin_number}"}
+        for pin_number in range(1, 29)
+    ]
+
+    assert build_pcb_footprint("DIP-28", 28, "GENERIC28", pins, str(output_path))
+
+    is_similar, errors = validate_glb_similarity_to_reference(str(output_path))
+    assert is_similar, errors
+
+
 def test_reference_file_is_self_similar():
     """Sanity check that the reference file validates against itself."""
     reference_path = Path(__file__).resolve().parents[1] / "2d.glb"
