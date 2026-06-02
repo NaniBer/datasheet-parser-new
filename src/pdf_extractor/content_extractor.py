@@ -254,7 +254,17 @@ class ContentExtractor:
 
                 # Extract rows
                 for row in table.extract():
-                    row_data = [cell.extract() if cell else "" for cell in row]
+                    row_data = []
+                    for cell in row:
+                        if cell is None:
+                            row_data.append("")
+                        elif isinstance(cell, str):
+                            row_data.append(cell)
+                        elif hasattr(cell, "extract"):
+                            extracted_cell = cell.extract()
+                            row_data.append(extracted_cell if extracted_cell is not None else "")
+                        else:
+                            row_data.append(str(cell))
                     if any(row_data):  # Only add non-empty rows
                         table_data.append(row_data)
 
