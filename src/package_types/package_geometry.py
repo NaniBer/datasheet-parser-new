@@ -15,6 +15,10 @@ class PackageType(Enum):
     """Supported package types for schematic symbols."""
     DIP = "DIP"  # Dual Inline Package
     SOIC = "SOIC"  # Small Outline IC
+    TSSOP = "TSSOP"  # Thin Shrink Small Outline Package
+    DFN = "DFN"  # Dual Flat No-leads
+    WSON = "WSON"  # Wafer-Scale Outline No-leads
+    SON = "SON"  # Small Outline No-leads
     TQFP = "TQFP"  # Thin Quad Flat Package
     QFN = "QFN"  # Quad Flat No-leads
     LQFP = "LQFP"  # Low-profile Quad Flat Package
@@ -208,6 +212,194 @@ def get_soic_parameters(pin_count: int) -> SchematicParameters:
         body_geometry=BodyGeometry(top_margin=5.0),
         pins_per_side=[pins_per_side, pins_per_side, 0, 0],
         counter_clockwise=True
+    )
+
+
+def _build_dual_row_parameters(
+    package_type: PackageType,
+    pin_count: int,
+    pitch: float,
+    body_width: float,
+    body_height_margin: float,
+    pin_geometry: PinGeometry,
+    body_geometry: BodyGeometry,
+) -> SchematicParameters:
+    """
+    Build parameters for a package with pins on two opposing sides.
+
+    This is used for packages like TSSOP, DFN, WSON, and SON where the
+    footprint is dual-row rather than four-side quad-row.
+    """
+    pins_per_side = pin_count // 2
+    body_height = (pins_per_side - 1) * pitch + body_height_margin
+
+    return SchematicParameters(
+        package_type=package_type,
+        pin_count=pin_count,
+        pin_pitch=pitch,
+        body_width=body_width,
+        body_height=body_height,
+        pin_geometry=pin_geometry,
+        body_geometry=body_geometry,
+        pins_per_side=[pins_per_side, pins_per_side, 0, 0],
+        counter_clockwise=True,
+    )
+
+
+def get_tssop_parameters(pin_count: int) -> SchematicParameters:
+    """
+    Get schematic parameters for TSSOP (Thin Shrink Small Outline Package).
+
+    TSSOP packages are dual-row, similar to SOIC but thinner and tighter.
+    """
+    return _build_dual_row_parameters(
+        package_type=PackageType.TSSOP,
+        pin_count=pin_count,
+        pitch=0.65,
+        body_width=4.4,
+        body_height_margin=6.0,
+        pin_geometry=PinGeometry(
+            leg_length=3.0,
+            leg_width=0.08,
+            pin_name_size=0.65,
+            pin_name_offset=1.6,
+            pin_num_size=0.55,
+            pin_num_offset=4.0,
+            extra_left_name_offset=0.0,
+            extra_left_num_offset=0.0,
+            extra_right_name_offset=0.0,
+            extra_right_num_offset=0.0,
+            extra_bottom_name_offset=0.0,
+            extra_bottom_num_offset=0.0,
+            extra_top_name_offset=0.0,
+            extra_top_num_offset=0.0,
+        ),
+        body_geometry=BodyGeometry(
+            border_thickness=0.2,
+            border_height=0.2,
+            designator_size=3.0,
+            designator_offset=5.0,
+            value_size=1.5,
+            value_offset=2.5,
+            top_margin=4.5,
+        ),
+    )
+
+
+def get_dfn_parameters(pin_count: int) -> SchematicParameters:
+    """
+    Get schematic parameters for DFN (Dual Flat No-leads).
+
+    DFN packages are dual-row no-lead packages, typically with pins on the
+    left and right edges only.
+    """
+    return _build_dual_row_parameters(
+        package_type=PackageType.DFN,
+        pin_count=pin_count,
+        pitch=1.27,
+        body_width=5.0,
+        body_height_margin=8.0,
+        pin_geometry=PinGeometry(
+            leg_length=4.0,
+            leg_width=0.1,
+            pin_name_size=0.7,
+            pin_name_offset=2.0,
+            pin_num_size=0.6,
+            pin_num_offset=5.0,
+            extra_left_name_offset=0.0,
+            extra_left_num_offset=0.0,
+            extra_right_name_offset=0.0,
+            extra_right_num_offset=0.0,
+            extra_bottom_name_offset=0.0,
+            extra_bottom_num_offset=0.0,
+            extra_top_name_offset=0.0,
+            extra_top_num_offset=0.0,
+        ),
+        body_geometry=BodyGeometry(
+            border_thickness=0.25,
+            border_height=0.5,
+            designator_size=3.0,
+            designator_offset=6.0,
+            value_size=1.5,
+            value_offset=2.5,
+            top_margin=5.0,
+        ),
+    )
+
+
+def get_wson_parameters(pin_count: int) -> SchematicParameters:
+    """
+    Get schematic parameters for WSON (Wafer-Scale Outline No-leads).
+    """
+    return _build_dual_row_parameters(
+        package_type=PackageType.WSON,
+        pin_count=pin_count,
+        pitch=1.27,
+        body_width=5.0,
+        body_height_margin=8.0,
+        pin_geometry=PinGeometry(
+            leg_length=4.0,
+            leg_width=0.1,
+            pin_name_size=0.7,
+            pin_name_offset=2.0,
+            pin_num_size=0.6,
+            pin_num_offset=5.0,
+            extra_left_name_offset=0.0,
+            extra_left_num_offset=0.0,
+            extra_right_name_offset=0.0,
+            extra_right_num_offset=0.0,
+            extra_bottom_name_offset=0.0,
+            extra_bottom_num_offset=0.0,
+            extra_top_name_offset=0.0,
+            extra_top_num_offset=0.0,
+        ),
+        body_geometry=BodyGeometry(
+            border_thickness=0.25,
+            border_height=0.5,
+            designator_size=3.0,
+            designator_offset=6.0,
+            value_size=1.5,
+            value_offset=2.5,
+            top_margin=5.0,
+        ),
+    )
+
+
+def get_son_parameters(pin_count: int) -> SchematicParameters:
+    """
+    Get schematic parameters for SON (Small Outline No-leads).
+    """
+    return _build_dual_row_parameters(
+        package_type=PackageType.SON,
+        pin_count=pin_count,
+        pitch=1.27,
+        body_width=4.6,
+        body_height_margin=8.0,
+        pin_geometry=PinGeometry(
+            leg_length=4.0,
+            leg_width=0.1,
+            pin_name_size=0.7,
+            pin_name_offset=2.0,
+            pin_num_size=0.6,
+            pin_num_offset=5.0,
+            extra_left_name_offset=0.0,
+            extra_left_num_offset=0.0,
+            extra_right_name_offset=0.0,
+            extra_right_num_offset=0.0,
+            extra_bottom_name_offset=0.0,
+            extra_bottom_num_offset=0.0,
+            extra_top_name_offset=0.0,
+            extra_top_num_offset=0.0,
+        ),
+        body_geometry=BodyGeometry(
+            border_thickness=0.25,
+            border_height=0.5,
+            designator_size=3.0,
+            designator_offset=6.0,
+            value_size=1.5,
+            value_offset=2.5,
+            top_margin=5.0,
+        ),
     )
 
 
@@ -475,11 +667,18 @@ PACKAGE_TYPE_ALIASES = {
     "PDIP": PackageType.DIP,
     "CDIP": PackageType.CDIP,
 
+    # Dual-row surface-mount aliases
+    "TSSOP": PackageType.TSSOP,
+    "TSOP": PackageType.SOIC,
+    "SSOP": PackageType.SOIC,
+    "MSOP": PackageType.SOIC,
+    "SOP": PackageType.SOIC,
+    "DFN": PackageType.DFN,
+    "WSON": PackageType.WSON,
+    "SON": PackageType.SON,
+
     # SOIC aliases
     "SOIC": PackageType.SOIC,
-    "SOP": PackageType.SOIC,
-    "SSOP": PackageType.SOIC,
-    "TSOP": PackageType.SOIC,
 
     # TQFP aliases
     "TQFP": PackageType.TQFP,
@@ -488,7 +687,6 @@ PACKAGE_TYPE_ALIASES = {
 
     # QFN aliases
     "QFN": PackageType.QFN,
-    "DFN": PackageType.QFN,
 
     # BGA aliases
     "BGA": PackageType.BGA,
@@ -542,6 +740,14 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
         return get_dip_parameters(pin_count)
     elif ptype == PackageType.SOIC:
         return get_soic_parameters(pin_count)
+    elif ptype == PackageType.TSSOP:
+        return get_tssop_parameters(pin_count)
+    elif ptype == PackageType.DFN:
+        return get_dfn_parameters(pin_count)
+    elif ptype == PackageType.WSON:
+        return get_wson_parameters(pin_count)
+    elif ptype == PackageType.SON:
+        return get_son_parameters(pin_count)
     elif ptype == PackageType.TQFP or ptype == PackageType.LQFP:
         return get_tqfp_parameters(pin_count)
     elif ptype == PackageType.QFN:
@@ -552,12 +758,6 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
         return get_lccc_parameters(pin_count)
     elif ptype == PackageType.CDIP:
         return get_cdip_parameters(pin_count)
-    elif ptype == PackageType.SOIC:
-        return get_soic_parameters(pin_count)
-    elif ptype == PackageType.TQFP or ptype == PackageType.LQFP:
-        return get_tqfp_parameters(pin_count)
-    elif ptype == PackageType.QFN:
-        return get_qfn_parameters(pin_count)
     else:
         # Default to DIP
         return get_dip_parameters(pin_count)
@@ -613,9 +813,13 @@ def calculate_pin_position(
             y = -(params.body_height / 2) + params.body_geometry.top_margin + (right_index * params.pin_pitch)
             return (params.body_width / 2, y, "right")
 
-    # For TQFP/LCCC/CDIP, distribute pins on all 4 sides
-    elif params.package_type in [PackageType.TQFP, PackageType.LQFP, PackageType.LCCC, PackageType.CDIP]:
-        pins_per_side = params.pin_count // 4
+    # For quad packages, distribute pins on all 4 sides
+    elif params.package_type in [
+        PackageType.TQFP,
+        PackageType.LQFP,
+        PackageType.QFN,
+        PackageType.LCCC,
+    ]:
         pins_per_side = params.pin_count // 4
 
         if pin_index < pins_per_side:
@@ -637,6 +841,25 @@ def calculate_pin_position(
             top_index = pin_index - pins_per_side * 3
             x = (params.body_width / 2) - params.body_geometry.top_margin - (top_index * params.pin_pitch)
             return (x, params.body_height / 2, "top")
+
+    # For dual-row packages, distribute pins on two sides
+    elif params.package_type in [
+        PackageType.DIP,
+        PackageType.SOIC,
+        PackageType.TSSOP,
+        PackageType.DFN,
+        PackageType.WSON,
+        PackageType.SON,
+        PackageType.CDIP,
+    ]:
+        pins_per_side = params.pin_count // 2
+        if pin_index < pins_per_side:
+            y = (params.body_height / 2) - params.body_geometry.top_margin - (pin_index * params.pin_pitch)
+            return (-params.body_width / 2, y, "left")
+        else:
+            right_index = pin_index - pins_per_side
+            y = -(params.body_height / 2) + params.body_geometry.top_margin + (right_index * params.pin_pitch)
+            return (params.body_width / 2, y, "right")
 
     # Default
     return (0, 0, "left")

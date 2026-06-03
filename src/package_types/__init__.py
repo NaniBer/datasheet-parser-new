@@ -16,6 +16,10 @@ from .package_geometry import (
     # Parameter functions
     get_dip_parameters,
     get_soic_parameters,
+    get_tssop_parameters,
+    get_dfn_parameters,
+    get_wson_parameters,
+    get_son_parameters,
     get_tqfp_parameters,
     get_qfn_parameters,
     get_bga_parameters,
@@ -34,6 +38,10 @@ __all__ = [
     # Parameter functions
     "get_dip_parameters",
     "get_soic_parameters",
+    "get_tssop_parameters",
+    "get_dfn_parameters",
+    "get_wson_parameters",
+    "get_son_parameters",
     "get_tqfp_parameters",
     "get_qfn_parameters",
     "get_bga_parameters",

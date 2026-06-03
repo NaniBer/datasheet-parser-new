@@ -23,12 +23,22 @@ class PackageDetector:
             r"cerdip",
             r"spdip",
         ],
-        "QFN": [
-            r"qfn",
-            r"quad\s*flat\s*no[-\s]?lead",
-            r"vqfn",
-            r"uqfn",
-            r"dfn",
+        "TSSOP": [
+            r"tssop",
+            r"thin\s*shrink\s*small\s*outline",
+        ],
+        "DFN": [
+            r"\bdfn\b",
+            r"dual\s*flat\s*no[-\s]?lead",
+        ],
+        "WSON": [
+            r"\bwson\b",
+            r"wafer[-\s]*scale\s*outline\s*no[-\s]?lead",
+            r"wafer[-\s]*scale\s*no[-\s]?lead",
+        ],
+        "SON": [
+            r"\bson\b",
+            r"small\s*outline\s*no[-\s]?lead",
         ],
         "SOIC": [
             r"soic",
@@ -36,10 +46,13 @@ class PackageDetector:
             r"sop",
             r"ssop",
             r"msop",
+            r"tsop",
         ],
-        "TSSOP": [
-            r"tssop",
-            r"thin\s*shrink\s*small\s*outline",
+        "QFN": [
+            r"qfn",
+            r"quad\s*flat\s*no[-\s]?lead",
+            r"vqfn",
+            r"uqfn",
         ],
         "BGA": [
             r"bga",
@@ -73,6 +86,18 @@ class PackageDetector:
             (3.0, 6.0, 3.0, 6.0),     # 8-20 pins
             (4.0, 8.0, 4.0, 8.0),     # 24-48 pins
             (6.0, 12.0, 6.0, 12.0),   # 56+ pins
+        ],
+        "DFN": [
+            (3.0, 6.0, 3.0, 6.0),     # 8-20 pins
+            (4.0, 8.0, 4.0, 8.0),     # 24-48 pins
+        ],
+        "WSON": [
+            (3.0, 6.0, 3.0, 6.0),     # 8-20 pins
+            (4.0, 8.0, 4.0, 8.0),     # 24-48 pins
+        ],
+        "SON": [
+            (3.0, 6.0, 2.0, 5.0),     # 6-16 pins
+            (4.0, 8.0, 3.0, 7.0),     # 20-32 pins
         ],
         "SOIC": [
             (4.0, 7.0, 6.0, 10.0),    # 8-16 pins
@@ -178,17 +203,17 @@ class PackageDetector:
             if pin_count in [4, 6, 8, 14, 16, 18, 20, 24, 28, 40, 64]:
                 return "DIP"
 
-        # SOIC: Rectangular, smaller dimensions
-        if width > height:
-            if pin_count in [8, 14, 16, 20, 24, 28]:
-                if width < 10 and height < 20:
-                    return "SOIC"
-
         # TSSOP: Similar to SOIC but thinner
         if width > height:
             if pin_count in [8, 14, 16, 20, 24, 28, 32, 48]:
                 if width < 8 and height < 15:
                     return "TSSOP"
+
+        # SOIC: Rectangular, smaller dimensions
+        if width > height:
+            if pin_count in [8, 14, 16, 20, 24, 28]:
+                if width < 10 and height < 20:
+                    return "SOIC"
 
         return None
 
@@ -314,7 +339,7 @@ class PackageDetector:
         if pkg_type.upper() == "DIP":
             base_width = 5.0 + pin_count * 0.1
             base_height = 10.0 + pin_count * 0.2
-        elif pkg_type.upper() == "QFN":
+        elif pkg_type.upper() in ("QFN", "DFN", "WSON", "SON"):
             side = 3.0 + pin_count * 0.1
             base_width = side
             base_height = side
@@ -341,22 +366,34 @@ class PackageDetector:
         pkg_upper = pkg_name.upper().strip()
 
         # Common aliases mapping
-        aliases = {
-            "DIL": "DIP",
-            "DUAL INLINE": "DIP",
-            "PDIP": "DIP",
-            "VQFN": "QFN",
-            "UQFN": "QFN",
-            "DFN": "QFN",
-            "SOP": "SOIC",
-            "SSOP": "SOIC",
-            "MSOP": "SOIC",
-            "LFBGA": "BGA",
-        }
+        aliases = [
+            ("DUAL INLINE", "DIP"),
+            ("DIL", "DIP"),
+            ("PDIP", "DIP"),
+            ("CDIP", "CDIP"),
+            ("TSSOP", "TSSOP"),
+            ("WSON", "WSON"),
+            ("DFN", "DFN"),
+            ("SON", "SON"),
+            ("VQFN", "QFN"),
+            ("UQFN", "QFN"),
+            ("QFN", "QFN"),
+            ("SOIC", "SOIC"),
+            ("TSOP", "SOIC"),
+            ("SSOP", "SOIC"),
+            ("MSOP", "SOIC"),
+            ("SOP", "SOIC"),
+            ("LFBGA", "BGA"),
+            ("BGA", "BGA"),
+            ("LGA", "BGA"),
+            ("TQFP", "TQFP"),
+            ("LQFP", "LQFP"),
+            ("QFP", "TQFP"),
+        ]
         # Note: TQFP is kept as distinct from QFP - DO NOT map to QFP
 
         # Check for exact match in aliases
-        for alias, standard in aliases.items():
+        for alias, standard in aliases:
             if alias in pkg_upper:
                 return standard
 
@@ -366,3 +403,39 @@ class PackageDetector:
             return detected
 
         return pkg_upper
+
+    def package_family(self, pkg_name: str) -> str:
+        """
+        Collapse package labels into broader families for loose matching.
+
+        This keeps package labels like DFN/WSON/SON available for geometry,
+        while still allowing variant selection to match by broader family.
+        """
+        normalized = self.normalize_package_name(pkg_name).upper().strip()
+
+        family_aliases = {
+            "DIP": "DIP",
+            "PDIP": "DIP",
+            "CDIP": "DIP",
+            "DIL": "DIP",
+            "SOIC": "SOIC",
+            "SOP": "SOIC",
+            "SSOP": "SOIC",
+            "MSOP": "SOIC",
+            "TSOP": "SOIC",
+            "TSSOP": "SOIC",
+            "TQFP": "QFP",
+            "LQFP": "QFP",
+            "QFP": "QFP",
+            "QFN": "QFN",
+            "VQFN": "QFN",
+            "UQFN": "QFN",
+            "DFN": "QFN",
+            "WSON": "QFN",
+            "SON": "QFN",
+            "BGA": "BGA",
+            "LGA": "BGA",
+            "LCCC": "LCCC",
+        }
+
+        return family_aliases.get(normalized, normalized)

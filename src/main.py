@@ -14,9 +14,16 @@ from typing import Optional
 
 # Import project modules
 from .pdf_extractor import PageDetector, ContentExtractor
+from .pdf_extractor import infer_part_number_hint
+from .pdf_extractor.deterministic_table_parser import parse_pin_data_from_tables
+from .pdf_extractor.extraction_validator import validate_pin_data_extraction
 from .llm import LLMClient
 from .llm.image_ocr_client import ImageOCRClient
-from .schematic_generator import build_schematic_from_pin_data, build_pcb_2d_schematic
+from .schematic_generator import (
+    build_schematic_from_pin_data,
+    build_pcb_2d_schematic,
+    pin_data_to_builder_format,
+)
 from .utils import PackageDetector
 from .models import PinData, Pin, PackageInfo
 from .exceptions import (
@@ -159,7 +166,14 @@ def extract_content(input_path: str, candidates: list, verbose: bool = False):
     return content
 
 
-def extract_pin_data(content, api_key: str, model: str, verbose: bool = False) -> PinData:
+def extract_pin_data(
+    content,
+    api_key: str,
+    model: str,
+    verbose: bool = False,
+    part_number: Optional[str] = None,
+    max_attempts: int = 2,
+) -> PinData:
     """
     Extract pin data using LLM.
 
@@ -176,13 +190,17 @@ def extract_pin_data(content, api_key: str, model: str, verbose: bool = False) -
         SystemExit: If API key not found
     """
     if verbose:
-        print("\n[3/5] Extracting pin data with LLM...")
-
-    llm_client = LLMClient(api_key=api_key, model=model)
+        print("\n[3/5] Extracting pin data...")
 
     # Determine if we should use table-only mode
     # Use table-only mode when we have tables but no images (diagrams)
     tables_only_mode = len(content.tables) > 0 and len(content.images) == 0
+
+    if not part_number:
+        part_number = infer_part_number_hint(content.text_content)
+
+    if verbose and part_number:
+        print(f"  Target part number hint: {part_number}")
 
     # Check if we have sufficient content for extraction
     if not tables_only_mode and not content.text_content:
@@ -197,6 +215,34 @@ def extract_pin_data(content, api_key: str, model: str, verbose: bool = False) -
         else:
             print(f"Using mixed mode (tables + diagrams)")
 
+    deterministic_pin_data = parse_pin_data_from_tables(content, part_number=part_number)
+    if deterministic_pin_data is not None:
+        deterministic_pin_data = normalize_package(deterministic_pin_data, verbose=False)
+        deterministic_validation = validate_pin_data_extraction(
+            deterministic_pin_data,
+            part_number=part_number,
+        )
+
+        if deterministic_validation.is_valid:
+            if verbose:
+                print("Using deterministic table parser")
+                _print_pin_data_summary(deterministic_pin_data, deterministic_validation)
+            return deterministic_pin_data
+
+        if verbose:
+            print("Deterministic table parser candidate failed validation; falling back to LLM.")
+            for error in deterministic_validation.errors:
+                print(f"    - {error}")
+            if deterministic_validation.warnings:
+                print("  Validation warnings:")
+                for warning in deterministic_validation.warnings:
+                    print(f"    - {warning}")
+
+    if verbose:
+        print("Using LLM fallback for extraction")
+
+    llm_client = LLMClient(api_key=api_key, model=model)
+
     # Format content for LLM using the appropriate mode
     from .pdf_extractor.content_extractor import ContentExtractor
     formatted_content = ContentExtractor.format_for_llm(content, tables_only=tables_only_mode)
@@ -204,51 +250,64 @@ def extract_pin_data(content, api_key: str, model: str, verbose: bool = False) -
     if verbose:
         print(f"Sending {len(formatted_content)} characters to LLM")
 
-    # Extract pin data using appropriate mode
-    pin_data = llm_client.extract_pin_data(
-        content=formatted_content,
-        tables_only_mode=tables_only_mode
+    validation_feedback = None
+    last_validation = None
+
+    for attempt in range(1, max_attempts + 1):
+        if verbose and attempt > 1:
+            print(f"Retrying pin extraction (attempt {attempt}/{max_attempts})...")
+
+        pin_data = llm_client.extract_pin_data(
+            content=formatted_content,
+            part_number=part_number,
+            tables_only_mode=tables_only_mode,
+            validation_feedback=validation_feedback,
+        )
+
+        # Normalize before validation so the checks reflect what the rest of the
+        # pipeline will actually use.
+        pin_data = normalize_package(pin_data, verbose=False)
+
+        validation = validate_pin_data_extraction(pin_data, part_number=part_number)
+        last_validation = validation
+
+        if validation.is_valid:
+            if verbose:
+                _print_pin_data_summary(pin_data, validation)
+
+            return pin_data
+
+        validation_feedback = validation.feedback
+
+        if verbose:
+            print("  Validation failed:")
+            for error in validation.errors:
+                print(f"    - {error}")
+            if validation.warnings:
+                print("  Validation warnings:")
+                for warning in validation.warnings:
+                    print(f"    - {warning}")
+            if attempt < max_attempts:
+                print("  Preparing a corrective retry...")
+
+    raise ValidationError(
+        message="Extracted pin data failed validation after retry attempts",
+        error_code=ErrorCodes.LLM_INVALID_RESPONSE,
+        details={
+            "part_number": part_number,
+            "errors": last_validation.errors if last_validation else [],
+            "warnings": last_validation.warnings if last_validation else [],
+            "attempts": max_attempts,
+        },
     )
 
-    if verbose:
-        print(f"\nExtracted pin data:")
-        print(f"  Component: {pin_data.component_name}")
-        print(f"  Extraction method: {pin_data.extraction_method}")
-        
-        # Handle both multi-package and single-package formats
-        if pin_data.packages and len(pin_data.packages) > 0:
-            print(f"  Format: Multi-package ({len(pin_data.packages)} variants)")
-            for i, pkg in enumerate(pin_data.packages, 1):
-                print(f"  Package {i}: {pkg['type']}-{pkg['pin_count']} ({len(pkg['pins'])} pins)")
-        elif pin_data.package:
-            print(f"  Format: Single-package")
-            print(f"  Package: {pin_data.package.type}-{pin_data.package.pin_count}")
-            if pin_data.package.width > 0:
-                print(f"  Dimensions: {pin_data.package.width}mm x {pin_data.package.height}mm")
-            else:
-                print(f"  Dimensions: N/A (will be estimated from package type)")
-            print(f"  Pin count: {len(pin_data.pins)}")
 
-        # Show sample pins
-        pins_list = []
-        if pin_data.packages and len(pin_data.packages) > 0:
-            pins_list = pin_data.packages[0]['pins'][:5]  # First 5 pins from first package
-        elif pin_data.pins:
-            pins_list = pin_data.pins[:5]
-        
-        if pins_list:
-            print(f"  Sample pins:")
-            for pin in pins_list:
-                pin_num = pin.get('number') if isinstance(pin, dict) else pin.number
-                pin_name = pin.get('name') if isinstance(pin, dict) else pin.name
-                pin_func = pin.get('function') if isinstance(pin, dict) else pin.function
-                func = f" ({pin_func})" if pin_func else ""
-                print(f"    Pin {pin_num}: {pin_name}{func}")
-
-    return pin_data
-
-
-def extract_layout_with_vision(input_path: str, candidates: list, verbose: bool = False) -> Optional[dict]:
+def extract_layout_with_vision(
+    input_path: str,
+    candidates: list,
+    verbose: bool = False,
+    part_number: Optional[str] = None,
+) -> Optional[dict]:
     """
     Extract layout structure using Vision API.
 
@@ -295,10 +354,12 @@ def extract_layout_with_vision(input_path: str, candidates: list, verbose: bool 
         vision_client = ImageOCRClient()
 
         # Extract layout with prompt for side-based layout
-        layout_prompt = """Analyze this electronic component pinout diagram and extract the physical pin layout.
+        layout_prompt = f"""Analyze this electronic component pinout diagram and extract the physical pin layout.
 
 ## Your Task:
 Identify which pins are on each side of the component package.
+
+{f"Target component: {part_number}" if part_number else ""}
 
 ## Expected Layout Types:
 - **DIP/SOIC**: Pins on left and right sides only
@@ -434,6 +495,47 @@ def normalize_package(pin_data: PinData, verbose: bool = False):
     return pin_data
 
 
+def _print_pin_data_summary(pin_data: PinData, validation) -> None:
+    """Print a concise summary of extracted pin data."""
+    print(f"\nExtracted pin data:")
+    print(f"  Component: {pin_data.component_name}")
+    print(f"  Extraction method: {pin_data.extraction_method}")
+
+    # Handle both multi-package and single-package formats
+    if pin_data.packages and len(pin_data.packages) > 0:
+        print(f"  Format: Multi-package ({len(pin_data.packages)} variants)")
+        for i, pkg in enumerate(pin_data.packages, 1):
+            print(f"  Package {i}: {pkg['type']}-{pkg['pin_count']} ({len(pkg['pins'])} pins)")
+    elif pin_data.package:
+        print(f"  Format: Single-package")
+        print(f"  Package: {pin_data.package.type}-{pin_data.package.pin_count}")
+        if pin_data.package.width > 0:
+            print(f"  Dimensions: {pin_data.package.width}mm x {pin_data.package.height}mm")
+        else:
+            print(f"  Dimensions: N/A (will be estimated from package type)")
+        print(f"  Pin count: {len(pin_data.pins)}")
+
+    pins_list = []
+    if pin_data.packages and len(pin_data.packages) > 0:
+        pins_list = pin_data.packages[0]['pins'][:5]
+    elif pin_data.pins:
+        pins_list = pin_data.pins[:5]
+
+    if pins_list:
+        print(f"  Sample pins:")
+        for pin in pins_list:
+            pin_num = pin.get('number') if isinstance(pin, dict) else pin.number
+            pin_name = pin.get('name') if isinstance(pin, dict) else pin.name
+            pin_func = pin.get('function') if isinstance(pin, dict) else pin.function
+            func = f" ({pin_func})" if pin_func else ""
+            print(f"    Pin {pin_num}: {pin_name}{func}")
+
+    if validation.warnings:
+        print("  Validation warnings:")
+        for warning in validation.warnings:
+            print(f"    - {warning}")
+
+
 # ============================================================================
 # Main Orchestration
 # ============================================================================
@@ -487,6 +589,7 @@ def process_datasheet(
     output_path: Path,
     api_key: str,
     model: str,
+    part_number: Optional[str] = None,
     layout_mode: bool = False,
     pcb_2d_mode: bool = False,
     min_confidence: int = 5,
@@ -532,18 +635,33 @@ def process_datasheet(
         # Step 2: Extract content
         content = extract_content(str(input_path), candidates, verbose)
 
+        resolved_part_number = part_number or infer_part_number_hint(
+            content.text_content,
+            source_name=input_path.name,
+        )
+        if verbose and resolved_part_number:
+            print(f"Resolved part number hint: {resolved_part_number}")
+
         # Step 3: Extract pin data with LLM
-        pin_data = extract_pin_data(content, api_key, model, verbose)
+        pin_data = extract_pin_data(
+            content,
+            api_key,
+            model,
+            verbose,
+            part_number=resolved_part_number,
+        )
 
         # Step 4: Extract layout with Vision API (if enabled)
         layout_data = None
         if layout_mode:
-            layout_data = extract_layout_with_vision(str(input_path), candidates, verbose)
+            layout_data = extract_layout_with_vision(
+                str(input_path),
+                candidates,
+                verbose,
+                part_number=resolved_part_number,
+            )
 
-        # Step 5: Validate and normalize package
-        pin_data = normalize_package(pin_data, verbose)
-
-        # Step 6: Use Vision layout if available
+        # Step 5: Use Vision layout if available
         custom_layout = layout_data  # Already in correct format {"left_side": [...], ...}
         if custom_layout:
             if verbose:
@@ -552,7 +670,21 @@ def process_datasheet(
             if verbose:
                 print("Using standard layout based on package type")
 
-        # Step 7: Generate schematic
+        if verbose and pin_data.packages and len(pin_data.packages) > 1:
+            from .pdf_extractor.variant_selection import select_package_variant
+
+            selected_package = select_package_variant(
+                pin_data,
+                part_number=resolved_part_number,
+            )
+            selected_type = selected_package.package.get("type", "Unknown")
+            print(
+                "Selected package variant: %s (index %d)"
+                % (selected_type, selected_package.index + 1)
+            )
+            print(f"  Selection reason: {selected_package.reason}")
+
+        # Step 6: Generate schematic
         if verbose:
             if pcb_2d_mode:
                 print(f"\n[5] Generating 2D PCB schematic...")
@@ -561,18 +693,11 @@ def process_datasheet(
 
         # Choose schematic builder based on mode
         if pcb_2d_mode:
-            # Handle both multi-package and single-package formats for 2D mode
-            if pin_data.packages and len(pin_data.packages) > 0:
-                # Use first package for 2D schematic
-                pkg = pin_data.packages[0]
-                package_type = pkg['type']
-                pin_count = pkg['pin_count']
-                pin_data_list = [{"number": p['number'], "name": p['name']} for p in pkg['pins']]
-            else:
-                # Legacy single-package format
-                package_type = pin_data.package.type
-                pin_count = pin_data.package.pin_count
-                pin_data_list = [{"number": p.number, "name": p.name} for p in pin_data.pins]
+            # Use the shared package selector so 2D and 3D flows agree.
+            package_type, pin_count, _, pin_data_list = pin_data_to_builder_format(
+                pin_data,
+                part_number=resolved_part_number,
+            )
             
             result = build_pcb_2d_schematic(
                 package_type=package_type,
@@ -587,7 +712,8 @@ def process_datasheet(
             result = build_schematic_from_pin_data(
                 pin_data=pin_data,
                 output_path=str(output_path),
-                custom_layout=custom_layout
+                custom_layout=custom_layout,
+                part_number=resolved_part_number,
             )
 
         if not result:
@@ -683,6 +809,9 @@ Examples:
 
   # Specify confidence threshold
   python -m src.main datasheet.pdf output.glb --min-confidence 3 --verbose
+
+  # Help the extractor choose the right variant
+  python -m src.main datasheet.pdf output.glb --part-number SN74HC595DR
         """
     )
 
@@ -705,6 +834,11 @@ Examples:
         "--model",
         default="llama-3",
         help="LLM model to use (default: %(default)s)"
+    )
+
+    parser.add_argument(
+        "--part-number",
+        help="Optional target part number to guide variant selection (e.g., SN74HC595DR)"
     )
 
     parser.add_argument(
@@ -756,6 +890,7 @@ def main():
         output_path=output_path,
         api_key=api_key,
         model=args.model,
+        part_number=args.part_number,
         layout_mode=args.layout_mode,
         pcb_2d_mode=args.pcb_2d,
         min_confidence=args.min_confidence,

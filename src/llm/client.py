@@ -2,10 +2,29 @@
 
 from typing import Dict, List, Optional
 import json
+import re
 
-from ..models.pin_data import PinData, Pin, PackageInfo
-from ..chat_bot import get_completion_from_messages, build_pin_extraction_prompt
-from ..exceptions import LLMExtractionError, ValidationError, APICredentialsError, ErrorCodes
+try:
+    from ..models.pin_data import PinData, Pin, PackageInfo
+    from ..pdf_extractor.non_pin_features import is_non_pin_feature_name
+    from ..chat_bot import get_completion_from_messages, build_pin_extraction_prompt
+    from ..exceptions import LLMExtractionError, ValidationError, APICredentialsError, ErrorCodes
+except ImportError:  # pragma: no cover - compatibility for top-level imports in legacy scripts
+    from src.models.pin_data import PinData, Pin, PackageInfo
+    from src.pdf_extractor.non_pin_features import is_non_pin_feature_name
+    from src.chat_bot import get_completion_from_messages, build_pin_extraction_prompt
+    from src.exceptions import LLMExtractionError, ValidationError, APICredentialsError, ErrorCodes
+
+
+def _coerce_pin_number(value) -> int:
+    """Convert a pin number field to an integer, defaulting to 0."""
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        return int(match.group(0)) if match else 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 class LLMClient:
@@ -39,6 +58,7 @@ class LLMClient:
         images: Optional[List[bytes]] = None,
         part_number: Optional[str] = None,
         tables_only_mode: bool = False,
+        validation_feedback: Optional[str] = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
         **kwargs
@@ -52,6 +72,7 @@ class LLMClient:
                     Currently not used but kept for interface compatibility
             part_number: Optional specific part number to match (e.g., "STM32F103RBT7")
             tables_only_mode: If True, content is ONLY table data (use specialized table prompt)
+            validation_feedback: Optional corrective feedback from a previous failed extraction
             max_retries: Maximum number of retry attempts for LLM API calls (default: 3)
             retry_delay: Initial delay between retries in seconds (default: 1)
             **kwargs: Additional parameters
@@ -67,12 +88,17 @@ class LLMClient:
         # Use specialized table prompt for table-only mode
         if tables_only_mode:
             from ..chat_bot import build_table_extraction_prompt
-            messages = build_table_extraction_prompt(content)
+            messages = build_table_extraction_prompt(
+                content,
+                part_number=part_number,
+                validation_feedback=validation_feedback,
+            )
         else:
             messages = build_pin_extraction_prompt(
                 content,
                 part_number=part_number,
-                table_only_mode=tables_only_mode
+                table_only_mode=tables_only_mode,
+                validation_feedback=validation_feedback,
             )
 
         # Call LLM with retry logic
@@ -116,6 +142,18 @@ class LLMClient:
 
             # Parse JSON
             data = json.loads(clean_response)
+            selected_package_index = data.get("selected_package_index")
+            if isinstance(selected_package_index, str):
+                match = re.search(r"\d+", selected_package_index)
+                selected_package_index = int(match.group(0)) if match else None
+            elif selected_package_index is not None:
+                try:
+                    selected_package_index = int(selected_package_index)
+                except (TypeError, ValueError):
+                    selected_package_index = None
+
+            selected_package_type = data.get("selected_package_type") or data.get("selected_variant")
+            selection_reason = data.get("selection_reason") or data.get("selected_reason")
 
             # Handle new multi-package format
             if "packages" in data and data["packages"]:
@@ -146,18 +184,15 @@ class LLMClient:
                     # Parse pins for this package
                     pins_data = pkg_data.get("pins", [])
                     for pin_data in pins_data:
-                        # Handle both string and int pin numbers
-                        pin_number = pin_data.get("number")
-                        if isinstance(pin_number, str):
-                            import re
-                            match = re.search(r'\d+', pin_number)
-                            pin_number = int(match.group(0)) if match else 0
-                        else:
-                            pin_number = int(pin_number)
+                        pin_name = str(pin_data.get("name", "") or "").strip()
+                        if is_non_pin_feature_name(pin_name):
+                            continue
+
+                        pin_number = _coerce_pin_number(pin_data.get("number"))
 
                         pkg_info["pins"].append({
                             "number": pin_number,
-                            "name": pin_data.get("name", ""),
+                            "name": pin_name,
                             "function": pin_data.get("function")
                         })
 
@@ -167,6 +202,9 @@ class LLMClient:
                 pin_data = PinData(
                     component_name=data.get("component_name", "Unknown"),
                     packages=packages_list,
+                    selected_package_index=selected_package_index,
+                    selected_package_type=selected_package_type,
+                    selection_reason=selection_reason,
                     extraction_method=data.get("extraction_method", "Unknown"),
                 )
 
@@ -193,19 +231,16 @@ class LLMClient:
                 pins_data = data.get("pins", [])
                 pins = []
                 for pin_data in pins_data:
-                    # Handle both string and int pin numbers
-                    pin_number = pin_data.get("number")
-                    if isinstance(pin_number, str):
-                        import re
-                        match = re.search(r'\d+', pin_number)
-                        pin_number = int(match.group(0)) if match else 0
-                    else:
-                        pin_number = int(pin_number)
+                    pin_name = str(pin_data.get("name", "") or "").strip()
+                    if is_non_pin_feature_name(pin_name):
+                        continue
+
+                    pin_number = _coerce_pin_number(pin_data.get("number"))
 
                     pins.append(
                         Pin(
                             number=pin_number,
-                            name=pin_data.get("name", ""),
+                            name=pin_name,
                             function=pin_data.get("function"),
                         )
                     )
@@ -215,6 +250,9 @@ class LLMClient:
                     component_name=data.get("component_name", "Unknown"),
                     package=package,
                     pins=pins,
+                    selected_package_index=selected_package_index if selected_package_index is not None else 0,
+                    selected_package_type=selected_package_type,
+                    selection_reason=selection_reason,
                     extraction_method=data.get("extraction_method", "Unknown"),
                 )
 

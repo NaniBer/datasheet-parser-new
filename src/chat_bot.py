@@ -93,7 +93,11 @@ def get_completion_from_messages(messages, model="llama-3", temperature=0, max_r
     )
 
 
-def build_table_extraction_prompt(table_data: str) -> list:
+def build_table_extraction_prompt(
+    table_data: str,
+    part_number: str = None,
+    validation_feedback: str = None,
+) -> list:
     """
     Build specialized prompt for table-only extraction (ALL variants).
 
@@ -103,6 +107,13 @@ def build_table_extraction_prompt(table_data: str) -> list:
     Returns:
         List of message dictionaries for LLM API call
     """
+    target_hint_text = f"Target part number: {part_number}\n\n" if part_number else ""
+    validation_hint_text = (
+        f"Validation feedback from a previous attempt:\n{validation_feedback}\n\n"
+        if validation_feedback
+        else ""
+    )
+
     messages = [
         {
             "role": "system",
@@ -133,17 +144,18 @@ def build_table_extraction_prompt(table_data: str) -> list:
                 "3. VERIFY COUNT: Pin count must match package type (SOIC-16 = 16 pins, LCCC-20 = 20 pins)\n"
                 "4. NO DUPLICATES: Each pin number within a variant should appear only once\n"
                 "5. HANDLE SYMBOLS: Convert '—', '-', or empty to 'NC' (No Connection)\n"
-                "6. BROKEN ROWS: Handle rows with incomplete data (e.g., ['16'], ['11']):\n"
+                "6. PACKAGE FEATURES ARE NOT PINS: Exposed pads, thermal pads, die pads, center pads, and similar package-only features are not electrical pins. Do not include them in pins or pin_count unless the datasheet explicitly numbers them as a real pin.\n"
+                "7. BROKEN ROWS: Handle rows with incomplete data (e.g., ['16'], ['11']):\n"
                 "   - These represent NC pins with just a pin number\n"
                 "   - Use the pin number and set name='NC', function='none'\n"
                 "   - Ensure no duplicate pin numbers\n"
-                "7. PIN CONFLICTS: If multiple functions share same pin number in a variant:\n"
+                "8. PIN CONFLICTS: If multiple functions share same pin number in a variant:\n"
                 "   - Choose the primary function (typically the one with clear I/O designation)\n"
                 "   - Do NOT create duplicate entries with same pin number\n"
                 "   - Example: If RCLK and SRCLK both show pin 14, choose ONE\n"
-                "8. ALL PINS: Extract EVERY pin for EACH variant, not just a sample\n"
-                "9. VARIANT SEPARATION: Keep pins from different variants in separate package entries\n"
-                "10. MISSING PINS: If pin count doesn't match expected:\n"
+                "9. ALL PINS: Extract EVERY pin for EACH variant, not just a sample\n"
+                "10. VARIANT SEPARATION: Keep pins from different variants in separate package entries\n"
+                "11. MISSING PINS: If pin count doesn't match expected:\n"
                 "    - First check for NC pins in broken rows\n"
                 "    - If still missing, reasonable inference is acceptable (e.g., fill gap with NC)\n"
                 "    - Priority: NO DUPLICATES > COMPLETE PIN COUNT > EXACT DATA\n\n"
@@ -183,6 +195,9 @@ def build_table_extraction_prompt(table_data: str) -> list:
                 "      ]\n"
                 "    }\n"
                 "  ],\n"
+                "  \"selected_package_index\": 0,\n"
+                "  \"selected_package_type\": \"SOIC-16\",\n"
+                "  \"selection_reason\": \"Why this package was chosen\",\n"
                 "  \"extraction_method\": \"Table\"\n"
                 "}\n\n"
 
@@ -190,18 +205,25 @@ def build_table_extraction_prompt(table_data: str) -> list:
                 "- Return ONLY raw JSON (no ```json, no explanations)\n"
                 "- Extract pin names EXACTLY as in table\n"
                 "- Extract ALL variants present in the table\n"
+                "- If multiple variants are present, set selected_package_index to the best-supported package for the target part number\n"
+                "- selected_package_index is zero-based and refers to the packages array order\n"
+                "- If no target part number is provided, select the best-supported package and explain why in selection_reason\n"
                 "- Verify pin count matches package type for EACH variant\n"
                 "- No duplicate pin numbers within a single variant\n"
                 "- Convert '—' or '-' to 'NC'\n"
                 "- If pin count doesn't match expected, check for missing pins in table\n"
                 "- component_name is OPTIONAL: extract if present in headers, else use 'Unknown'\n"
                 "- PRIORITIZE accurate pin extraction over component name\n"
+                + (f"\nTarget part number: {part_number}\n" if part_number else "")
+                + (f"\nValidation feedback:\n{validation_feedback}\n" if validation_feedback else "")
             )
         },
         {
             "role": "user",
             "content": (
                 "Parse this pin configuration table and extract PinData for ALL variants.\n\n"
+                f"{target_hint_text}"
+                f"{validation_hint_text}"
                 "INSTRUCTIONS:\n"
                 "1. Analyze table structure (header rows, columns, variants)\n"
                 "2. Identify ALL package variants in the table\n"
@@ -224,7 +246,12 @@ def build_table_extraction_prompt(table_data: str) -> list:
     return messages
 
 
-def build_pin_extraction_prompt(datasheet_content: str, part_number: str = None, table_only_mode: bool = False) -> list:
+def build_pin_extraction_prompt(
+    datasheet_content: str,
+    part_number: str = None,
+    table_only_mode: bool = False,
+    validation_feedback: str = None,
+) -> list:
     """
     Build messages for PinData extraction from datasheet content.
 
@@ -237,12 +264,19 @@ def build_pin_extraction_prompt(datasheet_content: str, part_number: str = None,
         List of message dictionaries for LLM API call
     """
     # Build the extraction tasks with part number matching
+    target_part_text = f"TARGET PART NUMBER: {part_number}\n" if part_number else ""
+    validation_text = (
+        f"VALIDATION FEEDBACK:\n{validation_feedback}\n" if validation_feedback else ""
+    )
+
     extraction_tasks = (
         "EXTRACTION TASKS:\n"
         "1. Identify the Component Name (full part number or family).\n"
         "2. Extract Package type, pin count, and physical dimensions (width, height, pitch).\n"
         "3. Map every physical pin to its name and function.\n"
         "4. Note the extraction method (Table, Diagram, or Mixed).\n"
+        "5. If multiple package variants are present, select the best-supported package and record its zero-based index in selected_package_index.\n"
+        "6. Do not count exposed pads, thermal pads, die pads, center pads, or similar package-only features as pins.\n"
     )
 
     # CRITICAL INSTRUCTION: Do not generate sequential pin names.
@@ -252,82 +286,96 @@ def build_pin_extraction_prompt(datasheet_content: str, part_number: str = None,
 
     # Table-only mode: Use specialized table extraction prompt
     if table_only_mode:
-        return build_table_extraction_prompt(datasheet_content)
+        return build_table_extraction_prompt(
+            datasheet_content,
+            part_number=part_number,
+            validation_feedback=validation_feedback,
+        )
+
+    system_content = (
+        "You are a Senior EDA (Electronic Design Automation) Technical Data Compiler. "
+        "Your task is to extract structured pin data from electronic component datasheets. "
+        "This data will be used to generate 3D CAD models.\n\n"
+
+        "DEFINITIONS:\n"
+        "1. COMPONENT_NAME: The full part number or name (e.g., ATmega164A, ESP32-WROOM-32, NE555).\n"
+        "2. PACKAGE: Physical package information including type (DIP, QFN, SOIC, TQFP, VFBGA, etc.), "
+        "pin count, dimensions, and pitch.\n"
+        "3. PIN: Individual pin with number, name, and function (power, ground, input, output, etc.).\n\n"
+
+        "STRICT MAPPING RULES:\n"
+        "1. PRIORITY: Look for PINOUT DIAGRAM or PACKAGE DIAGRAM sections first. "
+        "These diagrams show the correct pin numbering and are more reliable than tables. "
+        "Only use tables to supplement missing information from diagrams.\n"
+        "2. PHYSICAL FIDELITY: Extract ALL physical pins with their correct numbers. "
+        "Never assume Pin 1 is the first signal mentioned - use package diagrams.\n"
+        "3. PIN NUMBERING CONVENTIONS - Follow these exactly:\n"
+        "   - DIP packages: Pin 1 is top-left corner. Numbering goes DOWN left side, then UP right side.\n"
+        "   - SOIC packages: Pin 1 is top-left corner. Numbering is counter-clockwise.\n"
+        "   - TQFP/LQFP packages: Pin 1 is top-left corner. Numbering is counter-clockwise.\n"
+        "   - QFN packages: Pin 1 is top-left corner. Numbering is counter-clockwise.\n"
+        "4. PACKAGE FEATURES ARE NOT PINS: Exposed pads, thermal pads, die pads, center pads, and similar package-only features are not electrical pins. Do not include them in pins or pin_count unless the datasheet explicitly numbers them as a real pin.\n"
+        "5. PACKAGE ACCURACY: Extract package type from headings (e.g., '8-Lead SOIC', '28-Pin DIP') "
+        "and dimensions from mechanical drawings.\n"
+        "6. PACKAGE VARIANT MATCHING: If the datasheet contains multiple package variants, "
+        "match the part number to the correct variant by checking suffix codes (e.g., RBT6=64-pin, RBT8=48-pin, RCT6=144-pin). "
+        "Extract pins ONLY for the matched variant.\n"
+        "7. CROSS-VERIFICATION: After extraction, verify:\n"
+        "   - Pin count matches package name (e.g., 'PDIP-40' should have exactly 40 pins)\n"
+        "   - Power pins (VCC/VDD, GND/VSS) are present and in correct locations\n"
+        "   - If verification fails, you have the wrong package variant!\n"
+        "8. COMPLETE EXTRACTION: Include ALL pins for the matched variant, not just a sample. "
+        "If pinout spans multiple pages, combine everything.\n"
+        "9. FUNCTION CLASSIFICATION: Classify each pin's primary function: "
+        "'power' (VCC, VDD, AVCC), 'ground' (GND, VSS), 'input' (GPIO, data in), "
+        "'output' (data out), 'analog' (ADC, DAC), or other relevant categories.\n\n"
+
+        "OUTPUT FORMAT:\n"
+        "Return ONLY valid JSON with this exact structure:\n"
+        "{\n"
+        "  \"component_name\": \"Component name\",\n"
+        "  \"package\": {\n"
+        "    \"type\": \"Package type\",\n"
+        "    \"pin_count\": number,\n"
+        "    \"width\": width_in_mm,\n"
+        "    \"height\": height_in_mm,\n"
+        "    \"pitch\": pin_spacing_mm_or_null\n"
+        "  },\n"
+        "  \"selected_package_index\": 0,\n"
+        "  \"selected_package_type\": \"Package type chosen for geometry\",\n"
+        "  \"selection_reason\": \"Why this package was chosen\",\n"
+        "  \"pins\": [\n"
+        "    {\"number\": 1, \"name\": \"VCC\", \"function\": \"power\"},\n"
+        "    {\"number\": 2, \"name\": \"GND\", \"function\": \"ground\"},\n"
+        "    ...\n"
+        "  ],\n"
+        "  \"extraction_method\": \"Table|Diagram|Mixed\"\n"
+        "}\n\n"
+
+        "IMPORTANT:\n"
+        "- Return ONLY raw valid JSON - do NOT wrap in markdown code blocks (no ```json or ```)\n"
+        "- Do NOT include any additional text, explanations, or commentary\n"
+        "- If information is missing, use null or reasonable defaults\n"
+        "- For pitch: use pin spacing if specified (e.g., 0.5mm, 1.27mm), otherwise null\n"
+        "- For extraction_method: specify 'Table' if from table, 'Diagram' if from diagram, 'Mixed' if both\n"
+        "- If a specific part number is provided, extract ONLY pins for that package variant\n"
+        "- If multiple variants are present, set selected_package_index to the best-supported package and explain why in selection_reason\n"
+        "- selected_package_index is zero-based and refers to the packages array order\n"
+    )
 
     # Normal mode: Full prompt for diagrams + tables
     messages = [
         {
             "role": "system",
-            "content": (
-                "You are a Senior EDA (Electronic Design Automation) Technical Data Compiler. "
-                "Your task is to extract structured pin data from electronic component datasheets. "
-                "This data will be used to generate 3D CAD models.\n\n"
-
-                "DEFINITIONS:\n"
-                "1. COMPONENT_NAME: The full part number or name (e.g., ATmega164A, ESP32-WROOM-32, NE555).\n"
-                "2. PACKAGE: Physical package information including type (DIP, QFN, SOIC, TQFP, VFBGA, etc.), "
-                "pin count, dimensions, and pitch.\n"
-                "3. PIN: Individual pin with number, name, and function (power, ground, input, output, etc.).\n\n"
-
-                "STRICT MAPPING RULES:\n"
-                "1. PRIORITY: Look for PINOUT DIAGRAM or PACKAGE DIAGRAM sections first. "
-                "These diagrams show the correct pin numbering and are more reliable than tables. "
-                "Only use tables to supplement missing information from diagrams.\n"
-                "2. PHYSICAL FIDELITY: Extract ALL physical pins with their correct numbers. "
-                "Never assume Pin 1 is the first signal mentioned - use package diagrams.\n"
-                "3. PIN NUMBERING CONVENTIONS - Follow these exactly:\n"
-                "   - DIP packages: Pin 1 is top-left corner. Numbering goes DOWN left side, then UP right side.\n"
-                "   - SOIC packages: Pin 1 is top-left corner. Numbering is counter-clockwise.\n"
-                "   - TQFP/LQFP packages: Pin 1 is top-left corner. Numbering is counter-clockwise.\n"
-                "   - QFN packages: Pin 1 is top-left corner. Numbering is counter-clockwise.\n"
-                "4. PACKAGE ACCURACY: Extract package type from headings (e.g., '8-Lead SOIC', '28-Pin DIP') "
-                "and dimensions from mechanical drawings.\n"
-                "5. PACKAGE VARIANT MATCHING: If the datasheet contains multiple package variants, "
-                "match the part number to the correct variant by checking suffix codes (e.g., RBT6=64-pin, RBT8=48-pin, RCT6=144-pin). "
-                "Extract pins ONLY for the matched variant.\n"
-                "6. CROSS-VERIFICATION: After extraction, verify:\n"
-                "   - Pin count matches package name (e.g., 'PDIP-40' should have exactly 40 pins)\n"
-                "   - Power pins (VCC/VDD, GND/VSS) are present and in correct locations\n"
-                "   - If verification fails, you have the wrong package variant!\n"
-                "7. COMPLETE EXTRACTION: Include ALL pins for the matched variant, not just a sample. "
-                "If pinout spans multiple pages, combine everything.\n"
-                "8. FUNCTION CLASSIFICATION: Classify each pin's primary function: "
-                "'power' (VCC, VDD, AVCC), 'ground' (GND, VSS), 'input' (GPIO, data in), "
-                "'output' (data out), 'analog' (ADC, DAC), or other relevant categories.\n\n"
-
-                "OUTPUT FORMAT:\n"
-                "Return ONLY valid JSON with this exact structure:\n"
-                "{\n"
-                "  \"component_name\": \"Component name\",\n"
-                "  \"package\": {\n"
-                "    \"type\": \"Package type\",\n"
-                "    \"pin_count\": number,\n"
-                "    \"width\": width_in_mm,\n"
-                "    \"height\": height_in_mm,\n"
-                "    \"pitch\": pin_spacing_mm_or_null\n"
-                "  },\n"
-                "  \"pins\": [\n"
-                "    {\"number\": 1, \"name\": \"VCC\", \"function\": \"power\"},\n"
-                "    {\"number\": 2, \"name\": \"GND\", \"function\": \"ground\"},\n"
-                "    ...\n"
-                "  ],\n"
-                "  \"extraction_method\": \"Table|Diagram|Mixed\"\n"
-                "}\n\n"
-
-                "IMPORTANT:\n"
-                "- Return ONLY raw valid JSON - do NOT wrap in markdown code blocks (no ```json or ```)\n"
-                "- Do NOT include any additional text, explanations, or commentary\n"
-                "- If information is missing, use null or reasonable defaults\n"
-                "- For pitch: use pin spacing if specified (e.g., 0.5mm, 1.27mm), otherwise null\n"
-                "- For extraction_method: specify 'Table' if from table, 'Diagram' if from diagram, 'Mixed' if both\n"
-                "- If a specific part number is provided, extract ONLY pins for that package variant"
-            )
+            "content": system_content + (f"\nTarget part number: {part_number}\n" if part_number else "") + (f"\nValidation feedback:\n{validation_feedback}\n" if validation_feedback else "")
         },
         {
             "role": "user",
             "content": (
                 "Extract complete PinData from the datasheet content provided below. "
                 "This data will be used to generate 3D CAD models.\n\n"
+                f"{target_part_text}"
+                f"{validation_text}"
                 f"{extraction_tasks}\n\n"
                 "--- DATASHEET CONTENT START ---\n"
                 f"{datasheet_content}\n"

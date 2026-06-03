@@ -265,6 +265,37 @@ Each day should follow this structure:
 
 ---
 
+## 2026-06-03
+
+### What We Did
+- ✅ Fixed the extraction flow so clean pin tables can bypass the LLM through a deterministic parser.
+- ✅ Tightened package handling so DFN/WSON/SON-style parts stay dual-row, while true QFN packages stay quad-side.
+- ✅ Corrected quad-package pin ordering to match top-view counter-clockwise numbering.
+- ✅ Added and updated tests for package detection, package family matching, deterministic parsing, and pin layout.
+- ✅ Generated and validated fresh GLBs for DFN, MPU-6000, and QFN-24.
+- ✅ Ran a clean batch rerun over all PDFs in `pdfs/` and stored the outputs in `output/batch_pcb2d/`.
+- ✅ Confirmed all PDFs were readable; the batch failures were LLM connection issues, not corrupted files.
+
+### Issues Encountered
+- OpenDataLoader still fails in this environment because Java is unavailable.
+- The harder PDFs still depend on the LLM fallback, so they fail when the API connection is unavailable.
+- Some package labels were being flattened too aggressively, which caused incorrect side placement.
+
+### What We Learned
+- The main bug was in layout classification, not pin extraction.
+- DFN/WSON/SON should be treated as dual-row no-lead packages, not as quad packages.
+- QFN-24 top-view counter-clockwise numbering is:
+  - 1-6 left
+  - 7-12 bottom
+  - 13-18 right
+  - 19-24 top
+- The deterministic parser is strong enough for cleaner tables and should be the first choice before the LLM.
+
+### Tomorrow's Plan
+- [ ] Improve offline coverage for more package families so fewer PDFs depend on the LLM.
+- [ ] Tighten fallbacks for the PDFs that still need model assistance.
+- [ ] Add a few more regression cases for package layout orientation.
+
 ## Notes
 
 ### Dependencies Installed

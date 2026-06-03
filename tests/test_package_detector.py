@@ -15,6 +15,21 @@ def test_normalize_package_name():
     assert detector.normalize_package_name("QFN-24") == "QFN"
     assert detector.normalize_package_name("VQFN") == "QFN"
     assert detector.normalize_package_name("DIL") == "DIP"
+    assert detector.normalize_package_name("DFN-8") == "DFN"
+    assert detector.normalize_package_name("WSON-8") == "WSON"
+    assert detector.normalize_package_name("SON-10") == "SON"
+    assert detector.normalize_package_name("TSSOP-20") == "TSSOP"
+
+
+def test_package_family_matching():
+    """Test collapsing package labels into broader matching families."""
+    detector = PackageDetector()
+
+    assert detector.package_family("DFN-8") == "QFN"
+    assert detector.package_family("WSON-8") == "QFN"
+    assert detector.package_family("SON-10") == "QFN"
+    assert detector.package_family("TSSOP-20") == "SOIC"
+    assert detector.package_family("SOIC-16") == "SOIC"
 
 
 def test_detect_from_text():
@@ -23,6 +38,9 @@ def test_detect_from_text():
 
     assert detector._detect_from_text("DIP-28 package") == "DIP"
     assert detector._detect_from_text("QFN-24 pin configuration") == "QFN"
+    assert detector._detect_from_text("DFN-8 dual flat no-lead") == "DFN"
+    assert detector._detect_from_text("WSON-8 wafer-scale no-lead") == "WSON"
+    assert detector._detect_from_text("SON-10 small outline no-lead") == "SON"
     assert detector._detect_from_text("SOIC-8 small outline") == "SOIC"
     assert detector._detect_from_text("TSSOP-20 thin shrink") == "TSSOP"
     assert detector._detect_from_text("BGA ball grid array") == "BGA"

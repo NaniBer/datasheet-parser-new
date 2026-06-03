@@ -33,4 +33,7 @@ class PinData:
     package: Optional[PackageInfo] = None  # Single package (legacy format)
     pins: Optional[List[Pin]] = None  # Single package pins (legacy format)
     packages: Optional[List[dict]] = None  # Multiple packages with their pins (new format)
+    selected_package_index: Optional[int] = None  # Preferred package index when multiple variants exist
+    selected_package_type: Optional[str] = None  # Preferred package label/type when available
+    selection_reason: Optional[str] = None  # Human-readable explanation for the chosen variant
     extraction_method: str = "Table"  # Table, Diagram, Mixed

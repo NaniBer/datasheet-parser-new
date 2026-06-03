@@ -67,41 +67,40 @@ class PinLayout:
         # Use custom layout if provided (from Vision API)
         if self.custom_layout:
             positions = self._layout_custom_pins()
-        elif self.params.package_type == PackageType.DIP:
-            positions = self._layout_dip_pins()
-        elif self.params.package_type in [PackageType.TQFP, PackageType.LQFP]:
-            positions = self._layout_quad_pins()
-        elif self.params.package_type == PackageType.QFN:
-            positions = self._layout_quad_pins()
         elif self.params.package_type == PackageType.BGA:
             positions = self._layout_bga_pins()
+        elif len(self.params.pins_per_side) >= 4 and any(
+            self.params.pins_per_side[2:]
+        ):
+            positions = self._layout_quad_pins()
         else:
-            # Default to DIP
-            positions = self._layout_dip_pins()
+            # Default to a dual-row package (DIP/SOIC/DFN/WSON/SON/TSSOP)
+            positions = self._layout_dual_row_pins()
 
         return positions
 
-    def _layout_dip_pins(self) -> List[PinPosition]:
+    def _layout_dual_row_pins(self) -> List[PinPosition]:
         """
-        Layout pins for DIP (Dual Inline Package).
+        Layout pins for dual-row packages.
 
         Pin numbering is COUNTER-CLOCKWISE:
         - Pin 1: Top-left corner
         - Pins 1 to N/2: Left side, going DOWN
         - Pins N/2+1 to N: Right side, going UP
 
-        Example for DIP-8:
+        Example for DIP-8 / DFN-8 / WSON-8:
             Pin 1 ┐  Pin 8
             Pin 2 │  Pin 7
             Pin 3 │  Pin 6
             Pin 4 ┘  Pin 5
         """
         positions = []
-        pin_count = self.params.pin_count
-        pins_per_side = pin_count // 2
+        left_count = self.params.pins_per_side[0] if self.params.pins_per_side else self.params.pin_count // 2
+        right_count = self.params.pins_per_side[1] if len(self.params.pins_per_side) > 1 and self.params.pins_per_side[1] else self.params.pin_count - left_count
+        pins_per_side = min(left_count, right_count) if left_count and right_count else self.params.pin_count // 2
 
         # Left side: pins 1 to pins_per_side (top to bottom)
-        for i in range(pins_per_side):
+        for i in range(left_count):
             y = (self.params.body_height / 2) - self.params.body_geometry.top_margin - (i * self.params.pin_pitch)
             x = -self.params.body_width / 2
 
@@ -125,16 +124,16 @@ class PinLayout:
                 num_halign="left"
             ))
 
-        # Right side: pins pins_per_side+1 to pin_count (bottom to top)
-        # For DIP counter-clockwise: pin 5 at bottom, pin 8 at top
+        # Right side: pins left_count+1 to pin_count (bottom to top)
+        # For counter-clockwise numbering: bottom pin is the first on the right side
         # IMPORTANT: Right side must go BOTTOM to TOP for counter-clockwise numbering
-        for i in range(pins_per_side):
+        for i in range(right_count):
             # Calculate Y position - need to go bottom-to-top for counter-clockwise
             # Use reversed index: pins_per_side - 1 - i
-            reversed_idx = pins_per_side - 1 - i
+            reversed_idx = right_count - 1 - i
             y = (self.params.body_height / 2) - self.params.body_geometry.top_margin - (reversed_idx * self.params.pin_pitch)
             x = self.params.body_width / 2
-            pin_num = pins_per_side + i + 1
+            pin_num = left_count + i + 1
 
             # Pin leg points right
             # Text should be OUTSIDE the component (right side)
@@ -158,6 +157,10 @@ class PinLayout:
 
         return positions
 
+    def _layout_dip_pins(self) -> List[PinPosition]:
+        """Backward-compatible DIP layout wrapper."""
+        return self._layout_dual_row_pins()
+
     def _layout_quad_pins(self) -> List[PinPosition]:
         """
         Layout pins for TQFP/LQFP (Quad Flat Package).
@@ -178,12 +181,16 @@ class PinLayout:
         print(f"Using _layout_quad_pins method")
 
         positions = []
-        pin_count = self.params.pin_count
-        pins_per_side = pin_count // 4
+        counts = list(self.params.pins_per_side[:4]) if self.params.pins_per_side else []
+        if len(counts) < 4 or not any(counts[2:]):
+            pin_count = self.params.pin_count
+            pins_per_side = pin_count // 4
+            counts = [pins_per_side, pins_per_side, pins_per_side, pins_per_side]
+        left_count, bottom_count, right_count, top_count = counts
         top_margin = self.params.body_geometry.top_margin
 
         # LEFT SIDE: pins 0 to pins_per_side-1 (top to bottom)
-        for i in range(pins_per_side):
+        for i in range(left_count):
             y = (self.params.body_height / 2) - top_margin - (i * self.params.pin_pitch)
             x = -self.params.body_width / 2
 
@@ -205,17 +212,17 @@ class PinLayout:
                 num_halign="left"
             ))
 
-        # BOTTOM SIDE: pins pins_per_side to 2*pins_per_side-1 (left to right)
+        # BOTTOM SIDE: pins left_count to left_count+bottom_count-1 (left to right)
         print(f"\n=== DEBUG BOTTOM SIDE ===")
         print(f"pin_name_offset: {self.params.pin_geometry.pin_name_offset}")
         print(f"pin_num_offset: {self.params.pin_geometry.pin_num_offset}")
         print(f"extra_bottom_name_offset: {self.params.pin_geometry.extra_bottom_name_offset}")
         print(f"extra_bottom_num_offset: {self.params.pin_geometry.extra_bottom_num_offset}")
 
-        for i in range(pins_per_side):
+        for i in range(bottom_count):
             x = -(self.params.body_width / 2) + top_margin + (i * self.params.pin_pitch)
             y = -self.params.body_height / 2
-            pin_idx = pins_per_side + i
+            pin_idx = left_count + i
 
             text_x = x
             text_y = y - self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_bottom_name_offset
@@ -243,12 +250,11 @@ class PinLayout:
                 num_halign="center"
             ))
 
-        # RIGHT SIDE: pins 2*pins_per_side to 3*pins_per_side-1 (bottom to top)
-        for i in range(pins_per_side):
-            right_idx = pins_per_side - 1 - i  # Reverse for bottom-to-top
-            y = -(self.params.body_height / 2) + top_margin + (right_idx * self.params.pin_pitch)
+        # RIGHT SIDE: pins left_count+bottom_count to left_count+bottom_count+right_count-1 (bottom to top)
+        for i in range(right_count):
+            y = -(self.params.body_height / 2) + top_margin + (i * self.params.pin_pitch)
             x = self.params.body_width / 2
-            pin_idx = 2 * pins_per_side + i
+            pin_idx = left_count + bottom_count + i
 
             text_x = x + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_right_name_offset
             num_x = x + self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_right_num_offset
@@ -268,18 +274,17 @@ class PinLayout:
                 num_halign="right"
             ))
 
-        # TOP SIDE: pins 3*pins_per_side to 4*pins_per_side-1 (right to left)
+        # TOP SIDE: pins left_count+bottom_count+right_count to total-1 (right to left)
         print(f"\n=== DEBUG TOP SIDE ===")
         print(f"pin_name_offset: {self.params.pin_geometry.pin_name_offset}")
         print(f"pin_num_offset: {self.params.pin_geometry.pin_num_offset}")
         print(f"extra_top_name_offset: {self.params.pin_geometry.extra_top_name_offset}")
         print(f"extra_top_num_offset: {self.params.pin_geometry.extra_top_num_offset}")
 
-        for i in range(pins_per_side):
-            top_idx = pins_per_side - 1 - i  # Reverse for right-to-left
-            x = (self.params.body_width / 2) - top_margin - (top_idx * self.params.pin_pitch)
+        for i in range(top_count):
+            x = (self.params.body_width / 2) - top_margin - (i * self.params.pin_pitch)
             y = self.params.body_height / 2
-            pin_idx = 3 * pins_per_side + i
+            pin_idx = left_count + bottom_count + right_count + i
 
             text_x = x
             text_y = y + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_top_name_offset

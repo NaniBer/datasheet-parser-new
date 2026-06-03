@@ -98,8 +98,9 @@ class ContentExtractor:
         filter = PinoutFilter()
         filtered = filter.filter_content(extracted)
 
-        # If filter removes all content, use unfiltered as fallback
-        if not filtered.text_content and extracted.text_content:
+        # If the filter removed everything, use the unfiltered content as a last resort.
+        # Keep partially filtered results intact so we don't reintroduce irrelevant pages.
+        if not (filtered.text_content or filtered.tables or filtered.images) and extracted.text_content:
             filtered = extracted
 
         # Determine tables_only mode based on detection AND extraction

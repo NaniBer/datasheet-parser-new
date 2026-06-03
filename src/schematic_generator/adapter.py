@@ -7,16 +7,22 @@ This module provides functions to convert between the PinData model
 
 from typing import List, Dict, Any, Optional
 from src.models.pin_data import PinData, Pin
+from src.pdf_extractor.variant_selection import select_package_variant
 from .pinout_diagram_builder import build_pinout_diagram as build_schematic
 
 
-def pin_data_to_builder_format(pin_data: PinData, package_index: int = 0) -> tuple:
+def pin_data_to_builder_format(
+    pin_data: PinData,
+    package_index: Optional[int] = None,
+    part_number: Optional[str] = None,
+) -> tuple:
     """
     Convert PinData to format expected by PinoutDiagramBuilder.
 
     Args:
         pin_data: PinData object from pin extraction
-        package_index: Index of package to use (default 0) when multiple packages exist
+        package_index: Explicit package index override when multiple packages exist
+        part_number: Optional target part number used to guide selection
 
     Returns:
         Tuple of (package_type, pin_count, component_name, pin_data_list)
@@ -46,8 +52,13 @@ def pin_data_to_builder_format(pin_data: PinData, package_index: int = 0) -> tup
     component_name = pin_data.component_name
 
     # Handle new multi-package format
-    if pin_data.packages and len(pin_data.packages) > package_index:
-        package_data = pin_data.packages[package_index]
+    if pin_data.packages:
+        selection = select_package_variant(
+            pin_data,
+            part_number=part_number,
+            package_index=package_index,
+        )
+        package_data = selection.package
         package_type = package_data["type"]
         pin_count = package_data["pin_count"]
 
@@ -56,6 +67,7 @@ def pin_data_to_builder_format(pin_data: PinData, package_index: int = 0) -> tup
             {"number": str(pin["number"]), "name": pin["name"]}
             for pin in package_data["pins"]
         ]
+        return package_type, pin_count, component_name, pins_for_builder
 
     # Handle legacy single package format
     elif pin_data.package:
@@ -74,7 +86,13 @@ def pin_data_to_builder_format(pin_data: PinData, package_index: int = 0) -> tup
     return package_type, pin_count, component_name, pins_for_builder
 
 
-def build_schematic_from_pin_data(pin_data: PinData, output_path: str, custom_layout: Optional[Dict[str, List[int]]] = None) -> bool:
+def build_schematic_from_pin_data(
+    pin_data: PinData,
+    output_path: str,
+    custom_layout: Optional[Dict[str, List[int]]] = None,
+    part_number: Optional[str] = None,
+    package_index: Optional[int] = None,
+) -> bool:
     """
     Build and export schematic from PinData.
 
@@ -91,7 +109,11 @@ def build_schematic_from_pin_data(pin_data: PinData, output_path: str, custom_la
         True if successful, False otherwise
     """
     # Convert PinData to builder format
-    package_type, pin_count, component_name, pins_for_builder = pin_data_to_builder_format(pin_data)
+    package_type, pin_count, component_name, pins_for_builder = pin_data_to_builder_format(
+        pin_data,
+        package_index=package_index,
+        part_number=part_number,
+    )
 
     # Build schematic
     return build_schematic(package_type, pin_count, component_name, pins_for_builder, output_path, custom_layout)

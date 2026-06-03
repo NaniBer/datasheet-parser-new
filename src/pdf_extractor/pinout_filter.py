@@ -5,7 +5,8 @@ Filters extracted PDF content to include only pinout-relevant information,
 reducing LLM confusion from irrelevant content.
 """
 
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
 from typing import List, Tuple
 
 
@@ -27,10 +28,8 @@ class PinoutFilter:
         'pinout', 'pin configuration', 'pin description', 'pin mapping',
         'pin names', 'pin functions', 'pin assignments', 'pin details',
         'package pinout', 'component pinout', 'device pinout',
-        'pin diagram', 'package drawing', 'mechanical drawing',
-        'pindescription', 'pindefinitions', 'pindescription', 'pin description',
-        'pin definition', 'pin description', 'pinout', 'pin assignments',
-        'pin table', 'pin list', 'pinout table', 'pin configuration'
+        'pin diagram', 'pin table', 'pin list', 'pinout table',
+        'pin definition'
     ]
 
     # Keywords that indicate pinout table columns
@@ -43,32 +42,127 @@ class PinoutFilter:
         'pa', 'pb', 'pc', 'pd', 'pe', 'pf'  # Common port names
     ]
 
-    # Keywords that suggest content is NOT pinout-related (to be filtered out)
-    # Use full phrases to avoid false positives (e.g., "package" in "TQFN package")
-    NON_PINOUT_KEYWORDS = [
-        'absolute maximum', 'absolute minimum', 'electrical characteristics',
-        'recommended operating conditions', 'thermal information',
-        'ordering information', 'packaging information',
-        'dimensions', 'mechanical dimensions', 'physical dimensions',
-        'soldering', 'footprint', 'mechanical drawing',
-        'package variants', 'package ordering information',
-        'reeling information', 'marking', 'labeling',
-        'storage', 'transportation', 'handling',
+    # Strong phrases that usually indicate packaging/materials pages, not pinout data.
+    NON_PINOUT_SECTION_KEYWORDS = [
+        'package materials information', 'ordering information',
+        'electrical characteristics', 'recommended operating conditions',
+        'absolute maximum ratings', 'absolute maximum',
+        'mechanical dimensions', 'physical dimensions', 'package dimensions',
+        'electrical specifications', 'pcb design guidelines',
+        'symbols', 'parameters', 'pad dimensions', 'i/o land design dimensions',
+        'tape and reel', 'pack materials', 'packaging information',
+        'soldering', 'footprint', 'storage', 'transportation', 'handling',
         'mounting', 'assembly'
     ]
 
-    def is_pinout_table(self, table: List) -> bool:
-        """Check if a table is a pinout table."""
-        if not table or len(table) == 0:
+    # Strong phrases that should help pinout detection even when the page also
+    # contains package-related wording.
+    STRONG_PINOUT_SECTION_KEYWORDS = [
+        'pin configuration', 'pin configurations', 'pin functions',
+        'pin function', 'pin description', 'pin assignments',
+        'pin mapping', 'pinout -', 'pinout table', 'table 5-1. pin functions'
+    ]
+
+    # Strong phrases that should suppress table matches when present.
+    NON_PINOUT_TABLE_KEYWORDS = [
+        'package materials information', 'ordering information',
+        'electrical characteristics', 'recommended operating conditions',
+        'absolute maximum ratings', 'absolute maximum',
+        'tape and reel', 'pack materials'
+    ]
+
+    @staticmethod
+    def _normalize_cell_text(cell) -> str:
+        """Normalize a table cell to a compact single-line string."""
+        if cell is None:
+            return ""
+        return " ".join(str(cell).replace("\r", " ").replace("\n", " ").split()).strip()
+
+    def _normalize_table(self, table: List) -> List[List[str]]:
+        """Normalize table rows/cells for scoring."""
+        normalized_rows = []
+        for row in table or []:
+            normalized_row = [self._normalize_cell_text(cell) for cell in row]
+            if any(normalized_row):
+                normalized_rows.append(normalized_row)
+        return normalized_rows
+
+    def _table_text(self, table: List[List[str]]) -> str:
+        """Flatten table rows into searchable lowercase text."""
+        return " ".join(
+            " ".join(cell for cell in row if cell).lower()
+            for row in table
+        )
+
+    def _looks_like_pin_label(self, text: str) -> bool:
+        """Heuristic check for pin labels like GND, VCC, QA, A0, or 12."""
+        if not text:
             return False
 
-        # Check header row for pinout keywords
-        header_text = " ".join(str(cell) for cell in table[0]).lower()
+        normalized = self._normalize_cell_text(text)
+        if not normalized:
+            return False
 
-        # Must have at least 2 pinout keywords
-        pinout_kw_count = sum(1 for kw in self.PINOUT_TABLE_KEYWORDS if kw in header_text)
+        compact = re.sub(r"[\s/_-]+", "", normalized).upper()
 
-        return pinout_kw_count >= 2
+        if compact.isdigit():
+            return True
+
+        if compact in {
+            "GND", "VCC", "VDD", "VSS", "OE", "MR", "CLR", "SER", "SRCLK",
+            "RCLK", "SCK", "MOSI", "MISO", "SDA", "SCL", "RESET", "CLK", "CS",
+            "NC", "TRIG", "OUT", "CTRL", "THRES", "DISCH"
+        }:
+            return True
+
+        if re.fullmatch(r"[A-Z]\d{1,2}", compact):
+            return True
+
+        if re.fullmatch(r"[A-Z]{2,6}\d{0,2}", compact):
+            return True
+
+        if "/" in normalized:
+            parts = [
+                re.sub(r"[^A-Z0-9']+", "", part.upper())
+                for part in re.split(r"\s*/\s*", normalized)
+                if part.strip()
+            ]
+            if len(parts) >= 2 and all(
+                part and len(part) <= 8 and re.fullmatch(r"[A-Z0-9']+", part)
+                for part in parts
+            ):
+                return True
+
+        return False
+
+    def is_pinout_table(self, table: List) -> bool:
+        """Check if a table is a pinout table."""
+        normalized_rows = self._normalize_table(table)
+        if len(normalized_rows) < 3:
+            return False
+
+        table_text = self._table_text(normalized_rows)
+        if any(keyword in table_text for keyword in self.NON_PINOUT_TABLE_KEYWORDS):
+            return False
+
+        header_text = self._table_text(normalized_rows[:3])
+        score = 0
+
+        if "pin" in header_text:
+            score += 1
+        if any(kw in header_text for kw in ["name", "function", "description", "signal", "io"]):
+            score += 1
+        if any(self._looks_like_pin_label(row[0]) for row in normalized_rows[1:10] if row):
+            score += 1
+        if sum(1 for row in normalized_rows[1:] if any(cell for cell in row[1:])) >= 2:
+            score += 1
+        if any(
+            any(term in row_text for term in ["ground", "vcc", "vdd", "vss", "reset", "clock", "power pin", "no connection"])
+            for row_text in (" ".join(row).lower() for row in normalized_rows[1:])
+        ):
+            score += 1
+
+        return score >= 3
 
     def filter_text_content(self, text_content: str, pages: List[int]) -> str:
         """
@@ -117,18 +211,14 @@ class PinoutFilter:
         if not text:
             return False
 
-        text_lower = text.lower()
+        text_lower = " ".join(text.replace("\r", " ").replace("\n", " ").split()).lower()
 
         # Check for pinout section keywords
         has_pinout_kw = any(kw in text_lower for kw in self.PINOUT_SECTION_KEYWORDS)
 
         # Check for strong pinout indicators (should override non-pinout keywords)
         # These are very specific to pinout content
-        strong_pinout_indicators = [
-            'pinout -', 'figure 1-1. pinout', 'figure 1-2. pinout',
-            'figure 1-3. pinout', 'pin configurations', 'pin mapping'
-        ]
-        has_strong_indicator = any(kw in text_lower for kw in strong_pinout_indicators)
+        has_strong_indicator = any(kw in text_lower for kw in self.STRONG_PINOUT_SECTION_KEYWORDS)
 
         # Check for pinout figure/diagram text patterns
         # Look for lines like "(PCINT8/XCK0/T0) PB0 PA0"
@@ -136,28 +226,17 @@ class PinoutFilter:
         pinout_diagram_pattern = (
             r'\([a-z0-9]+/[a-z0-9]+/[a-z0-9]+/t?\d*\)\s*[a-z]+\d+\s+[a-z]+\d+\s*\('
         )
-        import re
         has_diagram_format = bool(re.search(pinout_diagram_pattern, text_lower, re.IGNORECASE))
 
-        # Filter out non-pinout content
-        # Use full word matching for non-pinout keywords to avoid false positives
-        # e.g., "package" in "TQFP/QFN/MLF" should not filter out
-        full_word_non_pinout = any(
-            f' {kw} ' in text_lower or text_lower.endswith(kw)
-            for kw in ['absolute maximum', 'absolute minimum', 'electrical characteristics',
-                      'recommended operating conditions', 'thermal information',
-                      'ordering information', 'packaging information']
-        )
+        has_strong_non_pinout = any(kw in text_lower for kw in self.NON_PINOUT_SECTION_KEYWORDS)
 
-        # Keep page if:
-        # 1. Has strong pinout indicator (highest priority), OR
-        # 2. Has pinout keywords AND no strong non-pinout indicators, OR
-        # 3. Has diagram format pattern
-        return (
-            has_strong_indicator or
-            (has_pinout_kw and not full_word_non_pinout) or
-            has_diagram_format
-        )
+        if has_strong_indicator or has_diagram_format:
+            return True
+
+        if has_strong_non_pinout:
+            return False
+
+        return has_pinout_kw
 
     def filter_tables(self, tables: List[Tuple[int, List]]) -> List[Tuple[int, List]]:
         """Filter to only pinout tables."""
@@ -230,15 +309,16 @@ class PinoutFilter:
         # Combine filtered text
         filtered_text = "\n\n".join(filtered_text_blocks)
 
-        # Filter pages - keep pages with pinout tables or pinout text
-        # If filtered_pages is empty but we had candidates, keep the highest confidence ones
-        if filtered_pages:
+        # Keep only pages that survived filtering, plus any pages with pinout tables.
+        pages = list(dict.fromkeys(filtered_pages))
+        for page_num in pages_with_pinout_tables:
+            if page_num not in pages:
+                pages.append(page_num)
+
+        # If filtering removed everything, fall back to the original candidate pages
+        # rather than returning an empty page list.
+        if not pages and extracted.pages:
             pages = extracted.pages
-        elif extracted.pages:
-            # Fallback: keep pages that were in candidates (don't lose everything)
-            pages = extracted.pages
-        else:
-            pages = []
 
         return FilteredContent(
             pages=pages,
