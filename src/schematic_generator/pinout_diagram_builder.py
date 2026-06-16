@@ -29,6 +29,62 @@ from .pin_layout import PinPosition, layout_pins
 logger = logging.getLogger(__name__)
 
 
+def _normalize_schematic_bodyline_name(glb_path: str) -> None:
+    """
+    Ensure the BodyLine node has exactly one child named "BodyLine".
+
+    The reference schematic.glb hierarchy is:
+        BodyLine
+        └── BodyLine [mesh]
+
+    CadQuery requires unique names, so the inner shape is built as
+    "BodyLine_shape". The optimizer may then collapse the wrapper entirely,
+    leaving BodyLine as a leaf with a mesh. This function restores the
+    correct two-level structure in both cases:
+
+    Case A — wrapper still present (BodyLine → BodyLine_shape [mesh]):
+        Rename the child to "BodyLine".
+
+    Case B — optimizer collapsed to leaf (BodyLine [mesh]):
+        Inject a new child "BodyLine" that carries the mesh; clear the
+        mesh reference from the BodyLine container node.
+    """
+    try:
+        from pygltflib import GLTF2, Node
+    except ImportError:
+        return
+
+    gltf = GLTF2().load_binary(str(glb_path))
+    if not gltf.scenes or not gltf.scenes[0].nodes:
+        return
+
+    package_index = gltf.scenes[0].nodes[0]
+    bodyline_index = None
+    for child_index in (gltf.nodes[package_index].children or []):
+        if gltf.nodes[child_index].name == "BodyLine":
+            bodyline_index = child_index
+            break
+    if bodyline_index is None:
+        return
+
+    bodyline_node = gltf.nodes[bodyline_index]
+
+    if bodyline_node.mesh is not None:
+        # Case B: optimizer collapsed everything into the BodyLine leaf.
+        # Inject a child node that carries the mesh.
+        child = Node(name="BodyLine", mesh=bodyline_node.mesh)
+        child_index = len(gltf.nodes)
+        gltf.nodes.append(child)
+        bodyline_node.mesh = None
+        bodyline_node.children = [child_index]
+    else:
+        # Case A: child wrapper is still present; rename it.
+        for child_index in (bodyline_node.children or []):
+            gltf.nodes[child_index].name = "BodyLine"
+
+    gltf.save(str(glb_path))
+
+
 class PinoutDiagramBuilder:
     """
     Build pinout diagram symbols using cadquery.
@@ -127,39 +183,45 @@ class PinoutDiagramBuilder:
         """
         Build wireframe border for IC body.
 
-        Creates thin rectangles on each side of the body.
-        Returns BodyLine assembly with 4 border children.
-        """
-        body_line = cq.Assembly(name="BodyLine")
+        Creates a single fused border shape (4 sides united) to match the
+        reference schematic.glb which has one BodyLine [mesh] child.
 
+        Hierarchy:
+        BodyLine
+        └── BodyLine [mesh]
+        """
         bw = self.params.body_width
         bh = self.params.body_height
         thick = self.params.body_geometry.border_thickness
         height = self.params.body_geometry.border_height
 
-        # Top border
-        top = cq.Workplane("XY").center(0, bh / 2).rect(bw, thick).extrude(height)
-        body_line.add(top, name="BodyLine_Top", color=self.BLACK_COLOR)
+        # Build 4 sides and fuse into a single mesh
+        top    = cq.Workplane("XY").center(0,        bh / 2).rect(bw, thick).extrude(height)
+        bottom = cq.Workplane("XY").center(0,       -bh / 2).rect(bw, thick).extrude(height)
+        left   = cq.Workplane("XY").center(-bw / 2,       0).rect(thick, bh).extrude(height)
+        right  = cq.Workplane("XY").center( bw / 2,       0).rect(thick, bh).extrude(height)
+        border = top.union(bottom).union(left).union(right)
 
-        # Bottom border
-        bottom = cq.Workplane("XY").center(0, -bh / 2).rect(bw, thick).extrude(height)
-        body_line.add(bottom, name="BodyLine_Bottom", color=self.BLACK_COLOR)
-
-        # Left border
-        left = cq.Workplane("XY").center(-bw / 2, 0).rect(thick, bh).extrude(height)
-        body_line.add(left, name="BodyLine_Left", color=self.BLACK_COLOR)
-
-        # Right border
-        right = cq.Workplane("XY").center(bw / 2, 0).rect(thick, bh).extrude(height)
-        body_line.add(right, name="BodyLine_Right", color=self.BLACK_COLOR)
-
+        body_line = cq.Assembly(name="BodyLine")
+        # CadQuery requires globally unique names; use a temp name here.
+        # save_glb() renames this to "BodyLine" after export so the final
+        # hierarchy matches the reference: BodyLine > BodyLine [mesh].
+        body_line.add(border, name="BodyLine_shape", color=self.BLACK_COLOR)
         return body_line
 
     def build_pin(
         self, pin_pos: PinPosition, pin_name: str = "", pin_number: str = ""
     ) -> cq.Assembly:
         """
-        Build pin assembly containing all components (leg, text, pinName, boundingBox).
+        Build pin assembly.
+
+        Hierarchy matches reference schematic.glb:
+        <pin_number>
+        ├── leg [mesh]
+        ├── pinPoint [mesh]
+        ├── text [mesh]
+        ├── boundingBox [mesh]
+        └── pinName [mesh]
 
         Args:
             pin_pos: Pin position from layout algorithm
@@ -169,101 +231,86 @@ class PinoutDiagramBuilder:
         Returns:
             Single assembly containing all pin components as children
         """
-        # Create pin assembly with all components as nested children
         pin_assy = cq.Assembly(name=pin_number)
 
-        # Pin leg (thin rectangle)
         leg_length = self.params.pin_geometry.leg_length
         leg_width = self.params.pin_geometry.leg_width
         leg_thickness = self.params.pin_geometry.leg_thickness
 
-        # Create pin leg with correct dimensions based on side
-        # Pin legs start at body edge and extend outwards only
-        # Left/Right side: Horizontal pin (left to right) - length is X dimension
-        # Top/Bottom side: Vertical pin (top to bottom) - length is Y dimension
+        # 1. leg — thin rectangle extending from body edge outward
         if pin_pos.side in ["left", "right"]:
-            # Horizontal pin: leg_length in X, leg_width in Y
-            # Offset rectangle by half length so leg starts at body edge
-            # Left pins: offset +leg_length/2 (leg extends left from body edge)
-            # Right pins: offset -leg_length/2 (leg extends right from body edge)
             offset = leg_length / 2 if pin_pos.side == "right" else -leg_length / 2
             pin_leg = (cq.Workplane("XY").center(pin_pos.x + offset, pin_pos.y)
-                       .rect(leg_length, leg_width)
-                       .extrude(leg_thickness))
+                       .rect(leg_length, leg_width).extrude(leg_thickness))
         else:  # top or bottom
-            # Vertical pin: swap dimensions - leg_width in X, leg_length in Y
-            # Offset rectangle by half length so leg starts at body edge
-            # Top pins: offset -leg_length/2 (leg extends up from body edge)
-            # Bottom pins: offset +leg_length/2 (leg extends down from body edge)
             offset = -leg_length / 2 if pin_pos.side == "bottom" else leg_length / 2
             pin_leg = (cq.Workplane("XY").center(pin_pos.x, pin_pos.y + offset)
-                       .rect(leg_width, leg_length)
-                       .extrude(leg_thickness))
-
+                       .rect(leg_width, leg_length).extrude(leg_thickness))
         pin_assy.add(pin_leg, name="leg", color=self.PIN_COLOR)
 
-        # Pin name text (function name) - Vertical on top/bottom, horizontal on left/right
-        if pin_name:
-            txt_size = self.params.pin_geometry.pin_name_size
-            txt_height = self.params.pin_geometry.pin_name_height
-            name_assy = cq.Assembly(name="%s_text" % pin_number)
+        # 2. pinPoint — small dot at the outer tip of the leg (wire connection point)
+        dot_r = leg_width * 1.5
+        if pin_pos.side == "left":
+            pt_x, pt_y = pin_pos.x - leg_length, pin_pos.y
+        elif pin_pos.side == "right":
+            pt_x, pt_y = pin_pos.x + leg_length, pin_pos.y
+        elif pin_pos.side == "top":
+            pt_x, pt_y = pin_pos.x, pin_pos.y + leg_length
+        else:  # bottom
+            pt_x, pt_y = pin_pos.x, pin_pos.y - leg_length
+        pin_point = cq.Workplane("XY").center(pt_x, pt_y).circle(dot_r).extrude(leg_thickness)
+        pin_assy.add(pin_point, name="pinPoint", color=self.PIN_COLOR)
 
-            # For top/bottom pins, stack characters vertically (without rotation)
-            if pin_pos.side in ["top", "bottom"]:
-                # Stack characters from outer edge inward
-                # Top edge: chars stacked downward (decreasing Y)
-                # Bottom edge: chars stacked upward (increasing Y)
-                start_y = pin_pos.text_y
-                direction = -1 if pin_pos.side == "top" else 1
-                char_spacing = txt_size * 1.2  # Spacing between characters
-
-                for i, char in enumerate(pin_name[:30]):
-                    char_y = start_y + (i * char_spacing * direction)
-                    char_wp = cq.Workplane("XY").center(
-                        pin_pos.text_x, char_y
-                    ).text(char, txt_size, txt_height, halign="center")
-                    name_assy.add(char_wp, color=self.BLACK_COLOR)
-            else:
-                # Left/right pins: normal horizontal text
-                pin_name_text = cq.Workplane("XY").center(
-                    pin_pos.text_x, pin_pos.text_y
-                ).text(pin_name[:30], txt_size, txt_height, halign=pin_pos.text_halign)
-                name_assy.add(pin_name_text, color=self.BLACK_COLOR)
-
-            pin_assy.add(name_assy, name="pinName")
-
-        # Pin number text - Vertical on top/bottom, horizontal on left/right
+        # 3. text — pin number label
         num_size = self.params.pin_geometry.pin_num_size
         num_height = self.params.pin_geometry.pin_num_height
-        num_assy = cq.Assembly(name="%s_num" % pin_number)
-
-        # For top/bottom pins, stack characters vertically (without rotation)
+        num_assy = cq.Assembly(name="text")
         if pin_pos.side in ["top", "bottom"]:
-            # Stack characters from outer edge inward
-            # Top edge: chars stacked downward (decreasing Y)
-            # Bottom edge: chars stacked upward (increasing Y)
-            start_y = pin_pos.num_y
-            if pin_number in ["9", "25"]:  # Debug for first top/bottom pins
-                print(f"\n=== SCHEMATIC BUILDER DEBUG ===")
-                print(f"Pin {pin_number} ({pin_pos.side} side):")
-                print(f"  Using num_y = {start_y:.2f} (from pin_layout.py)")
             direction = -1 if pin_pos.side == "top" else 1
-            char_spacing = num_size * 1.2  # Spacing between characters
-
+            char_spacing = num_size * 1.2
             for i, char in enumerate(pin_number):
-                char_y = start_y + (i * char_spacing * direction)
+                char_y = pin_pos.num_y + (i * char_spacing * direction)
                 char_wp = cq.Workplane("XY").center(
                     pin_pos.num_x, char_y
                 ).text(char, num_size, num_height, halign="center")
                 num_assy.add(char_wp, color=self.BLACK_COLOR)
         else:
-            # Left/right pins: normal horizontal text
             num_text = cq.Workplane("XY").center(
                 pin_pos.num_x, pin_pos.num_y
             ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
             num_assy.add(num_text, color=self.BLACK_COLOR)
-
         pin_assy.add(num_assy, name="text")
+
+        # 4. boundingBox — invisible selection area covering the label region
+        bbox_w = max(len(pin_number) * num_size * 0.8, num_size * 1.5)
+        bbox_h = num_size * 1.5
+        bbox = cq.Workplane("XY").center(
+            pin_pos.num_x, pin_pos.num_y
+        ).rect(bbox_w, bbox_h).extrude(0.001)
+        bbox_assy = cq.Assembly(name="boundingBox")
+        bbox_assy.add(bbox, color=cq.Color(1, 1, 1, 0))
+        pin_assy.add(bbox_assy, name="boundingBox")
+
+        # 5. pinName — pin function name label
+        if pin_name:
+            txt_size = self.params.pin_geometry.pin_name_size
+            txt_height = self.params.pin_geometry.pin_name_height
+            name_assy = cq.Assembly(name="pinName")
+            if pin_pos.side in ["top", "bottom"]:
+                direction = -1 if pin_pos.side == "top" else 1
+                char_spacing = txt_size * 1.2
+                for i, char in enumerate(pin_name[:30]):
+                    char_y = pin_pos.text_y + (i * char_spacing * direction)
+                    char_wp = cq.Workplane("XY").center(
+                        pin_pos.text_x, char_y
+                    ).text(char, txt_size, txt_height, halign="center")
+                    name_assy.add(char_wp, color=self.BLACK_COLOR)
+            else:
+                pin_name_text = cq.Workplane("XY").center(
+                    pin_pos.text_x, pin_pos.text_y
+                ).text(pin_name[:30], txt_size, txt_height, halign=pin_pos.text_halign)
+                name_assy.add(pin_name_text, color=self.BLACK_COLOR)
+            pin_assy.add(name_assy, name="pinName")
 
         return pin_assy
 
@@ -325,28 +372,45 @@ class PinoutDiagramBuilder:
         """
         Build designator label ("U").
 
+        Hierarchy:
+        DesignatorName
+        ├── Body [mesh]
+        └── BoundingBox [mesh]
+
         Returns:
             Assembly with "U" text above body
         """
         size = self.params.body_geometry.designator_size
         height = self.params.body_geometry.designator_height
         offset = self.params.body_geometry.designator_offset
+        text_y = self.params.body_height / 2 + offset
 
-        designator = cq.Workplane("XY").center(
-            0, self.params.body_height / 2 + offset
-        ).text(
-            self.params.body_geometry.designator_name,
-            size,
-            height,
+        designator_assy = cq.Assembly(name="DesignatorName")
+
+        text_shape = cq.Workplane("XY").center(0, text_y).text(
+            self.params.body_geometry.designator_name, size, height,
         )
+        body_assy = cq.Assembly(name="Body")
+        body_assy.add(text_shape, color=self.BLACK_COLOR)
+        designator_assy.add(body_assy, name="Body")
 
-        assy = cq.Assembly(name="DesignatorName")
-        assy.add(designator, color=self.BLACK_COLOR)
-        return assy
+        bbox = cq.Workplane("XY").center(0, text_y).rect(
+            size * 2.0, size * 1.5
+        ).extrude(0.001)
+        bbox_assy = cq.Assembly(name="BoundingBox")
+        bbox_assy.add(bbox, color=cq.Color(1, 1, 1, 0))
+        designator_assy.add(bbox_assy, name="BoundingBox")
+
+        return designator_assy
 
     def build_package_value(self) -> cq.Assembly:
         """
         Build package value label (component name).
+
+        Hierarchy:
+        PackageValue
+        ├── Body [mesh]
+        └── BoundingBox [mesh]
 
         Returns:
             Assembly with component name text above body
@@ -354,17 +418,23 @@ class PinoutDiagramBuilder:
         size = self.params.body_geometry.value_size
         height = self.params.body_geometry.value_height
         offset = self.params.body_geometry.value_offset
-
-        # Truncate name if too long
         name = self.component_name[:30]
+        text_y = self.params.body_height / 2 + offset
 
-        value = cq.Workplane("XY").center(
-            0, self.params.body_height / 2 + offset
-        ).text(name, size, height)
+        value_assy = cq.Assembly(name="PackageValue")
 
-        assy = cq.Assembly(name="PackageValue")
-        assy.add(value, color=self.BLACK_COLOR)
-        return assy
+        text_shape = cq.Workplane("XY").center(0, text_y).text(name, size, height)
+        body_assy = cq.Assembly(name="Body")
+        body_assy.add(text_shape, color=self.BLACK_COLOR)
+        value_assy.add(body_assy, name="Body")
+
+        bbox_w = max(len(name) * size * 0.6, size * 2)
+        bbox = cq.Workplane("XY").center(0, text_y).rect(bbox_w, size * 1.5).extrude(0.001)
+        bbox_assy = cq.Assembly(name="BoundingBox")
+        bbox_assy.add(bbox, color=cq.Color(1, 1, 1, 0))
+        value_assy.add(bbox_assy, name="BoundingBox")
+
+        return value_assy
 
     def build_schematic(self, pin_data: List[Dict[str, Any]]) -> cq.Assembly:
         """
@@ -379,30 +449,28 @@ class PinoutDiagramBuilder:
         # Main package assembly
         package_assy = cq.Assembly(name="Package")
 
-        # 1. Add body border
-        logger.info("Building body border...")
-        body_line = self.build_body_border()
-        package_assy.add(body_line, name="BodyLine")
+        # Order matches reference schematic.glb:
+        # DesignatorName → PackageValue → BodyLine → Legs
 
-        # 2. Add pin markers (pin 1 dot and notch)
-        logger.info("Building pin markers...")
-        markers = self.build_pin_markers()
-        package_assy.add(markers, name="PinMarkers")
-
-        # 3. Add all pins
-        logger.info("Building pins...")
-        legs = self.build_all_pins(pin_data)
-        package_assy.add(legs, name="Legs")
-
-        # 4. Add designator label
+        # 1. DesignatorName
         logger.info("Adding designator label...")
         designator = self.build_designator()
         package_assy.add(designator, name="DesignatorName")
 
-        # 5. Add package value label
+        # 2. PackageValue
         logger.info("Adding package value label...")
         value = self.build_package_value()
         package_assy.add(value, name="PackageValue")
+
+        # 3. BodyLine (single fused border mesh)
+        logger.info("Building body border...")
+        body_line = self.build_body_border()
+        package_assy.add(body_line, name="BodyLine")
+
+        # 4. Legs
+        logger.info("Building pins...")
+        legs = self.build_all_pins(pin_data)
+        package_assy.add(legs, name="Legs")
 
         logger.info(
             "Schematic assembly built: %d top-level components" % len(package_assy.children)
@@ -436,6 +504,7 @@ class PinoutDiagramBuilder:
                     "Optimized GLB hierarchy: %d -> %d nodes"
                     % (original_nodes, simplified_nodes)
                 )
+                _normalize_schematic_bodyline_name(output_path)
             except Exception as exc:
                 logger.warning("Skipping GLB hierarchy optimization: %s" % exc)
 
