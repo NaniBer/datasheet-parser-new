@@ -281,12 +281,27 @@ class PinoutDiagramBuilder:
             num_assy.add(num_text, color=self.BLACK_COLOR)
         pin_assy.add(num_assy, name="text")
 
-        # 4. boundingBox — invisible selection area covering the label region
-        bbox_w = max(len(pin_number) * num_size * 0.8, num_size * 1.5)
-        bbox_h = num_size * 1.5
-        bbox = cq.Workplane("XY").center(
-            pin_pos.num_x, pin_pos.num_y
-        ).rect(bbox_w, bbox_h).extrude(0.001)
+        # 4. boundingBox — invisible selection area covering the leg region
+        #    Matches reference schematic.glb: spans the full leg length × 1.24 mm,
+        #    centered at the midpoint of the leg (same X/Y as leg center).
+        bbox_fixed_h = 1.24  # fixed height matching reference (mm)
+        if pin_pos.side == "left":
+            bbox_cx = pin_pos.x - leg_length / 2
+            bbox_cy = pin_pos.y
+            bbox_w, bbox_h = leg_length, bbox_fixed_h
+        elif pin_pos.side == "right":
+            bbox_cx = pin_pos.x + leg_length / 2
+            bbox_cy = pin_pos.y
+            bbox_w, bbox_h = leg_length, bbox_fixed_h
+        elif pin_pos.side == "top":
+            bbox_cx = pin_pos.x
+            bbox_cy = pin_pos.y + leg_length / 2
+            bbox_w, bbox_h = bbox_fixed_h, leg_length
+        else:  # bottom
+            bbox_cx = pin_pos.x
+            bbox_cy = pin_pos.y - leg_length / 2
+            bbox_w, bbox_h = bbox_fixed_h, leg_length
+        bbox = cq.Workplane("XY").center(bbox_cx, bbox_cy).rect(bbox_w, bbox_h).extrude(0.01)
         bbox_assy = cq.Assembly(name="boundingBox")
         bbox_assy.add(bbox, color=cq.Color(1, 1, 1, 0))
         pin_assy.add(bbox_assy, name="boundingBox")
