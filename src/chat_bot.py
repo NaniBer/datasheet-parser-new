@@ -144,7 +144,7 @@ def build_table_extraction_prompt(
                 "3. VERIFY COUNT: Pin count must match package type (SOIC-16 = 16 pins, LCCC-20 = 20 pins)\n"
                 "4. NO DUPLICATES: Each pin number within a variant should appear only once\n"
                 "5. HANDLE SYMBOLS: Convert '—', '-', or empty to 'NC' (No Connection)\n"
-                "6. PACKAGE FEATURES ARE NOT PINS: Exposed pads, thermal pads, die pads, center pads, and similar package-only features are not electrical pins. Do not include them in pins or pin_count unless the datasheet explicitly numbers them as a real pin.\n"
+                "6. PACKAGE FEATURES ARE NOT PINS: Exposed pads, thermal pads, die pads, center pads, and similar package-only features are not electrical pins. Do not include them in pins or pin_count UNLESS the datasheet explicitly assigns them a pin number (e.g. 'EP = 25' or 'Exposed Pad (Pin 25)'). In that case, include them as a normal pin with that number.\n"
                 "7. BROKEN ROWS: Handle rows with incomplete data (e.g., ['16'], ['11']):\n"
                 "   - These represent NC pins with just a pin number\n"
                 "   - Use the pin number and set name='NC', function='none'\n"
@@ -276,7 +276,7 @@ def build_pin_extraction_prompt(
         "3. Map every physical pin to its name and function.\n"
         "4. Note the extraction method (Table, Diagram, or Mixed).\n"
         "5. If multiple package variants are present, select the best-supported package and record its zero-based index in selected_package_index.\n"
-        "6. Do not count exposed pads, thermal pads, die pads, center pads, or similar package-only features as pins.\n"
+        "6. Do not count exposed pads, thermal pads, die pads, center pads, or similar package-only features as pins, unless the datasheet explicitly assigns them a pin number (e.g. 'EP = 25'). In that case, include them as a normal pin with that number.\n"
     )
 
     # CRITICAL INSTRUCTION: Do not generate sequential pin names.
@@ -314,7 +314,7 @@ def build_pin_extraction_prompt(
         "   - SOIC packages: Pin 1 is top-left corner. Numbering is counter-clockwise.\n"
         "   - TQFP/LQFP packages: Pin 1 is top-left corner. Numbering is counter-clockwise.\n"
         "   - QFN packages: Pin 1 is top-left corner. Numbering is counter-clockwise.\n"
-        "4. PACKAGE FEATURES ARE NOT PINS: Exposed pads, thermal pads, die pads, center pads, and similar package-only features are not electrical pins. Do not include them in pins or pin_count unless the datasheet explicitly numbers them as a real pin.\n"
+        "4. PACKAGE FEATURES ARE NOT PINS: Exposed pads, thermal pads, die pads, center pads, and similar package-only features are not electrical pins. Do not include them in pins or pin_count UNLESS the datasheet explicitly assigns them a pin number (e.g. 'EP = 25' or 'Exposed Pad (Pin 25)'). In that case, include them as a normal pin with that number.\n"
         "5. PACKAGE ACCURACY: Extract package type from headings (e.g., '8-Lead SOIC', '28-Pin DIP') "
         "and dimensions from mechanical drawings.\n"
         "6. PACKAGE VARIANT MATCHING: If the datasheet contains multiple package variants, "

@@ -176,10 +176,6 @@ class PinLayout:
             Pin 11  Pin 10  ...  Pin 12
             Pin 1            ...            Pin 23
         """
-        print(f"\n=== DEBUG QUAD PINS (TQFP/LQFP/QFN) ===")
-        print(f"Package type: {self.params.package_type}")
-        print(f"Using _layout_quad_pins method")
-
         positions = []
         counts = list(self.params.pins_per_side[:4]) if self.params.pins_per_side else []
         if len(counts) < 4 or not any(counts[2:]):
@@ -213,12 +209,6 @@ class PinLayout:
             ))
 
         # BOTTOM SIDE: pins left_count to left_count+bottom_count-1 (left to right)
-        print(f"\n=== DEBUG BOTTOM SIDE ===")
-        print(f"pin_name_offset: {self.params.pin_geometry.pin_name_offset}")
-        print(f"pin_num_offset: {self.params.pin_geometry.pin_num_offset}")
-        print(f"extra_bottom_name_offset: {self.params.pin_geometry.extra_bottom_name_offset}")
-        print(f"extra_bottom_num_offset: {self.params.pin_geometry.extra_bottom_num_offset}")
-
         for i in range(bottom_count):
             x = -(self.params.body_width / 2) + top_margin + (i * self.params.pin_pitch)
             y = -self.params.body_height / 2
@@ -228,12 +218,6 @@ class PinLayout:
             text_y = y - self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_bottom_name_offset
             num_x = x
             num_y = y - self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_bottom_num_offset
-
-            if i == 0:  # Print first pin values for verification
-                print(f"First bottom pin (pin {pin_idx+1}):")
-                print(f"  x={x:.2f}, y={y:.2f}")
-                print(f"  text_y = {y} - {self.params.pin_geometry.pin_name_offset} + {self.params.pin_geometry.extra_bottom_name_offset} = {text_y:.2f}")
-                print(f"  num_y = {y} - {self.params.pin_geometry.pin_num_offset} + {self.params.pin_geometry.extra_bottom_num_offset} = {num_y:.2f}")
 
             positions.append(PinPosition(
                 pin_index=pin_idx,
@@ -275,12 +259,6 @@ class PinLayout:
             ))
 
         # TOP SIDE: pins left_count+bottom_count+right_count to total-1 (right to left)
-        print(f"\n=== DEBUG TOP SIDE ===")
-        print(f"pin_name_offset: {self.params.pin_geometry.pin_name_offset}")
-        print(f"pin_num_offset: {self.params.pin_geometry.pin_num_offset}")
-        print(f"extra_top_name_offset: {self.params.pin_geometry.extra_top_name_offset}")
-        print(f"extra_top_num_offset: {self.params.pin_geometry.extra_top_num_offset}")
-
         for i in range(top_count):
             x = (self.params.body_width / 2) - top_margin - (i * self.params.pin_pitch)
             y = self.params.body_height / 2
@@ -290,12 +268,6 @@ class PinLayout:
             text_y = y + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_top_name_offset
             num_x = x
             num_y = y + self.params.pin_geometry.pin_num_offset + self.params.pin_geometry.extra_top_num_offset
-
-            if i == 0:  # Print first pin values for verification
-                print(f"First top pin (pin {pin_idx+1}):")
-                print(f"  x={x:.2f}, y={y:.2f}")
-                print(f"  text_y = {y} + {self.params.pin_geometry.pin_name_offset} + {self.params.pin_geometry.extra_top_name_offset} = {text_y:.2f}")
-                print(f"  num_y = {y} + {self.params.pin_geometry.pin_num_offset} + {self.params.pin_geometry.extra_top_num_offset} = {num_y:.2f}")
 
             positions.append(PinPosition(
                 pin_index=pin_idx,

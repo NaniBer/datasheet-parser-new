@@ -356,8 +356,8 @@ class PcbFootprintBuilder:
 
         x, y = pin_pos.x, pin_pos.y
 
-        # Check if through-hole (DIP) or surface mount (SOIC/TQFP/QFN)
-        is_through_hole = self.package_type.startswith("DIP")
+        # Check if through-hole (DIP/CDIP) or surface mount (SOIC/TQFP/QFN)
+        is_through_hole = self.package_type.upper().startswith(("DIP", "CDIP"))
 
         if is_through_hole:
             # For through-hole packages, preserve the reference GLB order exactly:
@@ -586,7 +586,7 @@ class PcbFootprintBuilder:
                 is_valid, hierarchy_errors = validate_pcb_footprint_glb(
                     output_path,
                     pin_count=self.pin_count,
-                    through_hole=self.package_type.startswith("DIP"),
+                    through_hole=self.package_type.upper().startswith(("DIP", "CDIP")),
                 )
             except Exception as exc:
                 logger.warning("Skipping PCB footprint hierarchy validation: %s" % exc)
@@ -598,8 +598,8 @@ class PcbFootprintBuilder:
                     )
                     return False
 
-            # Keep DIP workflow output structurally aligned with the reference 2d.glb.
-            if self.package_type.startswith("DIP"):
+            # Keep DIP/CDIP workflow output structurally aligned with the reference 2d.glb.
+            if self.package_type.upper().startswith(("DIP", "CDIP")):
                 try:
                     is_similar, similarity_errors = validate_glb_similarity_to_reference(
                         output_path

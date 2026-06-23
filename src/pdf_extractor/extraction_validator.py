@@ -141,10 +141,17 @@ def _validate_package(
         pin_name = _coerce_pin_name(pin)
 
         if is_non_pin_feature_name(pin_name):
-            errors.append(
-                f"{label} pin {pin_index} is a non-pin package feature ({pin_name!r}) and must not be included in pins"
-            )
-            continue
+            if pin_number is not None and pin_number > 0:
+                # Thermal/exposed pad with an explicit pin number — valid connection.
+                warnings.append(
+                    f"{label} pin {pin_index} is a package feature ({pin_name!r}) with explicit number {pin_number}; treating as a real pin"
+                )
+                # fall through — validate it like any other pin
+            else:
+                errors.append(
+                    f"{label} pin {pin_index} is a non-pin package feature ({pin_name!r}) and must not be included in pins"
+                )
+                continue
 
         if pin_number is None or pin_number <= 0:
             errors.append(f"{label} pin {pin_index} has an invalid pin number")

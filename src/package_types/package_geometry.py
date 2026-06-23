@@ -477,15 +477,6 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
     width = 10.0 + (pins_per_side * pitch)  # Increased from 6.0 for better visibility
     height = width
 
-    print(f"\n=== DEBUG QFN PARAMETERS ===")
-    print(f"pin_count: {pin_count}, pins_per_side: {pins_per_side}")
-    print(f"body_width: {width}, body_height: {height}")
-    print(f"pin_pitch: {pitch}")
-    print(f"Setting extra_bottom_name_offset: -1.0")
-    print(f"Setting extra_bottom_num_offset: 5.0")
-    print(f"Setting extra_top_name_offset: -1.0")
-    print(f"Setting extra_top_num_offset: 5.0")
-
     return SchematicParameters(
         package_type=PackageType.QFN,
         pin_count=pin_count,

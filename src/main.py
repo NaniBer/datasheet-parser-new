@@ -593,7 +593,8 @@ def process_datasheet(
     layout_mode: bool = False,
     pcb_2d_mode: bool = False,
     min_confidence: int = 5,
-    verbose: bool = False
+    verbose: bool = False,
+    package_index: Optional[int] = None,
 ) -> bool:
     """
     Main processing pipeline.
@@ -676,6 +677,7 @@ def process_datasheet(
             selected_package = select_package_variant(
                 pin_data,
                 part_number=resolved_part_number,
+                package_index=package_index,
             )
             selected_type = selected_package.package.get("type", "Unknown")
             print(
@@ -697,6 +699,7 @@ def process_datasheet(
             package_type, pin_count, _, pin_data_list = pin_data_to_builder_format(
                 pin_data,
                 part_number=resolved_part_number,
+                package_index=package_index,
             )
             
             result = build_pcb_2d_schematic(
@@ -714,6 +717,7 @@ def process_datasheet(
                 output_path=str(output_path),
                 custom_layout=custom_layout,
                 part_number=resolved_part_number,
+                package_index=package_index,
             )
 
         if not result:
@@ -861,6 +865,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--package-index",
+        type=int,
+        default=None,
+        help="Zero-based index to force a specific package variant when multiple are extracted (e.g., 0 for first, 1 for second)"
+    )
+
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose output"
@@ -894,7 +905,8 @@ def main():
         layout_mode=args.layout_mode,
         pcb_2d_mode=args.pcb_2d,
         min_confidence=args.min_confidence,
-        verbose=args.verbose
+        verbose=args.verbose,
+        package_index=args.package_index,
     )
 
 

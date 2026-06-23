@@ -269,11 +269,16 @@ class PinoutDiagramBuilder:
             direction = -1 if pin_pos.side == "top" else 1
             char_spacing = num_size * 1.2
             for i, char in enumerate(pin_number):
+                if not char.strip():
+                    continue
                 char_y = pin_pos.num_y + (i * char_spacing * direction)
-                char_wp = cq.Workplane("XY").center(
-                    pin_pos.num_x, char_y
-                ).text(char, num_size, num_height, halign="center")
-                num_assy.add(char_wp, color=self.BLACK_COLOR)
+                try:
+                    char_wp = cq.Workplane("XY").center(
+                        pin_pos.num_x, char_y
+                    ).text(char, num_size, num_height, halign="center")
+                    num_assy.add(char_wp, color=self.BLACK_COLOR)
+                except (IndexError, Exception):
+                    pass
         else:
             num_text = cq.Workplane("XY").center(
                 pin_pos.num_x, pin_pos.num_y
@@ -315,11 +320,16 @@ class PinoutDiagramBuilder:
                 direction = -1 if pin_pos.side == "top" else 1
                 char_spacing = txt_size * 1.2
                 for i, char in enumerate(pin_name[:30]):
+                    if not char.strip():  # skip whitespace — CadQuery crashes on spaces
+                        continue
                     char_y = pin_pos.text_y + (i * char_spacing * direction)
-                    char_wp = cq.Workplane("XY").center(
-                        pin_pos.text_x, char_y
-                    ).text(char, txt_size, txt_height, halign="center")
-                    name_assy.add(char_wp, color=self.BLACK_COLOR)
+                    try:
+                        char_wp = cq.Workplane("XY").center(
+                            pin_pos.text_x, char_y
+                        ).text(char, txt_size, txt_height, halign="center")
+                        name_assy.add(char_wp, color=self.BLACK_COLOR)
+                    except (IndexError, Exception):
+                        pass  # skip characters that CadQuery can't render
             else:
                 pin_name_text = cq.Workplane("XY").center(
                     pin_pos.text_x, pin_pos.text_y

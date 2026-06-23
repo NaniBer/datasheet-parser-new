@@ -330,8 +330,10 @@ def _parse_table_rows(
         if not pin_name:
             continue
 
-        if is_non_pin_feature_name(pin_name):
-            continue
+        # Thermal/exposed pads without a pin number are already skipped above.
+        # If is_non_pin_feature_name matches here, pin_numbers is guaranteed non-empty,
+        # meaning the datasheet explicitly numbered this pad (e.g. QFN EP = pin 25).
+        # Treat it as a real electrical pin — do not skip.
 
         function = _extract_function(pin_name)
         for number in pin_numbers:

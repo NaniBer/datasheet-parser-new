@@ -186,7 +186,12 @@ class LLMClient:
                     for pin_data in pins_data:
                         pin_name = str(pin_data.get("name", "") or "").strip()
                         if is_non_pin_feature_name(pin_name):
-                            continue
+                            # Only skip if no explicit pin number is assigned.
+                            # Thermal/exposed pads with a real number (e.g. EP=25)
+                            # are legitimate electrical connections.
+                            raw_number = _coerce_pin_number(pin_data.get("number"))
+                            if raw_number is None or raw_number <= 0:
+                                continue
 
                         pin_number = _coerce_pin_number(pin_data.get("number"))
 
@@ -233,7 +238,9 @@ class LLMClient:
                 for pin_data in pins_data:
                     pin_name = str(pin_data.get("name", "") or "").strip()
                     if is_non_pin_feature_name(pin_name):
-                        continue
+                        raw_number = _coerce_pin_number(pin_data.get("number"))
+                        if raw_number is None or raw_number <= 0:
+                            continue
 
                     pin_number = _coerce_pin_number(pin_data.get("number"))
 
