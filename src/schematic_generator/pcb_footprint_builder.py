@@ -27,6 +27,7 @@ from ..package_types import (
     get_schematic_parameters,
 )
 from ..core import (
+    inject_pcb_footprint_extras,
     normalize_pcb_footprint_bodyline_names,
     optimize_glb_hierarchy,
     validate_glb_similarity_to_reference,
@@ -41,14 +42,15 @@ logger = logging.getLogger(__name__)
 class PcbFootprintBuilder:
     """Build PCB footprint symbols using cadquery (manufacturing layout)."""
 
-    # Colors matching 2d.glb materials
-    WHITE_COLOR = cq.Color(1.0, 1.0, 1.0, 1.0)
-    TRANSPARENT_COLOR = cq.Color(1.0, 1.0, 1.0, 0.0)
-    SUBSTRATE_COLOR = cq.Color(0.09, 0.02, 0.17, 1.0)  # Deep purple/blue
-    COPPER_COLOR = cq.Color(1.0, 1.0, 0.0, 1.0)  # Yellow
-    RED_COLOR = cq.Color(1.0, 0.0, 0.0, 1.0)  # Red for copper pads
-    BROWN_COLOR = cq.Color(0.22, 0.12, 0.00, 1.0)  # Solder mask
-    BLACK_COLOR = cq.Color(0.0, 0.0, 0.0, 1.0)  # Text
+    # Colors matching 2d.glb materials exactly
+    WHITE_COLOR = cq.Color(1.0, 1.0, 1.0, 1.0)          # silk text / silk BodyLine
+    TRANSPARENT_COLOR = cq.Color(1.0, 1.0, 1.0, 0.0)    # BoundingBox (alpha=0)
+    PURPLE_COLOR = cq.Color(0.093, 0.015, 0.165, 1.0)   # PackageValue text (dark purple)
+    YELLOW_COLOR = cq.Color(1.0, 1.0, 0.0, 1.0)         # fab BodyLine / fab marker
+    RED_COLOR = cq.Color(1.0, 0.0, 0.0, 1.0)            # Copper pads
+    BROWN_COLOR = cq.Color(0.220, 0.122, 0.002, 1.0)    # SolderMask (dark brown)
+    BLACK_COLOR = cq.Color(0.0, 0.0, 0.0, 1.0)          # HoleCylinderPin
+    MAGENTA_COLOR = cq.Color(0.831, 0.005, 0.913, 1.0)  # crtyd BodyLine
 
     # PCB 2D geometry parameters (matching 2d.glb)
     SOLDER_MASK_DIAMETER = 1.352  # mm (largest circle)
@@ -147,25 +149,25 @@ class PcbFootprintBuilder:
         top_line = cq.Workplane("XY").center(0, body_height / 2).rect(
             top_line_length, line_thickness
         ).extrude(line_height)
-        fab_layer.add(top_line, name="BodyLine_Top", color=self.WHITE_COLOR)
+        fab_layer.add(top_line, name="BodyLine_Top", color=self.YELLOW_COLOR)
 
         # Bottom line
         bottom_line = cq.Workplane("XY").center(0, -body_height / 2).rect(
             top_line_length, line_thickness
         ).extrude(line_height)
-        fab_layer.add(bottom_line, name="BodyLine_Bottom", color=self.WHITE_COLOR)
+        fab_layer.add(bottom_line, name="BodyLine_Bottom", color=self.YELLOW_COLOR)
 
         # Left line
         left_line = cq.Workplane("XY").center(-body_width / 2, 0).rect(
             line_thickness, left_line_length
         ).extrude(line_height)
-        fab_layer.add(left_line, name="BodyLine_Left", color=self.WHITE_COLOR)
+        fab_layer.add(left_line, name="BodyLine_Left", color=self.YELLOW_COLOR)
 
         # Right line
         right_line = cq.Workplane("XY").center(body_width / 2, 0).rect(
             line_thickness, left_line_length
         ).extrude(line_height)
-        fab_layer.add(right_line, name="BodyLine_Right", color=self.WHITE_COLOR)
+        fab_layer.add(right_line, name="BodyLine_Right", color=self.YELLOW_COLOR)
         
         body_assy.add(fab_layer, name="fab_layer")
 
@@ -193,25 +195,25 @@ class PcbFootprintBuilder:
         crtyd_top = cq.Workplane("XY").center(0, body_height / 2).rect(
             top_line_length, line_thickness
         ).extrude(line_height)
-        crtyd_layer.add(crtyd_top, name="BodyLine_Top", color=self.WHITE_COLOR)
+        crtyd_layer.add(crtyd_top, name="BodyLine_Top", color=self.MAGENTA_COLOR)
 
         # Bottom line
         crtyd_bottom = cq.Workplane("XY").center(0, -body_height / 2).rect(
             top_line_length, line_thickness
         ).extrude(line_height)
-        crtyd_layer.add(crtyd_bottom, name="BodyLine_Bottom", color=self.WHITE_COLOR)
+        crtyd_layer.add(crtyd_bottom, name="BodyLine_Bottom", color=self.MAGENTA_COLOR)
 
         # Left line
         crtyd_left = cq.Workplane("XY").center(-body_width / 2, 0).rect(
             line_thickness, left_line_length
         ).extrude(line_height)
-        crtyd_layer.add(crtyd_left, name="BodyLine_Left", color=self.WHITE_COLOR)
+        crtyd_layer.add(crtyd_left, name="BodyLine_Left", color=self.MAGENTA_COLOR)
 
         # Right line
         crtyd_right = cq.Workplane("XY").center(body_width / 2, 0).rect(
             line_thickness, left_line_length
         ).extrude(line_height)
-        crtyd_layer.add(crtyd_right, name="BodyLine_Right", color=self.WHITE_COLOR)
+        crtyd_layer.add(crtyd_right, name="BodyLine_Right", color=self.MAGENTA_COLOR)
 
         body_assy.add(crtyd_layer, name="crtyd_layer")
 
@@ -288,7 +290,7 @@ class PcbFootprintBuilder:
         
         # Add as "Body" child
         body_assy = cq.Assembly(name="Body")
-        body_assy.add(text_body, color=self.WHITE_COLOR)
+        body_assy.add(text_body, color=self.PURPLE_COLOR)
         value_assy.add(body_assy, name="Body")
 
         # Create invisible bounding box for selection
@@ -335,7 +337,7 @@ class PcbFootprintBuilder:
             self.SILK_MARKER_RADIUS
         ).extrude(self.SILK_MARKER_HEIGHT)
         fab_marker_assy = cq.Assembly(name="fab_firstPinMarker")
-        fab_marker_assy.add(fab_marker, color=self.WHITE_COLOR)
+        fab_marker_assy.add(fab_marker, color=self.YELLOW_COLOR)
         markers_assy.add(fab_marker_assy)
 
         return markers_assy
@@ -428,14 +430,14 @@ class PcbFootprintBuilder:
             copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
             pin_assy.add(copper_pad_assy)
 
-        # Pin number text
+        # Pin number text (white, matching reference mat8)
         text_size = 0.8
         text_height = 0.2
         pin_text = cq.Workplane("XY").center(
             x, y
         ).text(pin_number, text_size, text_height, halign="center")
         pin_text_assy = cq.Assembly(name="text")
-        pin_text_assy.add(pin_text, color=self.BLACK_COLOR)
+        pin_text_assy.add(pin_text, color=self.WHITE_COLOR)
         pin_assy.add(pin_text_assy)
 
         return pin_assy
@@ -579,6 +581,17 @@ class PcbFootprintBuilder:
                     "Normalized PCB body line names to reference style: %d nodes"
                     % renamed_nodes
                 )
+                pin_position_map = {
+                    pos.pin_number: (pos.x, pos.y)
+                    for pos in self.pin_positions
+                }
+                extras_nodes = inject_pcb_footprint_extras(
+                    output_path,
+                    component_name=self.component_name,
+                    package_type=self.package_type,
+                    pin_position_map=pin_position_map,
+                )
+                logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:
                 logger.warning("Skipping GLB hierarchy optimization: %s" % exc)
 
