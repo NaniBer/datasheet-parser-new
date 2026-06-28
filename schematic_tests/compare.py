@@ -12,15 +12,25 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 
 COMPONENTS = [
-    ("74HC595",   "schematic_tests/74HC595.glb",    "compare/74HC595.glb"),
-    ("ATmega328p","schematic_tests/ATmega328p.glb",  "compare/ATmega328p.gltf"),
-    ("ESP32-C3",  "schematic_tests/ESP32-C3.glb",    "compare/ESP32-C3.glb"),
-    ("MCP3208",   "schematic_tests/MCP3208.glb",     "compare/MCP3208 .glb"),
-    ("TL072",     "schematic_tests/TL072.glb",       "compare/TL072.glb"),
-    ("AMS1117",   "schematic_tests/AMS1117.glb",     "compare/AMS1117.glb"),
-    ("CD4017",    "schematic_tests/CD4017.glb",      "compare/CD4017.glb"),
-    ("LM358",     "schematic_tests/LM358.glb",       "compare/LM358 .glb"),
-    ("MPU-6000",  "schematic_tests/MPU-6000.glb",    "compare/MPU-6000.gltf"),
+    # Batch 1
+    ("74HC595",    "schematic_tests/74HC595.glb",     "compare/74HC595.glb"),
+    ("ATmega328p", "schematic_tests/ATmega328p.glb",  "compare/ATmega328p.gltf"),
+    ("ESP32-C3",   "schematic_tests/ESP32-C3.glb",    "compare/ESP32-C3.glb"),
+    ("MCP3208",    "schematic_tests/MCP3208.glb",     "compare/MCP3208 .glb"),
+    ("TL072",      "schematic_tests/TL072.glb",       "compare/TL072.glb"),
+    ("AMS1117",    "schematic_tests/AMS1117.glb",     "compare/AMS1117.glb"),
+    ("CD4017",     "schematic_tests/CD4017.glb",      "compare/CD4017.glb"),
+    ("LM358",      "schematic_tests/LM358.glb",       "compare/LM358 .glb"),
+    ("MPU-6000",   "schematic_tests/MPU-6000.glb",    "compare/MPU-6000.gltf"),
+    # Batch 2
+    ("STM32F103",  "schematic_tests/STM32F103.glb",   "compare/ STM32F103C8T6.glb"),
+    ("FT232R",     "schematic_tests/FT232R.glb",      "compare/FT232R.glb"),
+    ("ULN2003A",   "schematic_tests/ULN2003A.glb",    "compare/ULN2003A.glb"),
+    ("INA219",     "schematic_tests/INA219.glb",      "compare/INA219.glb"),
+    ("nRF24L01",   "schematic_tests/nRF24L01.glb",    "compare/ nRF24L01.gltf"),
+    ("DS3231",     "schematic_tests/DS3231.glb",      "compare/DS3231.glb"),
+    ("PIC16F877A", "schematic_tests/PIC16F877A.glb",  "compare/ PIC16F877A.gltf"),
+    ("ADXL345",    "schematic_tests/ADXL345.glb",     "compare/ADXL345.glb"),
 ]
 
 EXPECTED_TOP_LEVEL = {"DesignatorName", "PackageValue", "BodyLine", "Legs"}
