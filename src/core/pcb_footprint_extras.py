@@ -255,6 +255,10 @@ def inject_pcb_footprint_extras(
     component_name: str,
     package_type: str,
     pin_position_map: Dict[str, Tuple[float, float]],
+    fab_dims: Optional[Tuple[float, float]] = None,
+    silk_dims: Optional[Tuple[float, float]] = None,
+    crtyd_dims: Optional[Tuple[float, float]] = None,
+    # Legacy params kept for backwards compatibility
     body_width: Optional[float] = None,
     body_height: Optional[float] = None,
 ) -> int:
@@ -268,9 +272,11 @@ def inject_pcb_footprint_extras(
                       through-hole vs SMD pin extras.
         pin_position_map: Mapping of pin_number_str -> (x, y) in mm, used to
                           populate pinData.position in pin-group extras.
-        body_width: Body outline width in mm. When provided, BodyLine extras
-                    will include a `points` array encoding the line endpoints.
-        body_height: Body outline height in mm (required alongside body_width).
+        fab_dims: (half_width, half_height) of the fab layer in mm.
+        silk_dims: (half_width, half_height) of the silk layer in mm.
+        crtyd_dims: (half_width, half_height) of the crtyd layer in mm.
+        body_width: Deprecated — use fab_dims instead.
+        body_height: Deprecated — use fab_dims instead.
 
     Returns:
         Number of nodes that received extras.
@@ -286,9 +292,19 @@ def inject_pcb_footprint_extras(
     is_through_hole = package_type.upper().startswith(("DIP", "CDIP"))
     parent_map = _build_parent_map(nodes)
 
-    # Pre-compute body half-dimensions for BodyLine point generation
-    body_half_width = body_width / 2.0 if body_width is not None else None
-    body_half_height = body_height / 2.0 if body_height is not None else None
+    # Resolve per-layer half-dimensions, falling back to legacy body_width/height
+    if fab_dims is None and body_width is not None and body_height is not None:
+        fab_dims = (body_width / 2.0, body_height / 2.0)
+    if silk_dims is None and fab_dims is not None:
+        silk_dims = fab_dims
+    if crtyd_dims is None and fab_dims is not None:
+        crtyd_dims = fab_dims
+
+    _layer_dims: Dict[str, Optional[Tuple[float, float]]] = {
+        "fab_layer": fab_dims,
+        "silk_layer": silk_dims,
+        "crtyd_layer": crtyd_dims,
+    }
 
     # Pre-compute circle point lists (shared across all pins)
     pad_circle_pts = _circle_points(_PAD_OUTER_RADIUS)
@@ -443,10 +459,11 @@ def inject_pcb_footprint_extras(
                 "originalName": "BodyLine",
                 "renderOrder": 0,
             }
-            # Add points if body dimensions were provided
-            if body_half_width is not None and body_half_height is not None:
+            # Add points using the per-layer half-dimensions
+            layer_dim = _layer_dims.get(par_name)
+            if layer_dim is not None:
                 extras["points"] = _bodyline_points(
-                    sibling_idx, par_name, body_half_width, body_half_height
+                    sibling_idx, par_name, layer_dim[0], layer_dim[1]
                 )
             # Raise BodyLines 0.015 mm above the board surface (matches reference)
             t = list(node.translation) if node.translation else [0.0, 0.0, 0.0]

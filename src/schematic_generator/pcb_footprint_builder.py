@@ -69,6 +69,11 @@ class PcbFootprintBuilder:
     LINE_HEIGHT = 0.015  # mm (Z height from reference)
     Z_OFFSET = 0.015  # mm
 
+    # Layer clearance offsets (matching reference 2d.glb spacing between layers)
+    SILK_MARGIN_Y = 0.12   # silk extends this far beyond fab on Y (= LINE_THICKNESS)
+    CRTYD_MARGIN_X = 0.875  # crtyd extends beyond body edge on X (PAD_OUTER_RADIUS + 0.25)
+    CRTYD_MARGIN_Y = 0.25   # crtyd extends beyond fab on Y
+
     def __init__(self, package_type: str, pin_count: int, component_name: str = "IC", custom_layout: Optional[Dict[str, List[int]]] = None):
         """
         Initialize PCB footprint builder.
@@ -134,87 +139,58 @@ class PcbFootprintBuilder:
         line_thickness = self.params.body_geometry.border_thickness
         line_height = self.params.body_geometry.border_height
 
-        # Calculate line lengths
-        top_line_length = body_width
-        left_line_length = body_height
+        # Per-layer half-dimensions (each layer expands slightly outward)
+        fab_hw = body_width / 2
+        fab_hh = body_height / 2
+        silk_hw = fab_hw                         # silk: same width as fab
+        silk_hh = fab_hh + self.SILK_MARGIN_Y    # silk: slightly taller
+        crtyd_hw = fab_hw + self.CRTYD_MARGIN_X  # crtyd: wider (covers pads)
+        crtyd_hh = fab_hh + self.CRTYD_MARGIN_Y  # crtyd: slightly taller
 
         # 1. fab_layer - Complete outline (4 lines)
-        fab_layer = cq.Assembly(name="fab_layer")
-        
         # CadQuery requires unique sibling names during construction.
         # The exported GLB is normalized later so the final hierarchy uses the
         # repeated "BodyLine" names found in 2d.glb.
         # The side identity comes from the order: top, bottom, left, right.
-        # Top line
-        top_line = cq.Workplane("XY").center(0, body_height / 2).rect(
-            top_line_length, line_thickness
-        ).extrude(line_height)
-        fab_layer.add(top_line, name="BodyLine_Top", color=self.YELLOW_COLOR)
-
-        # Bottom line
-        bottom_line = cq.Workplane("XY").center(0, -body_height / 2).rect(
-            top_line_length, line_thickness
-        ).extrude(line_height)
-        fab_layer.add(bottom_line, name="BodyLine_Bottom", color=self.YELLOW_COLOR)
-
-        # Left line
-        left_line = cq.Workplane("XY").center(-body_width / 2, 0).rect(
-            line_thickness, left_line_length
-        ).extrude(line_height)
-        fab_layer.add(left_line, name="BodyLine_Left", color=self.YELLOW_COLOR)
-
-        # Right line
-        right_line = cq.Workplane("XY").center(body_width / 2, 0).rect(
-            line_thickness, left_line_length
-        ).extrude(line_height)
-        fab_layer.add(right_line, name="BodyLine_Right", color=self.YELLOW_COLOR)
-        
+        fab_layer = cq.Assembly(name="fab_layer")
+        fab_layer.add(
+            cq.Workplane("XY").center(0, fab_hh).rect(fab_hw * 2, line_thickness).extrude(line_height),
+            name="BodyLine_Top", color=self.YELLOW_COLOR)
+        fab_layer.add(
+            cq.Workplane("XY").center(0, -fab_hh).rect(fab_hw * 2, line_thickness).extrude(line_height),
+            name="BodyLine_Bottom", color=self.YELLOW_COLOR)
+        fab_layer.add(
+            cq.Workplane("XY").center(-fab_hw, 0).rect(line_thickness, fab_hh * 2).extrude(line_height),
+            name="BodyLine_Left", color=self.YELLOW_COLOR)
+        fab_layer.add(
+            cq.Workplane("XY").center(fab_hw, 0).rect(line_thickness, fab_hh * 2).extrude(line_height),
+            name="BodyLine_Right", color=self.YELLOW_COLOR)
         body_assy.add(fab_layer, name="fab_layer")
 
-        # 2. silk_layer - Top/bottom only (avoids pin areas for DIP)
+        # 2. silk_layer - Top/bottom only (avoids pin areas on left/right for DIP)
         silk_layer = cq.Assembly(name="silk_layer")
-
-        # Top line
-        silk_top = cq.Workplane("XY").center(0, body_height / 2).rect(
-            top_line_length, line_thickness
-        ).extrude(line_height)
-        silk_layer.add(silk_top, name="BodyLine_Top", color=self.WHITE_COLOR)
-
-        # Bottom line
-        silk_bottom = cq.Workplane("XY").center(0, -body_height / 2).rect(
-            top_line_length, line_thickness
-        ).extrude(line_height)
-        silk_layer.add(silk_bottom, name="BodyLine_Bottom", color=self.WHITE_COLOR)
-
+        silk_layer.add(
+            cq.Workplane("XY").center(0, silk_hh).rect(silk_hw * 2, line_thickness).extrude(line_height),
+            name="BodyLine_Top", color=self.WHITE_COLOR)
+        silk_layer.add(
+            cq.Workplane("XY").center(0, -silk_hh).rect(silk_hw * 2, line_thickness).extrude(line_height),
+            name="BodyLine_Bottom", color=self.WHITE_COLOR)
         body_assy.add(silk_layer, name="silk_layer")
 
-        # 3. crtyd_layer - Complete outline (4 lines)
+        # 3. crtyd_layer - Complete outline (4 lines), larger clearance box
         crtyd_layer = cq.Assembly(name="crtyd_layer")
-
-        # Top line
-        crtyd_top = cq.Workplane("XY").center(0, body_height / 2).rect(
-            top_line_length, line_thickness
-        ).extrude(line_height)
-        crtyd_layer.add(crtyd_top, name="BodyLine_Top", color=self.MAGENTA_COLOR)
-
-        # Bottom line
-        crtyd_bottom = cq.Workplane("XY").center(0, -body_height / 2).rect(
-            top_line_length, line_thickness
-        ).extrude(line_height)
-        crtyd_layer.add(crtyd_bottom, name="BodyLine_Bottom", color=self.MAGENTA_COLOR)
-
-        # Left line
-        crtyd_left = cq.Workplane("XY").center(-body_width / 2, 0).rect(
-            line_thickness, left_line_length
-        ).extrude(line_height)
-        crtyd_layer.add(crtyd_left, name="BodyLine_Left", color=self.MAGENTA_COLOR)
-
-        # Right line
-        crtyd_right = cq.Workplane("XY").center(body_width / 2, 0).rect(
-            line_thickness, left_line_length
-        ).extrude(line_height)
-        crtyd_layer.add(crtyd_right, name="BodyLine_Right", color=self.MAGENTA_COLOR)
-
+        crtyd_layer.add(
+            cq.Workplane("XY").center(0, crtyd_hh).rect(crtyd_hw * 2, line_thickness).extrude(line_height),
+            name="BodyLine_Top", color=self.MAGENTA_COLOR)
+        crtyd_layer.add(
+            cq.Workplane("XY").center(0, -crtyd_hh).rect(crtyd_hw * 2, line_thickness).extrude(line_height),
+            name="BodyLine_Bottom", color=self.MAGENTA_COLOR)
+        crtyd_layer.add(
+            cq.Workplane("XY").center(-crtyd_hw, 0).rect(line_thickness, crtyd_hh * 2).extrude(line_height),
+            name="BodyLine_Left", color=self.MAGENTA_COLOR)
+        crtyd_layer.add(
+            cq.Workplane("XY").center(crtyd_hw, 0).rect(line_thickness, crtyd_hh * 2).extrude(line_height),
+            name="BodyLine_Right", color=self.MAGENTA_COLOR)
         body_assy.add(crtyd_layer, name="crtyd_layer")
 
         return body_assy
@@ -585,13 +561,16 @@ class PcbFootprintBuilder:
                     pos.pin_number: (pos.x, pos.y)
                     for pos in self.pin_positions
                 }
+                fab_hw = self.params.body_width / 2
+                fab_hh = self.params.body_height / 2
                 extras_nodes = inject_pcb_footprint_extras(
                     output_path,
                     component_name=self.component_name,
                     package_type=self.package_type,
                     pin_position_map=pin_position_map,
-                    body_width=self.params.body_width,
-                    body_height=self.params.body_height,
+                    fab_dims=(fab_hw, fab_hh),
+                    silk_dims=(fab_hw, fab_hh + self.SILK_MARGIN_Y),
+                    crtyd_dims=(fab_hw + self.CRTYD_MARGIN_X, fab_hh + self.CRTYD_MARGIN_Y),
                 )
                 logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:
