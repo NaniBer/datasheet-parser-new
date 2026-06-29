@@ -136,7 +136,7 @@ class PcbFootprintBuilder:
 
         body_width = self.params.body_width
         body_height = self.params.body_height
-        line_thickness = self.params.body_geometry.border_thickness
+        line_thickness = self.LINE_THICKNESS
         line_height = self.params.body_geometry.border_height
 
         # Per-layer half-dimensions (each layer expands slightly outward)
