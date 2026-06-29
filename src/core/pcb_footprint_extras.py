@@ -9,6 +9,7 @@ correct rendering.  This module replicates that behaviour.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -22,6 +23,62 @@ _HIDE_CONTROLS = {"translate": "xyz", "rotate": "xyz", "scale": "xyz"}
 
 # Tolerance for float colour comparisons
 _CTOL = 0.01
+
+# PCB geometry constants (matching reference 2d.glb)
+_PAD_OUTER_RADIUS = 0.625   # CopperCirclePad / CopperCirclePin (1.25mm / 2)
+_HOLE_RADIUS = 0.415        # HoleCylinderPin / CopperCylinderPin (0.83mm / 2)
+_MARKER_RADIUS = 0.1        # silk/fab firstPinMarker
+_CIRCLE_STEPS = 20          # 21-point circle (20 steps + closing point)
+
+
+def _circle_points(radius: float, steps: int = _CIRCLE_STEPS) -> List[dict]:
+    """Return a list of {x, y} dicts tracing a circle at *radius*.
+
+    Generates *steps* evenly-spaced vertices starting at angle 0, plus a
+    closing point identical to the first (matching the reference 2d.glb pattern
+    of 21 points for a 20-step circle).
+    """
+    pts = []
+    for k in range(steps + 1):
+        angle = 2.0 * math.pi * k / steps
+        pts.append({"x": radius * math.cos(angle), "y": radius * math.sin(angle)})
+    return pts
+
+
+def _rect_points(half_w: float, half_h: float) -> List[dict]:
+    """Return 5 {x, y} dicts tracing a closed rectangle (corners + close)."""
+    return [
+        {"x": -half_w, "y":  half_h},
+        {"x":  half_w, "y":  half_h},
+        {"x":  half_w, "y": -half_h},
+        {"x": -half_w, "y": -half_h},
+        {"x": -half_w, "y":  half_h},
+    ]
+
+
+def _bodyline_points(
+    sibling_idx: int,
+    layer_name: str,
+    body_half_width: float,
+    body_half_height: float,
+) -> List[dict]:
+    """Compute the 2D endpoint pair for a BodyLine node.
+
+    Uses sibling index and known layer structure to determine orientation:
+    - fab / crtyd: index 0=top, 1=bottom, 2=left, 3=right
+    - silk:        index 0=top, 1=bottom  (no side lines)
+
+    Points are in Package coordinate space (mm from component centre).
+    """
+    bw, bh = body_half_width, body_half_height
+    if sibling_idx == 0:   # top
+        return [{"x": -bw, "y": bh}, {"x": bw, "y": bh}]
+    elif sibling_idx == 1: # bottom
+        return [{"x": -bw, "y": -bh}, {"x": bw, "y": -bh}]
+    elif sibling_idx == 2: # left
+        return [{"x": -bw, "y": -bh}, {"x": -bw, "y": bh}]
+    else:                  # right (index 3)
+        return [{"x": bw, "y": -bh}, {"x": bw, "y": bh}]
 
 
 def _color_matches(factor, r, g, b, a=1.0) -> bool:
@@ -93,8 +150,6 @@ def _set_unlit(mat) -> None:
     if mat.extensions is None:
         mat.extensions = {}
     mat.extensions["KHR_materials_unlit"] = {}
-    # Ensure the extension is declared at top level
-    # (pygltflib handles extensionsUsed automatically on save)
 
 
 def _build_parent_map(nodes) -> Dict[int, int]:
@@ -200,6 +255,8 @@ def inject_pcb_footprint_extras(
     component_name: str,
     package_type: str,
     pin_position_map: Dict[str, Tuple[float, float]],
+    body_width: Optional[float] = None,
+    body_height: Optional[float] = None,
 ) -> int:
     """
     Walk every node in *glb_path* and attach the correct extras dict.
@@ -211,6 +268,9 @@ def inject_pcb_footprint_extras(
                       through-hole vs SMD pin extras.
         pin_position_map: Mapping of pin_number_str -> (x, y) in mm, used to
                           populate pinData.position in pin-group extras.
+        body_width: Body outline width in mm. When provided, BodyLine extras
+                    will include a `points` array encoding the line endpoints.
+        body_height: Body outline height in mm (required alongside body_width).
 
     Returns:
         Number of nodes that received extras.
@@ -225,12 +285,22 @@ def inject_pcb_footprint_extras(
 
     is_through_hole = package_type.upper().startswith(("DIP", "CDIP"))
     parent_map = _build_parent_map(nodes)
+
+    # Pre-compute body half-dimensions for BodyLine point generation
+    body_half_width = body_width / 2.0 if body_width is not None else None
+    body_half_height = body_height / 2.0 if body_height is not None else None
+
+    # Pre-compute circle point lists (shared across all pins)
+    pad_circle_pts = _circle_points(_PAD_OUTER_RADIUS)
+    hole_circle_pts = _circle_points(_HOLE_RADIUS)
+    marker_circle_pts = _circle_points(_MARKER_RADIUS)
+    pad_rect_pts = _rect_points(_PAD_OUTER_RADIUS, _PAD_OUTER_RADIUS)
+
     updated = 0
 
     for i, node in enumerate(nodes):
         name = node.name or ""
         par_name = _parent_name(i, nodes, parent_map)
-        gpar_name = _grandparent_name(i, nodes, parent_map)
 
         extras: Optional[dict] = None
 
@@ -267,20 +337,20 @@ def inject_pcb_footprint_extras(
             }
 
         # Body child of DesignatorName / PackageValue (text mesh node)
+        # ref: selectParent=false, renderOrder=3, no hideTransformControls
         elif name == "Body" and par_name in ("DesignatorName", "PackageValue"):
             extras = {
                 "originalName": "Body",
-                "renderOrder": 0,
-                "selectParent": True,
-                "hideTransformControls": _HIDE_CONTROLS,
+                "renderOrder": 3,
+                "selectParent": False,
             }
 
+        # BoundingBox: ref has selectParent=false, renderOrder=2, no hideTransformControls
         elif name == "BoundingBox":
             extras = {
                 "originalName": "BoundingBox",
-                "renderOrder": 0,
-                "selectParent": True,
-                "hideTransformControls": _HIDE_CONTROLS,
+                "renderOrder": 2,
+                "selectParent": False,
             }
 
         # ── Pin 1 marker ──────────────────────────────────────────────────────
@@ -288,10 +358,18 @@ def inject_pcb_footprint_extras(
             extras = {"originalName": "FirstPinMarker", "renderOrder": 0}
 
         elif name == "silk_firstPinMarker":
-            extras = {"originalName": "silk_firstPinMarker", "renderOrder": 2}
+            extras = {
+                "points": marker_circle_pts,
+                "originalName": "silk_firstPinMarker",
+                "renderOrder": 2,
+            }
 
         elif name == "fab_firstPinMarker":
-            extras = {"originalName": "fab_firstPinMarker", "renderOrder": 2}
+            extras = {
+                "points": marker_circle_pts,
+                "originalName": "fab_firstPinMarker",
+                "renderOrder": 2,
+            }
 
         # ── Legs container ────────────────────────────────────────────────────
         elif name == "Legs":
@@ -303,44 +381,41 @@ def inject_pcb_footprint_extras(
             extras = _build_pin_extras(name, x, y, is_through_hole)
 
         # ── Pin sub-components ────────────────────────────────────────────────
+        # ref: no selectParent, no hideTransformControls
         elif name == "CopperCirclePad":
+            is_pin1 = par_name == "1"
+            pts = pad_rect_pts if (is_through_hole and is_pin1) else pad_circle_pts
             extras = {
+                "points": pts,
                 "originalName": "CopperCirclePad",
                 "renderOrder": 3,
-                "selectParent": True,
-                "hideTransformControls": _HIDE_CONTROLS,
             }
 
         elif name == "SolderMask":
             extras = {
                 "originalName": "SolderMask",
                 "renderOrder": 2,
-                "selectParent": True,
-                "hideTransformControls": _HIDE_CONTROLS,
             }
 
         elif name == "HoleCylinderPin":
             extras = {
-                "originalName": "HoleCylinderPin",
+                "points": hole_circle_pts,
                 "renderOrder": 10,
-                "selectParent": True,
-                "hideTransformControls": _HIDE_CONTROLS,
+                "originalName": "HoleCylinderPin",
             }
 
         elif name == "CopperCylinderPin":
             extras = {
+                "points": hole_circle_pts,
                 "originalName": "CopperCylinderPin",
-                "renderOrder": 3,
-                "selectParent": True,
-                "hideTransformControls": _HIDE_CONTROLS,
+                "renderOrder": 2,
             }
 
         elif name == "CopperCirclePin":
             extras = {
+                "points": hole_circle_pts,
                 "originalName": "CopperCirclePin",
-                "renderOrder": 3,
-                "selectParent": True,
-                "hideTransformControls": _HIDE_CONTROLS,
+                "renderOrder": 2,
             }
 
         elif name == "text" and par_name.isdigit():
@@ -353,8 +428,9 @@ def inject_pcb_footprint_extras(
             }
 
         # ── Body outline container ─────────────────────────────────────────────
+        # ref: includes body:"2d"
         elif name == "Body" and par_name == "Package":
-            extras = {"originalName": "Body", "renderOrder": 0}
+            extras = {"body": "2d", "originalName": "Body", "renderOrder": 0}
 
         elif name in ("fab_layer", "silk_layer", "crtyd_layer"):
             extras = {"originalName": name, "renderOrder": 0}
@@ -367,6 +443,11 @@ def inject_pcb_footprint_extras(
                 "originalName": "BodyLine",
                 "renderOrder": 0,
             }
+            # Add points if body dimensions were provided
+            if body_half_width is not None and body_half_height is not None:
+                extras["points"] = _bodyline_points(
+                    sibling_idx, par_name, body_half_width, body_half_height
+                )
             # Raise BodyLines 0.015 mm above the board surface (matches reference)
             t = list(node.translation) if node.translation else [0.0, 0.0, 0.0]
             if len(t) >= 3:

@@ -590,6 +590,8 @@ class PcbFootprintBuilder:
                     component_name=self.component_name,
                     package_type=self.package_type,
                     pin_position_map=pin_position_map,
+                    body_width=self.params.body_width,
+                    body_height=self.params.body_height,
                 )
                 logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:
