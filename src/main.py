@@ -105,6 +105,23 @@ def setup_output_path(output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _both_output_paths(output: str) -> tuple:
+    """Derive schematic and footprint GLB paths from a base output argument.
+
+    Examples:
+        "NE555.glb"        -> ("NE555_schematic.glb", "NE555_footprint.glb")
+        "output/NE555.glb" -> ("output/NE555_schematic.glb", "output/NE555_footprint.glb")
+        "NE555"            -> ("NE555_schematic.glb", "NE555_footprint.glb")
+    """
+    p = Path(output)
+    stem = p.stem
+    parent = p.parent
+    return (
+        str(parent / f"{stem}_schematic.glb"),
+        str(parent / f"{stem}_footprint.glb"),
+    )
+
+
 # ============================================================================
 # Pipeline Functions
 # ============================================================================

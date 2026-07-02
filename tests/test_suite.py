@@ -29,6 +29,31 @@ MANIFEST_PATH = ROOT / "benchmarks" / "manifest.json"
 
 
 # ===========================================================================
+# 0. OUTPUT PATH HELPER
+# ===========================================================================
+
+from src.main import _both_output_paths
+
+
+def test_both_output_paths_strips_glb_extension():
+    schematic, footprint = _both_output_paths("NE555.glb")
+    assert schematic == "NE555_schematic.glb"
+    assert footprint == "NE555_footprint.glb"
+
+
+def test_both_output_paths_preserves_directory():
+    schematic, footprint = _both_output_paths("output/NE555.glb")
+    assert schematic == "output/NE555_schematic.glb"
+    assert footprint == "output/NE555_footprint.glb"
+
+
+def test_both_output_paths_no_extension():
+    schematic, footprint = _both_output_paths("NE555")
+    assert schematic == "NE555_schematic.glb"
+    assert footprint == "NE555_footprint.glb"
+
+
+# ===========================================================================
 # 1. DATA MODELS
 # ===========================================================================
 
