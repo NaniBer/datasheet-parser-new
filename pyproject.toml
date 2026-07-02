@@ -74,6 +74,21 @@ target-version = ["py38", "py39", "py310", "py311"]
 line-length = 100
 select = ["E", "F", "I", "N", "W"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short -q"
+markers = [
+    "integration: tests that load real PDF files or generate real GLB output (slower)",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/test_*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
 [tool.mypy]
 python_version = "3.8"
 warn_return_any = true
