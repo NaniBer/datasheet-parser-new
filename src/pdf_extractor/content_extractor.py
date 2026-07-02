@@ -2,10 +2,8 @@
 
 import io
 import json
-import tempfile
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
-from pathlib import Path
 
 try:
     import pdfplumber
@@ -13,9 +11,9 @@ except ImportError:
     pdfplumber = None
 
 try:
-    import opendataloader_pdf
+    import fitz  # PyMuPDF
 except ImportError:
-    opendataloader_pdf = None
+    fitz = None
 
 from .page_detector import PageCandidate
 from .pinout_filter import PinoutFilter
@@ -43,7 +41,7 @@ class ContentExtractor:
         self.pdf_path = pdf_path
         self.pdf = None
         self._open_pdf()
-        self.opendataloader_cache = None  # Cache for OpenDataLoader results
+        self.fitz_doc = None  # Lazy-opened PyMuPDF document
 
     def _open_pdf(self) -> None:
         """Open the PDF file."""
@@ -180,9 +178,7 @@ class ContentExtractor:
         self, page, page_num: int
     ) -> List[Tuple[int, List]]:
         """
-        Extract tables from a page using OpenDataLoader (hybrid mode).
-
-        Falls back to pdfplumber if OpenDataLoader fails.
+        Extract tables from a page using PyMuPDF, with pdfplumber as fallback.
 
         Args:
             page: pdfplumber Page object
@@ -191,39 +187,54 @@ class ContentExtractor:
         Returns:
             List of (page_number, table_data) tuples
         """
-        # Try OpenDataLoader first
-        tables = []
+        # Primary: PyMuPDF table detection (no external dependencies)
+        tables = self._extract_tables_with_pymupdf(page_num)
 
-        try:
-            if opendataloader_pdf is None:
-                raise ImportError(
-                    "opendataloader-pdf is required for table extraction. "
-                    "Install with: pip install opendataloader-pdf"
-                )
-
-            # Use cached OpenDataLoader results if available
-            if self.opendataloader_cache is None:
-                self.opendataloader_cache = self._extract_with_opendataloader()
-
-            # Find tables for this page from OpenDataLoader results
-            for element in self.opendataloader_cache:
-                if element.get("type") == "table" and element.get("page number") == page_num:
-                    # Convert OpenDataLoader table to our format
-                    table_data = self._convert_opendataloader_table(element)
-                    if table_data and len(table_data) >= 2:  # Header + at least 1 row
-                        tables.append((page_num, table_data))
-
-        except ImportError:
-            # OpenDataLoader not installed - skip it
-            pass
-        except Exception as e:
-            # OpenDataLoader failed (Java issue) - fall back to pdfplumber
-            print(f"Warning: OpenDataLoader failed, falling back to pdfplumber: {e}")
-            pass
-
-        # Fallback: If OpenDataLoader failed or returned no tables, try pdfplumber
+        # Fallback: pdfplumber
         if not tables:
             tables = self._extract_tables_with_pdfplumber(page, page_num)
+
+        return tables
+
+    def _extract_tables_with_pymupdf(
+        self, page_num: int
+    ) -> List[Tuple[int, List]]:
+        """
+        Extract tables using PyMuPDF's built-in table detector.
+
+        No Java or ghostscript required.
+
+        Args:
+            page_num: Page number (1-indexed)
+
+        Returns:
+            List of (page_number, table_data) tuples
+        """
+        if fitz is None:
+            return []
+
+        tables = []
+        try:
+            if self.fitz_doc is None:
+                self.fitz_doc = fitz.open(self.pdf_path)
+
+            page = self.fitz_doc[page_num - 1]
+            tab_finder = page.find_tables()
+
+            for tab in tab_finder.tables:
+                rows = tab.extract()
+                if not rows or len(rows) < 2:
+                    continue
+                # Normalise: replace None with empty string
+                table_data = [
+                    [cell if cell is not None else "" for cell in row]
+                    for row in rows
+                ]
+                if any(any(cell for cell in row) for row in table_data):
+                    tables.append((page_num, table_data))
+
+        except Exception as e:
+            print(f"Warning: PyMuPDF table extraction failed: {e}")
 
         return tables
 
@@ -276,76 +287,6 @@ class ContentExtractor:
             print(f"Warning: pdfplumber table extraction failed: {e}")
 
         return tables
-
-    def _extract_with_opendataloader(self) -> dict:
-        """
-        Extract all content using OpenDataLoader (for table extraction).
-
-        Returns:
-            Dict containing OpenDataLoader results
-        """
-        import os
-
-        # Create temporary directory for output
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Extract to temporary directory
-            try:
-                opendataloader_pdf.convert(
-                    input_path=[self.pdf_path],
-                    output_dir=temp_dir,
-                    format="json"
-                )
-
-                # Read the JSON output
-                output_file = os.path.join(temp_dir, f"{Path(self.pdf_path).stem}.json")
-                if not os.path.exists(output_file):
-                    return {}
-
-                with open(output_file, 'r') as f:
-                    data = json.load(f)
-
-                # Return the 'kids' array which contains all elements
-                return data.get("kids", [])
-
-            except Exception as e:
-                print(f"Warning: OpenDataLoader extraction failed: {e}")
-                return {}
-
-    def _convert_opendataloader_table(self, odl_table: dict) -> List[List]:
-        """
-        Convert OpenDataLoader table format to our internal format.
-
-        Args:
-            odl_table: OpenDataLoader table element
-
-        Returns:
-            2D list of table cells (rows x columns)
-        """
-        rows_data = odl_table.get("rows", [])
-        if not rows_data:
-            return []
-
-        # Convert each row
-        converted_table = []
-        for row in rows_data:
-            cells = row.get("cells", [])
-            row_data = []
-
-            # Convert each cell
-            for cell in cells:
-                # Extract text from kids (paragraphs)
-                cell_text = ""
-                kids = cell.get("kids", [])
-                if kids:
-                    for kid in kids:
-                        if kid.get("type") == "paragraph":
-                            cell_text = kid.get("content", "")
-                            break
-                row_data.append(cell_text)
-
-            converted_table.append(row_data)
-
-        return converted_table
 
     @staticmethod
     def format_for_llm(content: ExtractedContent, tables_only: bool = False) -> str:
@@ -423,6 +364,9 @@ class ContentExtractor:
         """Close the PDF file."""
         if self.pdf:
             self.pdf.close()
+        if self.fitz_doc:
+            self.fitz_doc.close()
+            self.fitz_doc = None
 
     def __enter__(self):
         """Context manager entry."""

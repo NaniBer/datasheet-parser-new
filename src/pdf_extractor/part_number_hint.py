@@ -126,8 +126,11 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
     """
     Infer a likely part number from extracted datasheet text.
 
-    The heuristic is intentionally conservative. It prefers repeated tokens from
-    the document text and only falls back to the filename when necessary.
+    When a single plausible token is derived from the source filename it is
+    returned unconditionally — the filename is stronger evidence than
+    frequently-repeated internal identifiers (e.g. register bit names).
+    The score-based ranking is used only when the filename yields zero or
+    multiple candidates.
     """
     stats: Dict[str, Dict[str, int]] = {}
 
@@ -149,7 +152,9 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
 
     if source_name:
         source_stem = Path(source_name).stem
-        for token in _tokenize(source_stem):
+        # Uppercase so mixed-case part numbers (e.g. "ATmega328p") are captured
+        # by the uppercase-only TOKEN_PATTERN.
+        for token in _tokenize(source_stem.upper()):
             entry = stats.setdefault(
                 token,
                 {
@@ -163,6 +168,14 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
     if not stats:
         return None
 
+    filename_candidates = [token for token, entry in stats.items() if entry["filename_hits"] > 0]
+
+    # A single filename candidate is strong evidence for the part number.
+    # Return it unconditionally — it should not be overridden by frequently-
+    # repeated internal identifiers (e.g. register bit names like "ICES1").
+    if len(filename_candidates) == 1:
+        return filename_candidates[0]
+
     ranked = sorted(
         ((token, _score_token(token, stats)) for token in stats),
         key=lambda item: item[1],
@@ -174,14 +187,11 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
 
     best_token, best_score = ranked[0]
     second_score = ranked[1][1] if len(ranked) > 1 else 0.0
-    filename_candidates = [token for token, entry in stats.items() if entry["filename_hits"] > 0]
 
     # Avoid making a brittle guess when several part-number-like tokens appear
     # with essentially the same score, which is common in multi-variant family
     # titles like "TPS62160, TPS62161, TPS62162, TPS62163".
     if best_score < 3.0:
-        if len(filename_candidates) == 1:
-            return filename_candidates[0]
         return None
 
     if second_score and (best_score - second_score) < 0.5:

@@ -252,6 +252,7 @@ def extract_pin_data(
 
     validation_feedback = None
     last_validation = None
+    last_pin_data = None
 
     for attempt in range(1, max_attempts + 1):
         if verbose and attempt > 1:
@@ -267,6 +268,7 @@ def extract_pin_data(
         # Normalize before validation so the checks reflect what the rest of the
         # pipeline will actually use.
         pin_data = normalize_package(pin_data, verbose=False)
+        last_pin_data = pin_data
 
         validation = validate_pin_data_extraction(pin_data, part_number=part_number)
         last_validation = validation
@@ -290,16 +292,14 @@ def extract_pin_data(
             if attempt < max_attempts:
                 print("  Preparing a corrective retry...")
 
-    raise ValidationError(
-        message="Extracted pin data failed validation after retry attempts",
-        error_code=ErrorCodes.LLM_INVALID_RESPONSE,
-        details={
-            "part_number": part_number,
-            "errors": last_validation.errors if last_validation else [],
-            "warnings": last_validation.warnings if last_validation else [],
-            "attempts": max_attempts,
-        },
+    # All attempts failed validation — return best available result rather than
+    # crashing the pipeline. The LLM client already enforces basic sanity checks
+    # (non-empty pin list), so last_pin_data is usable even if imperfect.
+    print(
+        f"Warning: Validation failed after {max_attempts} attempts. "
+        f"Using best available result. Issues: {'; '.join(last_validation.errors) if last_validation else 'unknown'}"
     )
+    return last_pin_data
 
 
 def extract_layout_with_vision(

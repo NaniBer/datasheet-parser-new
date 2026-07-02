@@ -3,6 +3,7 @@
 from typing import Dict, List, Optional
 import json
 import re
+import time
 
 try:
     from ..models.pin_data import PinData, Pin, PackageInfo
@@ -14,6 +15,53 @@ except ImportError:  # pragma: no cover - compatibility for top-level imports in
     from src.pdf_extractor.non_pin_features import is_non_pin_feature_name
     from src.chat_bot import get_completion_from_messages, build_pin_extraction_prompt
     from src.exceptions import LLMExtractionError, ValidationError, APICredentialsError, ErrorCodes
+
+
+def _parse_pin_count_from_package_type(pkg_type: str) -> Optional[int]:
+    """
+    Extract the expected pin count from a package type string.
+
+    Examples:
+        "SOIC-8"   -> 8
+        "LQFP-64"  -> 64
+        "QFN-32"   -> 32
+        "SOT-223"  -> 4  (special case: 3 pins + 1 tab)
+        "TO-220"   -> 3  (special case)
+    Returns None when the string doesn't reliably encode a pin count.
+    """
+    if not pkg_type:
+        return None
+
+    pkg_upper = pkg_type.upper().strip()
+
+    # Known special cases where the number is NOT the pin count
+    special = {
+        "SOT-23": 3, "SOT23": 3,
+        "SOT-223": 4, "SOT223": 4,
+        "TO-220": 3, "TO220": 3,
+        "TO-92": 3, "TO92": 3,
+        "TO-247": 3, "TO247": 3,
+        "TO-263": 3, "TO263": 3,
+        "SC-70": 5, "SC70": 5,
+    }
+    for key, count in special.items():
+        if key in pkg_upper:
+            return count
+
+    # Valid IC pin counts — numbers that actually represent pin counts
+    valid_counts = {
+        2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28,
+        32, 36, 40, 44, 48, 52, 56, 64, 80, 84, 100, 112, 120, 128,
+        144, 160, 176, 208, 256,
+    }
+
+    # Try numbers in the string from right to left (last number is usually pin count)
+    for num_str in reversed(re.findall(r'\d+', pkg_upper)):
+        num = int(num_str)
+        if num in valid_counts:
+            return num
+
+    return None
 
 
 def _coerce_pin_number(value) -> int:
@@ -84,33 +132,125 @@ class LLMClient:
             ValueError: If LLM response cannot be parsed
             Exception: If LLM API call fails after all retries
         """
-        # Build messages for pin extraction
-        # Use specialized table prompt for table-only mode
-        if tables_only_mode:
-            from ..chat_bot import build_table_extraction_prompt
-            messages = build_table_extraction_prompt(
-                content,
-                part_number=part_number,
-                validation_feedback=validation_feedback,
-            )
-        else:
-            messages = build_pin_extraction_prompt(
-                content,
-                part_number=part_number,
-                table_only_mode=tables_only_mode,
-                validation_feedback=validation_feedback,
+        # Call LLM and parse, retrying on parse failures or validation failures
+        current_feedback = validation_feedback
+        last_error = None
+
+        for attempt in range(max_retries):
+            # Rebuild messages each attempt so validation feedback is included
+            if tables_only_mode:
+                from ..chat_bot import build_table_extraction_prompt
+                messages = build_table_extraction_prompt(
+                    content,
+                    part_number=part_number,
+                    validation_feedback=current_feedback,
+                )
+            else:
+                messages = build_pin_extraction_prompt(
+                    content,
+                    part_number=part_number,
+                    table_only_mode=tables_only_mode,
+                    validation_feedback=current_feedback,
+                )
+
+            try:
+                response = get_completion_from_messages(
+                    messages,
+                    model=self.model,
+                    max_retries=max_retries,
+                    retry_delay=retry_delay,
+                )
+                pin_data = self._parse_llm_response(response)
+
+                # Validate self-consistency of extracted data
+                issue = self._validate_pin_data(pin_data)
+                if issue:
+                    if attempt < max_retries - 1:
+                        print(f"Warning: Validation failed (attempt {attempt + 1}/{max_retries}): {issue}. Retrying with feedback...")
+                        current_feedback = issue
+                        time.sleep(retry_delay * (attempt + 1))
+                        continue
+                    else:
+                        # All retries exhausted — return best available result
+                        print(f"Warning: Validation failed after all retries: {issue}. Using best available result.")
+                        return pin_data
+
+                return pin_data
+
+            except LLMExtractionError as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    print(f"Warning: LLM parse failed (attempt {attempt + 1}/{max_retries}), retrying...")
+                    time.sleep(retry_delay * (attempt + 1))
+
+        raise last_error
+
+    def _get_active_pins_and_package(self, pin_data: PinData):
+        """Return (pins, package_type_str) for the selected package variant."""
+        if pin_data.packages:
+            idx = pin_data.selected_package_index or 0
+            if idx < len(pin_data.packages):
+                pkg = pin_data.packages[idx]
+                return pkg.get("pins", []), pkg.get("type", "")
+        if pin_data.pins:
+            pkg_type = pin_data.package.type if pin_data.package else ""
+            return pin_data.pins, pkg_type
+        return [], ""
+
+    def _validate_pin_data(self, pin_data: PinData) -> Optional[str]:
+        """
+        Validate self-consistency of extracted pin data.
+
+        Returns a human-readable feedback string describing the problem if
+        validation fails, or None if everything looks correct.
+        """
+        pins, pkg_type = self._get_active_pins_and_package(pin_data)
+
+        # Rule 0: must have pins at all
+        if not pins:
+            return "No pins were extracted. Please extract all pin assignments from the datasheet."
+
+        if len(pins) < 2:
+            return (
+                f"Only {len(pins)} pin was extracted. Real components have at least 2 pins. "
+                "Please re-extract all pins."
             )
 
-        # Call LLM with retry logic
-        response = get_completion_from_messages(
-            messages,
-            model=self.model,
-            max_retries=max_retries,
-            retry_delay=retry_delay
-        )
+        # Rule 1: package type string implies a specific pin count
+        if pkg_type:
+            expected = _parse_pin_count_from_package_type(pkg_type)
+            if expected and abs(len(pins) - expected) > 2:
+                return (
+                    f"You stated the package is '{pkg_type}' which implies {expected} pins, "
+                    f"but only {len(pins)} pins were extracted. "
+                    f"Please re-extract ensuring all {expected} pins are present and numbered correctly."
+                )
 
-        # Parse response into PinData
-        return self._parse_llm_response(response)
+        # Rule 2: no duplicate pin numbers
+        pin_numbers = [p.get("number") if isinstance(p, dict) else p.number for p in pins]
+        seen: set = set()
+        duplicates = [n for n in pin_numbers if n in seen or seen.add(n)]
+        if duplicates:
+            return (
+                f"Duplicate pin numbers found: {sorted(set(duplicates))}. "
+                "Each physical pin must have a unique number."
+            )
+
+        # Rule 3: no large unexplained gaps in pin numbering
+        if len(pin_numbers) > 1:
+            sorted_nums = sorted(pin_numbers)
+            max_gap = max(
+                sorted_nums[i + 1] - sorted_nums[i]
+                for i in range(len(sorted_nums) - 1)
+            )
+            gap_threshold = max(6, len(pins) // 4)
+            if max_gap > gap_threshold:
+                return (
+                    f"Large gap of {max_gap} between consecutive pin numbers detected. "
+                    "This suggests some pins were skipped. Please extract all pins in sequence."
+                )
+
+        return None  # all checks passed
 
     def _parse_llm_response(self, response: str) -> PinData:
         """
