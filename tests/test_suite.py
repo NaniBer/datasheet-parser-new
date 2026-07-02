@@ -928,3 +928,29 @@ def test_full_pipeline_dfn_pdf_to_pcb_footprint_glb(monkeypatch, tmp_path):
 
     is_valid, errors = validate_pcb_footprint_glb(str(output_path), pin_count=pin_count, through_hole=False)
     assert is_valid, f"GLB validation failed: {errors}"
+
+
+@pytest.mark.integration
+def test_both_flag_produces_schematic_and_footprint_glb(monkeypatch, tmp_path):
+    """--both mode should write *_schematic.glb and *_footprint.glb in one pipeline run."""
+    monkeypatch.setattr("src.main.LLMClient.extract_pin_data", _no_llm_call)
+
+    base = tmp_path / "dfn_both.glb"
+    schematic_path = tmp_path / "dfn_both_schematic.glb"
+    footprint_path = tmp_path / "dfn_both_footprint.glb"
+
+    candidates = detect_relevant_pages("pdfs/DFN.pdf", min_confidence=3, verbose=False)
+    content = extract_content("pdfs/DFN.pdf", candidates, verbose=False)
+    pin_data = extract_pin_data(
+        content, api_key="dummy", model="dummy",
+        part_number="TPS62160DSG", verbose=False,
+    )
+
+    from src.main import process_datasheet_both
+    result = process_datasheet_both(pin_data=pin_data, output_path=base)
+
+    assert result is True
+    assert schematic_path.exists(), "schematic GLB not created"
+    assert footprint_path.exists(), "footprint GLB not created"
+    assert schematic_path.stat().st_size > 0
+    assert footprint_path.stat().st_size > 0

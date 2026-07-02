@@ -802,6 +802,80 @@ def process_datasheet(
         sys.exit(1)
 
 
+def process_datasheet_both(pin_data: PinData, output_path: Path,
+                            custom_layout=None, part_number: Optional[str] = None,
+                            package_index: Optional[int] = None,
+                            verbose: bool = False) -> bool:
+    """Run both schematic and PCB footprint builders on already-extracted pin data.
+
+    Args:
+        pin_data: Extracted PinData (from extract_pin_data)
+        output_path: Base output path — suffixes _schematic.glb / _footprint.glb are added
+        custom_layout: Optional Vision API layout dict
+        part_number: Optional part number for variant selection
+        package_index: Optional zero-based package variant index
+        verbose: Enable verbose output
+
+    Returns:
+        True if both outputs were generated successfully, False otherwise
+    """
+    schematic_str, footprint_str = _both_output_paths(str(output_path))
+    schematic_path = Path(schematic_str)
+    footprint_path = Path(footprint_str)
+
+    setup_output_path(schematic_path)
+    setup_output_path(footprint_path)
+
+    # --- Schematic (3D pinout diagram) ---
+    schematic_ok = False
+    try:
+        schematic_ok = bool(build_schematic_from_pin_data(
+            pin_data=pin_data,
+            output_path=schematic_str,
+            custom_layout=custom_layout,
+            part_number=part_number,
+            package_index=package_index,
+        ))
+        if verbose:
+            print(f"Schematic: {schematic_str}")
+    except Exception as e:
+        print(f"Error generating schematic: {e}")
+        if verbose:
+            import traceback
+            traceback.print_exc()
+
+    # --- PCB footprint (2D) ---
+    footprint_ok = False
+    try:
+        package_type, pin_count, _, pin_data_list = pin_data_to_builder_format(
+            pin_data,
+            part_number=part_number,
+            package_index=package_index,
+        )
+        footprint_ok = bool(build_pcb_2d_schematic(
+            package_type=package_type,
+            pin_count=pin_count,
+            component_name=pin_data.component_name,
+            pin_data=pin_data_list,
+            output_path=footprint_str,
+            custom_layout=custom_layout,
+        ))
+        if verbose:
+            print(f"Footprint: {footprint_str}")
+    except Exception as e:
+        print(f"Error generating footprint: {e}")
+        if verbose:
+            import traceback
+            traceback.print_exc()
+
+    if not schematic_ok:
+        print(f"Failed to generate schematic: {schematic_str}")
+    if not footprint_ok:
+        print(f"Failed to generate footprint: {footprint_str}")
+
+    return schematic_ok and footprint_ok
+
+
 # ============================================================================
 # CLI Entry Point
 # ============================================================================
@@ -833,6 +907,9 @@ Examples:
 
   # Help the extractor choose the right variant
   python -m src.main datasheet.pdf output.glb --part-number SN74HC595DR
+
+  # Generate both schematic and footprint in one run
+  python -m src.main datasheet.pdf NE555.glb --both
         """
     )
 
@@ -882,6 +959,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--both",
+        action="store_true",
+        help="Generate both schematic and PCB footprint GLB files. "
+             "Output argument is used as base name: "
+             "NE555.glb -> NE555_schematic.glb + NE555_footprint.glb. "
+             "Cannot be combined with --pcb-2d."
+    )
+
+    parser.add_argument(
         "--package-index",
         type=int,
         default=None,
@@ -901,6 +987,12 @@ def main():
     """Main CLI entry point."""
     args = parse_arguments()
 
+    # Mutual exclusion: --both and --pcb-2d cannot be used together
+    if args.both and args.pcb_2d:
+        print("Error: --both and --pcb-2d are mutually exclusive. "
+              "Use --both to generate both outputs, or --pcb-2d for footprint only.")
+        sys.exit(1)
+
     # Validate input file
     input_path = Path(args.input)
     validate_input_file(input_path)
@@ -912,19 +1004,44 @@ def main():
     output_path = Path(args.output)
     setup_output_path(output_path)
 
-    # Process datasheet
-    process_datasheet(
-        input_path=input_path,
-        output_path=output_path,
-        api_key=api_key,
-        model=args.model,
-        part_number=args.part_number,
-        layout_mode=args.layout_mode,
-        pcb_2d_mode=args.pcb_2d,
-        min_confidence=args.min_confidence,
-        verbose=args.verbose,
-        package_index=args.package_index,
-    )
+    if args.both:
+        # Run pipeline once, then call both builders
+        adjusted_min_confidence = get_dynamic_min_confidence(input_path, args.min_confidence, args.verbose)
+        candidates = detect_relevant_pages(str(input_path), adjusted_min_confidence, args.verbose)
+        content = extract_content(str(input_path), candidates, args.verbose)
+
+        resolved_part_number = args.part_number or infer_part_number_hint(
+            content.text_content, source_name=input_path.name
+        )
+
+        pin_data = extract_pin_data(
+            content, api_key, args.model, args.verbose,
+            part_number=resolved_part_number,
+        )
+
+        success = process_datasheet_both(
+            pin_data=pin_data,
+            output_path=output_path,
+            part_number=resolved_part_number,
+            package_index=args.package_index,
+            verbose=args.verbose,
+        )
+        if not success:
+            sys.exit(1)
+    else:
+        # Single output mode (existing behaviour)
+        process_datasheet(
+            input_path=input_path,
+            output_path=output_path,
+            api_key=api_key,
+            model=args.model,
+            part_number=args.part_number,
+            layout_mode=args.layout_mode,
+            pcb_2d_mode=args.pcb_2d,
+            min_confidence=args.min_confidence,
+            verbose=args.verbose,
+            package_index=args.package_index,
+        )
 
 
 if __name__ == "__main__":
