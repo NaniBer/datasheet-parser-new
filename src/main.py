@@ -718,14 +718,29 @@ def process_datasheet(
                 part_number=resolved_part_number,
                 package_index=package_index,
             )
-            
+
+            # Extract real package dimensions from PDF (overrides hardcoded values)
+            extracted_dims = None
+            try:
+                from .pdf_extractor.dimension_extractor import DimensionExtractor
+                extracted_dims = DimensionExtractor().extract(
+                    str(input_path),
+                    target_package_type=package_type,
+                )
+                if verbose and extracted_dims:
+                    print(f"[DimensionExtractor] Extracted dims: {extracted_dims}")
+            except Exception as e:
+                if verbose:
+                    print(f"[DimensionExtractor] Skipping: {e}")
+
             result = build_pcb_2d_schematic(
                 package_type=package_type,
                 pin_count=pin_count,
                 component_name=pin_data.component_name,
                 pin_data=pin_data_list,
                 output_path=str(output_path),
-                custom_layout=custom_layout
+                custom_layout=custom_layout,
+                extracted_dims=extracted_dims,
             )
         else:
             # 3D mode - adapter handles both formats
@@ -805,7 +820,8 @@ def process_datasheet(
 def process_datasheet_both(pin_data: PinData, output_path: Path,
                             custom_layout=None, part_number: Optional[str] = None,
                             package_index: Optional[int] = None,
-                            verbose: bool = False) -> bool:
+                            verbose: bool = False,
+                            extracted_dims=None) -> bool:
     """Run both schematic and PCB footprint builders on already-extracted pin data.
 
     Args:
@@ -815,6 +831,7 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
         part_number: Optional part number for variant selection
         package_index: Optional zero-based package variant index
         verbose: Enable verbose output
+        extracted_dims: Optional flat dict of real dimensions from PDF extraction.
 
     Returns:
         True if both outputs were generated successfully, False otherwise
@@ -859,6 +876,7 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
             pin_data=pin_data_list,
             output_path=footprint_str,
             custom_layout=custom_layout,
+            extracted_dims=extracted_dims,
         ))
         if verbose:
             print(f"Footprint: {footprint_str}")
@@ -1019,12 +1037,32 @@ def main():
             part_number=resolved_part_number,
         )
 
+        # Extract real package dimensions from PDF for the footprint builder
+        extracted_dims = None
+        try:
+            from .pdf_extractor.dimension_extractor import DimensionExtractor
+            package_type_hint, _, _, _ = pin_data_to_builder_format(
+                pin_data,
+                part_number=resolved_part_number,
+                package_index=args.package_index,
+            )
+            extracted_dims = DimensionExtractor().extract(
+                str(input_path),
+                target_package_type=package_type_hint,
+            )
+            if args.verbose and extracted_dims:
+                print(f"[DimensionExtractor] Extracted dims: {extracted_dims}")
+        except Exception as e:
+            if args.verbose:
+                print(f"[DimensionExtractor] Skipping: {e}")
+
         success = process_datasheet_both(
             pin_data=pin_data,
             output_path=output_path,
             part_number=resolved_part_number,
             package_index=args.package_index,
             verbose=args.verbose,
+            extracted_dims=extracted_dims,
         )
         if not success:
             sys.exit(1)

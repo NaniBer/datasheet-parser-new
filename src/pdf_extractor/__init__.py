@@ -6,6 +6,7 @@ from .part_number_hint import infer_part_number_hint
 from .deterministic_table_parser import parse_pin_data_from_tables
 from .extraction_validator import ExtractionValidationResult, validate_pin_data_extraction
 from .variant_selection import PackageVariantSelection, pin_data_to_selected_package, select_package_variant
+from .dimension_extractor import DimensionExtractor
 
 __all__ = [
     "PageDetector",
@@ -18,4 +19,5 @@ __all__ = [
     "PackageVariantSelection",
     "select_package_variant",
     "pin_data_to_selected_package",
+    "DimensionExtractor",
 ]

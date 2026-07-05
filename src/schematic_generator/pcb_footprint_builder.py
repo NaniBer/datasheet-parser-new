@@ -74,7 +74,9 @@ class PcbFootprintBuilder:
     CRTYD_MARGIN_X = 0.875  # crtyd extends beyond body edge on X (PAD_OUTER_RADIUS + 0.25)
     CRTYD_MARGIN_Y = 0.25   # crtyd extends beyond fab on Y
 
-    def __init__(self, package_type: str, pin_count: int, component_name: str = "IC", custom_layout: Optional[Dict[str, List[int]]] = None):
+    def __init__(self, package_type: str, pin_count: int, component_name: str = "IC",
+                 custom_layout: Optional[Dict[str, List[int]]] = None,
+                 extracted_dims: Optional[Dict[str, Any]] = None):
         """
         Initialize PCB footprint builder.
 
@@ -84,6 +86,8 @@ class PcbFootprintBuilder:
             component_name: Component name (currently not used in output)
             custom_layout: Optional dict mapping side names to pin numbers
                          (e.g., {"left_side": [1,2,3], "bottom_edge": [4,5,6]})
+            extracted_dims: Optional flat dict of real dimensions from PDF extraction.
+                          If provided, overrides hardcoded package geometry values.
         """
         self.package_type = package_type
         self.pin_count = pin_count
@@ -93,12 +97,29 @@ class PcbFootprintBuilder:
         # Get schematic parameters
         self.params = get_schematic_parameters(package_type, pin_count)
 
+        # Override hardcoded params with extracted dims if provided
+        if extracted_dims:
+            self._apply_extracted_dims(extracted_dims)
+
         # Calculate pin positions
         self.pin_positions = layout_pins(self.params, custom_layout)
 
         logger.info(
             "Initialized 2D PCB schematic builder for %s (%d pins)" % (package_type, pin_count)
         )
+
+    def _apply_extracted_dims(self, dims: Dict[str, Any]) -> None:
+        """Override SchematicParameters fields with extracted PDF dimensions."""
+        if dims.get("e"):
+            self.params.pin_pitch = float(dims["e"])
+        if dims.get("E"):
+            self.params.body_width = float(dims["E"])
+        if dims.get("D"):
+            self.params.body_height = float(dims["D"])
+        if dims.get("b"):
+            self.params.pin_geometry.leg_width = float(dims["b"])
+        if dims.get("L"):
+            self.params.pin_geometry.leg_length = float(dims["L"])
 
     def calculate_pin_positions_footprint(self) -> List[PinPosition]:
         """
@@ -635,6 +656,7 @@ def build_pcb_footprint(
     pin_data: List[Dict[str, Any]],
     output_path: str,
     custom_layout: Optional[Dict[str, List[int]]] = None,
+    extracted_dims: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
     Build and export PCB footprint from pin data.
@@ -647,9 +669,12 @@ def build_pcb_footprint(
         output_path: Path to save GLB file
         custom_layout: Optional dict mapping side names to pin numbers
                      (e.g., {"left_side": [1,2,3], "bottom_edge": [4,5,6]})
+        extracted_dims: Optional flat dict of real dimensions from PDF extraction.
 
     Returns:
         True if successful, False otherwise
     """
-    builder = PcbFootprintBuilder(package_type, pin_count, component_name, custom_layout)
+    builder = PcbFootprintBuilder(
+        package_type, pin_count, component_name, custom_layout, extracted_dims
+    )
     return builder.save_glb(output_path, pin_data)
