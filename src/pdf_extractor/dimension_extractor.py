@@ -272,10 +272,34 @@ class DimensionExtractor:
         return any(kw in key for kw in self.FINE_PITCH_KEYWORDS)
 
     def _matches_target(self, extracted_pkg: str, target: str) -> bool:
-        """Check if extracted package type loosely matches target (case-insensitive)."""
+        """
+        Check if extracted package type is compatible with the target.
+
+        Two levels of matching:
+        1. Name match — exact, or one is a prefix of the other (e.g. "SOIC" matches "SOIC-16")
+        2. Structural match — same pin count AND same mounting technology (SMT vs THT).
+           Catches LLM misidentifications like "SOIC-28" when the part is SSOP-28.
+        """
         e = extracted_pkg.lower().replace("-", "").replace(" ", "")
         t = target.lower().replace("-", "").replace(" ", "")
-        return e == t or e.startswith(t) or t.startswith(e)
+
+        # Level 1: name match
+        if e == t or e.startswith(t) or t.startswith(e):
+            return True
+
+        # Level 2: same pin count + same mounting technology
+        THT_PREFIXES = ("dip", "pdip", "sip", "zip", "cdip")
+        e_is_tht = any(e.startswith(p) for p in THT_PREFIXES)
+        t_is_tht = any(t.startswith(p) for p in THT_PREFIXES)
+        if e_is_tht != t_is_tht:
+            return False  # one THT, one SMT — never compatible
+
+        e_pins = re.search(r"\d+", e)
+        t_pins = re.search(r"\d+", t)
+        if e_pins and t_pins and e_pins.group() == t_pins.group():
+            return True  # same pin count, same mounting family
+
+        return False
 
     def _completeness_score(self, extracted: Dict) -> float:
         """Score completeness: min+max pair = 1.0, single value = 0.5, missing = 0."""
@@ -296,8 +320,11 @@ class DimensionExtractor:
         return total
 
     def _to_float(self, v: Any) -> Optional[float]:
+        """Convert a value to float, stripping non-numeric suffixes like 'BSC', 'REF', 'TYP'."""
         try:
-            return float(str(v).strip())
+            # Strip common datasheet annotation suffixes before parsing
+            s = re.sub(r"\s*(BSC|REF|TYP|NOM|MIN|MAX)\s*$", "", str(v).strip(), flags=re.IGNORECASE)
+            return float(s)
         except (ValueError, TypeError):
             return None
 

@@ -723,9 +723,14 @@ def process_datasheet(
             extracted_dims = None
             try:
                 from .pdf_extractor.dimension_extractor import DimensionExtractor
+                # package_type may be just "SOIC" for legacy format; append pin count
+                target_pkg_type = (
+                    package_type if any(c.isdigit() for c in package_type)
+                    else f"{package_type}-{pin_count}"
+                )
                 extracted_dims = DimensionExtractor().extract(
                     str(input_path),
-                    target_package_type=package_type,
+                    target_package_type=target_pkg_type,
                     hint_pages=candidates,
                 )
                 if verbose and extracted_dims:
@@ -1042,14 +1047,20 @@ def main():
         extracted_dims = None
         try:
             from .pdf_extractor.dimension_extractor import DimensionExtractor
-            package_type_hint, _, _, _ = pin_data_to_builder_format(
+            package_type_hint, pin_count_hint, _, _ = pin_data_to_builder_format(
                 pin_data,
                 part_number=resolved_part_number,
                 package_index=args.package_index,
             )
+            # pin_data_to_builder_format may return just "SOIC" for legacy format;
+            # reconstruct full type string e.g. "SOIC-28" for accurate dim matching
+            target_pkg_type = (
+                package_type_hint if any(c.isdigit() for c in package_type_hint)
+                else f"{package_type_hint}-{pin_count_hint}"
+            )
             extracted_dims = DimensionExtractor().extract(
                 str(input_path),
-                target_package_type=package_type_hint,
+                target_package_type=target_pkg_type,
                 hint_pages=candidates,
             )
             if args.verbose and extracted_dims:
