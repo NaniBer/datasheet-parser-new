@@ -42,7 +42,10 @@ class DimensionExtractor:
     FINE_PITCH_KEYWORDS = ["tssop", "ssop", "qfn", "qfp", "lqfp", "tqfp", "vssop", "msop"]
 
     def extract(
-        self, pdf_path: str, target_package_type: Optional[str] = None
+        self,
+        pdf_path: str,
+        target_package_type: Optional[str] = None,
+        hint_pages: Optional[List] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Run 3-phase extraction: scan → extract → pick best.
@@ -50,7 +53,10 @@ class DimensionExtractor:
         Args:
             pdf_path: Path to the PDF file.
             target_package_type: If provided (e.g. "SOIC-16"), prefer candidates
-                whose package type matches. Falls back to best overall if no match.
+                whose package type matches. Returns None if no candidate matches.
+            hint_pages: Optional list of PageCandidate objects already detected by
+                the pipeline. If provided, the expensive full-page scan is skipped
+                and only pages flagged as mechanical/package drawings are used.
 
         Returns:
             Flat dict with float dimension values, or None if extraction fails.
@@ -68,7 +74,11 @@ class DimensionExtractor:
             }
         """
         try:
-            dimension_pages = self._scan_pages(pdf_path)
+            if hint_pages is not None:
+                dimension_pages = self._pages_from_hints(hint_pages, target_package_type)
+            else:
+                dimension_pages = self._scan_pages(pdf_path)
+
             if not dimension_pages:
                 logger.debug("DimensionExtractor: no dimension pages found")
                 return None
@@ -136,6 +146,25 @@ class DimensionExtractor:
             time.sleep(0.3)
 
         return found
+
+    def _pages_from_hints(self, hint_pages: List, target_package_type: Optional[str] = None) -> List[Dict]:
+        """
+        Convert PageCandidate hint pages to dimension page entries.
+
+        Filters to pages whose reasons indicate a mechanical/package drawing.
+        PageCandidate.page_number is 1-indexed; converts to 0-indexed for fitz.
+        """
+        pkg = target_package_type or "?"
+        result = []
+        for candidate in hint_pages:
+            reasons = getattr(candidate, "reasons", [])
+            reason_text = " ".join(reasons).lower()
+            is_mechanical = "mechanical" in reason_text
+            is_pkg_drawing = bool(re.search(r"package.*(drawing|information|specification)", reason_text))
+            if is_mechanical or is_pkg_drawing:
+                page_0indexed = candidate.page_number - 1
+                result.append({"page": page_0indexed, "package_type": pkg})
+        return result
 
     def _extract_page(self, pdf_path: str, page: int, package_type: str) -> Optional[Dict]:
         """Phase 2: extract dimensions from a single dimension page."""

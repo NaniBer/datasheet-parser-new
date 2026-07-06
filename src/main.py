@@ -726,6 +726,7 @@ def process_datasheet(
                 extracted_dims = DimensionExtractor().extract(
                     str(input_path),
                     target_package_type=package_type,
+                    hint_pages=candidates,
                 )
                 if verbose and extracted_dims:
                     print(f"[DimensionExtractor] Extracted dims: {extracted_dims}")
@@ -1049,6 +1050,7 @@ def main():
             extracted_dims = DimensionExtractor().extract(
                 str(input_path),
                 target_package_type=package_type_hint,
+                hint_pages=candidates,
             )
             if args.verbose and extracted_dims:
                 print(f"[DimensionExtractor] Extracted dims: {extracted_dims}")
