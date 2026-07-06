@@ -83,7 +83,7 @@ class DimensionExtractor:
                 logger.debug("DimensionExtractor: extraction yielded no usable data")
                 return None
 
-            # Prefer candidates matching the target package type
+            # Filter to candidates matching the target package type
             if target_package_type:
                 filtered = [
                     c for c in candidates
@@ -91,8 +91,15 @@ class DimensionExtractor:
                         c["data"].get("package_type", ""), target_package_type
                     )
                 ]
-                if filtered:
-                    candidates = filtered
+                if not filtered:
+                    # No match — using dims from a different package family would
+                    # produce wrong pitch/body size, so skip the override entirely.
+                    logger.debug(
+                        "DimensionExtractor: no candidates match target '%s', skipping override",
+                        target_package_type,
+                    )
+                    return None
+                candidates = filtered
 
             best = self._pick_best(candidates)
             if not best:
