@@ -497,7 +497,7 @@ Issue ID prefixes: `ARCH` (architectural), `BUG` (functional defects, listed und
 | **Impact** | Any vision-API response whose `raw_text` lacks a JSON block crashes the parser. The broad `except Exception` at `:253` then swallows it into an empty result — so the bug manifests as "vision extraction mysteriously returns nothing," which is exactly the hard-to-diagnose failure the logs can't currently explain. |
 | **Recommended Fix** | Initialize `json_str = None` before the match attempts (one line), and add a parse-branch unit test with a JSON-free `raw_text` payload. |
 | **Fix Priority** | Pre-Beta |
-| **Status** | ⬜ Not handled |
+| **Status** | ✅ Handled (2026-07-07 — `json_str = None` initialized at the top of the raw_text branch, fixing both the NameError and the stale-leak from the description branch; 3 regression tests in test_suite.py §20) |
 
 | Field | Detail |
 |---|---|

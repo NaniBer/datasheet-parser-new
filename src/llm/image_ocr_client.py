@@ -366,6 +366,9 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
         # Try Format 3: raw_text field
         if "raw_text" in response:
             response_text = response.get("raw_text", "")
+            # Reset json_str: it may be unbound (NameError) or hold a stale
+            # unparseable string leaked from the Format 2 branch above.
+            json_str = None
             json_match = re.search(r"```(?:json)?\s*\n?(\{.*?\})\n?```", response_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)

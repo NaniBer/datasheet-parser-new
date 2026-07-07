@@ -1146,3 +1146,58 @@ def test_api_key_cli_flag_removed(monkeypatch):
     with pytest.raises(SystemExit) as exc_info:
         main_module.parse_arguments()
     assert exc_info.value.code == 2  # argparse usage error
+
+
+# ===========================================================================
+# 20. VISION RESPONSE PARSING (BUG-002)
+# ===========================================================================
+# Regression tests for the json_str NameError in ImageOCRClient's raw_text
+# branch. _parse_api_response is exercised directly — no network calls.
+
+
+@pytest.fixture
+def _ocr_client():
+    from src.llm.image_ocr_client import ImageOCRClient
+
+    return ImageOCRClient()
+
+
+def test_raw_text_without_json_returns_empty(_ocr_client):
+    """BUG-002: a JSON-free raw_text must return an empty result, not NameError."""
+    result = _ocr_client._parse_api_response(
+        {"raw_text": "I cannot identify a pinout diagram in this image."}
+    )
+
+    assert result.pin_count == 0
+    assert result.pins == []
+    assert result.component_name == ""
+
+
+def test_raw_text_with_fenced_json_parses(_ocr_client):
+    """BUG-002: the happy path still parses a fenced JSON block from raw_text."""
+    raw_text = (
+        "Here is the pinout:\n```json\n"
+        '{"component_name": "NE555", "package_type": "DIP-8", "pin_count": 2,'
+        ' "pins": [{"number": 1, "name": "GND"}, {"number": 2, "name": "TRIG"}],'
+        ' "extraction_confidence": 0.9}\n```'
+    )
+
+    result = _ocr_client._parse_api_response({"raw_text": raw_text})
+
+    assert result.component_name == "NE555"
+    assert result.package_type == "DIP-8"
+    assert len(result.pins) == 2
+
+
+def test_stale_json_str_not_reused_from_description_branch(_ocr_client):
+    """BUG-002: a broken JSON candidate from the description branch must not
+    leak into the raw_text branch as a stale json_str."""
+    result = _ocr_client._parse_api_response(
+        {
+            "description": "```json\n{not valid json}\n```",
+            "raw_text": "No structured data was found.",
+        }
+    )
+
+    assert result.pin_count == 0
+    assert result.pins == []
