@@ -1048,7 +1048,7 @@ Issue ID prefixes: `ARCH` (architectural), `BUG` (functional defects, listed und
 | **Impact** | `pip install -r requirements.txt` on a clean clone produces a broken installation (`ModuleNotFoundError: openai` on first run). CI green ≠ geometry works. Unpinned PDF parsers are also the project's largest CVE surface (SEC-005). |
 | **Recommended Fix** | Make `pyproject.toml` the single source of truth with all real runtime deps; generate `requirements.txt` from it (or delete it); CI installs `pip install -e ".[dev,glb]"` including cadquery; add a lockfile (`uv lock` or `pip-compile`). |
 | **Fix Priority** | Pre-Beta |
-| **Status** | ⬜ Not handled |
+| **Status** | ✅ Handled (2026-07-07 — pyproject.toml now declares all 9 hard-imported runtime deps and is the single source of truth; requirements.txt regenerated as a fully pinned lockfile via `uv pip compile`; CI installs the pinned manifest incl. cadquery + editable package; packages.find fixed for `src` layout; 3 manifest-consistency tests in test_suite.py §21) |
 
 | Field | Detail |
 |---|---|

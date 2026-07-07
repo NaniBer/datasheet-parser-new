@@ -7,7 +7,7 @@ name = "datasheet-parser"
 version = "0.1.0"
 description = "Extract pin data from electronic component datasheets and generate 3D CAD models"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -19,7 +19,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -27,10 +26,17 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
 
+# Every package below is hard-imported by src/ — none are optional.
 dependencies = [
-    "pdfplumber>=0.9.0",
+    "pdfplumber>=0.11.0",
+    "PyMuPDF>=1.24.0",
     "cadquery>=2.4.0",
     "Pillow>=10.0.0",
+    "pygltflib>=1.16.0",
+    "openai>=1.0.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "nest_asyncio>=1.5.0",
 ]
 
 [project.optional-dependencies]
@@ -42,18 +48,6 @@ dev = [
     "mypy>=1.0.0",
 ]
 
-llm = [
-    # Add your chosen LLM SDK here
-    # "openai>=1.0.0",
-    # "anthropic>=0.18.0",
-]
-
-# For GLB export (optional)
-glb = [
-    "trimesh>=4.0.0",
-    "pygltflib>=1.16.0",
-]
-
 [project.scripts]
 datasheet-parser = "src.main:main"
 
@@ -63,12 +57,15 @@ Documentation = "https://github.com/yourusername/datasheet-parser#readme"
 Repository = "https://github.com/yourusername/datasheet-parser.git"
 Issues = "https://github.com/yourusername/datasheet-parser/issues"
 
+# The code imports as `src.*` (python -m src.main), so `src` itself is the
+# package — find it at the repo root, not inside it.
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src*"]
 
 [tool.black]
 line-length = 100
-target-version = ["py38", "py39", "py310", "py311"]
+target-version = ["py39", "py310", "py311"]
 
 [tool.ruff]
 line-length = 100
@@ -90,6 +87,6 @@ show_missing = true
 skip_covered = false
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true

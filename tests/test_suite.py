@@ -14,6 +14,7 @@ Run only fast tests (skip real-PDF integration):
 """
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1201,3 +1202,58 @@ def test_stale_json_str_not_reused_from_description_branch(_ocr_client):
 
     assert result.pin_count == 0
     assert result.pins == []
+
+
+# ===========================================================================
+# 21. DEPENDENCY MANIFEST CONSISTENCY (CFG-001)
+# ===========================================================================
+# Regression tests keeping pyproject.toml (the single source of truth),
+# the generated requirements.txt, and the CI workflow in sync with the
+# packages src/ actually hard-imports. Pure file checks — nothing installed.
+
+# Distributions hard-imported somewhere in src/ (import name differs for
+# fitz->PyMuPDF, PIL->Pillow, dotenv->python-dotenv).
+_REQUIRED_DISTS = [
+    "pdfplumber",
+    "PyMuPDF",
+    "cadquery",
+    "Pillow",
+    "pygltflib",
+    "openai",
+    "requests",
+    "python-dotenv",
+    "nest_asyncio",
+]
+
+
+def _normalize_dist(name):
+    return name.lower().replace("-", "_")
+
+
+def test_pyproject_declares_all_hard_imports():
+    """CFG-001: every hard-imported package must be a core dependency."""
+    text = (ROOT / "pyproject.toml").read_text()
+    deps_block = text.split("dependencies = [", 1)[1].split("]", 1)[0]
+    declared = {_normalize_dist(d) for d in re.findall(r'"([A-Za-z0-9_.-]+?)[><=~!\[]', deps_block)}
+
+    missing = [d for d in _REQUIRED_DISTS if _normalize_dist(d) not in declared]
+    assert not missing, f"pyproject.toml core dependencies missing: {missing}"
+
+
+def test_requirements_txt_pins_all_hard_imports():
+    """CFG-001: requirements.txt must pin (not comment out) every hard import."""
+    pinned = set()
+    for line in (ROOT / "requirements.txt").read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            pinned.add(_normalize_dist(re.split(r"[><=~!\[]", line)[0]))
+
+    missing = [d for d in _REQUIRED_DISTS if _normalize_dist(d) not in pinned]
+    assert not missing, f"requirements.txt missing pinned entries for: {missing}"
+
+
+def test_ci_installs_from_requirements():
+    """CFG-001: CI must install the pinned manifest (which includes cadquery),
+    not an ad-hoc package list."""
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "pip install -r requirements.txt" in ci
