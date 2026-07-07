@@ -55,12 +55,11 @@ python -m src.main datasheet.pdf output.glb
 
 ### With LLM API Key
 
-```bash
-# Using command-line argument
-python -m src.main datasheet.pdf output.glb --api-key YOUR_API_KEY
+The API key is read from the `FASTCHAT_API_KEY` environment variable
+(a `.env` file in the project root is loaded automatically):
 
-# Using environment variable
-export DATASHEET_PARSER_API_KEY=YOUR_API_KEY
+```bash
+export FASTCHAT_API_KEY=YOUR_API_KEY
 python -m src.main datasheet.pdf output.glb
 ```
 

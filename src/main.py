@@ -27,7 +27,8 @@ from .schematic_generator import (
 from .utils import PackageDetector
 from .models import PinData, Pin, PackageInfo
 from .exceptions import (
-    ValidationError, ErrorCodes, APICredentialsError, DatasheetParserError
+    ValidationError, ErrorCodes, APICredentialsError, DatasheetParserError,
+    LLMExtractionError,
 )
 
 
@@ -58,38 +59,6 @@ def validate_input_file(input_path: Path) -> None:
             error_code=ErrorCodes.INVALID_PDF_FILE,
             details={"actual_suffix": input_path.suffix}
         )
-
-
-def get_api_key(args) -> str:
-    """
-    Get API key from args or environment variables.
-
-    Args:
-        args: Parsed command-line arguments
-
-    Returns:
-        API key string
-
-    Raises:
-        APICredentialsError: If API key not found
-    """
-    api_key = args.api_key or os.environ.get("DATASHEET_PARSER_API_KEY") or os.environ.get("FASTCHAT_API_KEY")
-
-    if not api_key:
-        raise APICredentialsError(
-            message="API key required for pin data extraction",
-            error_code=ErrorCodes.MISSING_API_KEY,
-            details={
-                "env_vars_checked": ["DATASHEET_PARSER_API_KEY", "FASTCHAT_API_KEY"],
-                "cli_arg_provided": args.api_key is not None
-            }
-        )
-
-    # Set FASTCHAT_API_KEY if provided via argument
-    if args.api_key:
-        os.environ["FASTCHAT_API_KEY"] = args.api_key
-
-    return api_key
 
 
 def setup_output_path(output_path: Path) -> None:
@@ -185,26 +154,24 @@ def extract_content(input_path: str, candidates: list, verbose: bool = False):
 
 def extract_pin_data(
     content,
-    api_key: str,
     model: str,
     verbose: bool = False,
     part_number: Optional[str] = None,
     max_attempts: int = 2,
+    force_best_effort: bool = False,
 ) -> PinData:
     """
     Extract pin data using LLM.
 
+    The LLM client reads FASTCHAT_API_KEY from the environment at call time.
+
     Args:
         content: ExtractedContent object
-        api_key: API key for LLM service
         model: Model name to use
         verbose: Enable verbose output
 
     Returns:
         PinData object with extracted information
-
-    Raises:
-        SystemExit: If API key not found
     """
     if verbose:
         print("\n[3/5] Extracting pin data...")
@@ -258,7 +225,7 @@ def extract_pin_data(
     if verbose:
         print("Using LLM fallback for extraction")
 
-    llm_client = LLMClient(api_key=api_key, model=model)
+    llm_client = LLMClient(model=model)
 
     # Format content for LLM using the appropriate mode
     from .pdf_extractor.content_extractor import ContentExtractor
@@ -270,17 +237,29 @@ def extract_pin_data(
     validation_feedback = None
     last_validation = None
     last_pin_data = None
+    last_llm_error = None
 
     for attempt in range(1, max_attempts + 1):
         if verbose and attempt > 1:
             print(f"Retrying pin extraction (attempt {attempt}/{max_attempts})...")
 
-        pin_data = llm_client.extract_pin_data(
-            content=formatted_content,
-            part_number=part_number,
-            tables_only_mode=tables_only_mode,
-            validation_feedback=validation_feedback,
-        )
+        try:
+            pin_data = llm_client.extract_pin_data(
+                content=formatted_content,
+                part_number=part_number,
+                tables_only_mode=tables_only_mode,
+                validation_feedback=validation_feedback,
+            )
+        except LLMExtractionError as e:
+            # The client fails closed on its own self-consistency checks; feed
+            # its complaint into the next attempt instead of giving up early.
+            last_llm_error = e
+            issue = (e.details or {}).get("validation_issue")
+            if issue:
+                validation_feedback = issue
+            if verbose:
+                print(f"  LLM extraction failed: {e}")
+            continue
 
         # Normalize before validation so the checks reflect what the rest of the
         # pipeline will actually use.
@@ -309,14 +288,31 @@ def extract_pin_data(
             if attempt < max_attempts:
                 print("  Preparing a corrective retry...")
 
-    # All attempts failed validation — return best available result rather than
-    # crashing the pipeline. The LLM client already enforces basic sanity checks
-    # (non-empty pin list), so last_pin_data is usable even if imperfect.
-    print(
-        f"Warning: Validation failed after {max_attempts} attempts. "
-        f"Using best available result. Issues: {'; '.join(last_validation.errors) if last_validation else 'unknown'}"
+    # All attempts exhausted without a valid result — fail closed unless the
+    # user explicitly asked for best-effort output (ARCH-005).
+    if last_validation is not None and last_validation.errors:
+        errors = list(last_validation.errors)
+    elif last_llm_error is not None:
+        errors = [str(last_llm_error)]
+    else:
+        errors = ["unknown validation failure"]
+
+    if force_best_effort and last_pin_data is not None:
+        print(
+            f"Warning: Validation failed after {max_attempts} attempts. "
+            f"Proceeding with UNVALIDATED best-effort result (--force-best-effort). "
+            f"Issues: {'; '.join(errors)}"
+        )
+        last_pin_data.validation_errors = errors
+        return last_pin_data
+
+    raise ValidationError(
+        f"Pin data failed validation after {max_attempts} attempts: "
+        f"{'; '.join(errors)}. "
+        "Re-run with --force-best-effort to emit unvalidated output.",
+        error_code=ErrorCodes.EXTRACTION_VALIDATION_FAILED,
+        details={"errors": errors},
     )
-    return last_pin_data
 
 
 def extract_layout_with_vision(
@@ -604,7 +600,6 @@ def get_dynamic_min_confidence(pdf_path: Path, user_min_confidence: int = 5, ver
 def process_datasheet(
     input_path: Path,
     output_path: Path,
-    api_key: str,
     model: str,
     part_number: Optional[str] = None,
     layout_mode: bool = False,
@@ -612,6 +607,7 @@ def process_datasheet(
     min_confidence: int = 5,
     verbose: bool = False,
     package_index: Optional[int] = None,
+    force_best_effort: bool = False,
 ) -> bool:
     """
     Main processing pipeline.
@@ -619,7 +615,6 @@ def process_datasheet(
     Args:
         input_path: Path to input PDF
         output_path: Path to output GLB file
-        api_key: API key for LLM service
         model: Model name to use
         layout_mode: Enable Vision API layout extraction
         pcb_2d_mode: Enable 2D PCB schematic generation
@@ -663,10 +658,10 @@ def process_datasheet(
         # Step 3: Extract pin data with LLM
         pin_data = extract_pin_data(
             content,
-            api_key,
             model,
             verbose,
             part_number=resolved_part_number,
+            force_best_effort=force_best_effort,
         )
 
         # Step 4: Extract layout with Vision API (if enabled)
@@ -764,6 +759,12 @@ def process_datasheet(
             else:
                 print("Error: Failed to generate 3D schematic")
             return False
+
+        # Watermark output produced from unvalidated data (--force-best-effort)
+        if pin_data.validation_errors and output_path.exists():
+            from .core import mark_glb_unvalidated
+            mark_glb_unvalidated(str(output_path), pin_data.validation_errors)
+            print("Warning: Output is marked UNVALIDATED (validated=false in GLB extras).")
 
         print(f"\nSuccess! Schematic generated: {output_path}")
 
@@ -917,9 +918,6 @@ Examples:
   # 2D PCB schematic generation
   python -m src.main datasheet.pdf output.glb --pcb-2d
 
-  # With LLM API key
-  python -m src.main datasheet.pdf output.glb --api-key YOUR_API_KEY
-
   # With layout mode (Vision API for layout extraction)
   python -m src.main datasheet.pdf output.glb --layout-mode
 
@@ -945,11 +943,6 @@ Examples:
     parser.add_argument(
         "output",
         help="Output schematic GLB file (e.g., output.glb)"
-    )
-
-    parser.add_argument(
-        "--api-key",
-        help="LLM API key (or set DATASHEET_PARSER_API_KEY or FASTCHAT_API_KEY env var)"
     )
 
     parser.add_argument(
@@ -999,6 +992,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--force-best-effort",
+        action="store_true",
+        help="Emit output even when extracted pin data fails validation. "
+             "The GLB is watermarked with validated=false and the validation "
+             "errors in its scene extras. Without this flag, validation "
+             "failures abort the run."
+    )
+
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose output"
@@ -1021,9 +1023,6 @@ def main():
     input_path = Path(args.input)
     validate_input_file(input_path)
 
-    # Get API key
-    api_key = get_api_key(args)
-
     # Setup output path
     output_path = Path(args.output)
     setup_output_path(output_path)
@@ -1038,10 +1037,18 @@ def main():
             content.text_content, source_name=input_path.name
         )
 
-        pin_data = extract_pin_data(
-            content, api_key, args.model, args.verbose,
-            part_number=resolved_part_number,
-        )
+        try:
+            pin_data = extract_pin_data(
+                content, args.model, args.verbose,
+                part_number=resolved_part_number,
+                force_best_effort=args.force_best_effort,
+            )
+        except ValidationError as e:
+            print(f"Validation error: {e}")
+            sys.exit(1)
+        except APICredentialsError as e:
+            print(f"API credentials error: {e}")
+            sys.exit(1)
 
         # Extract real package dimensions from PDF for the footprint builder
         extracted_dims = None
@@ -1079,12 +1086,19 @@ def main():
         )
         if not success:
             sys.exit(1)
+
+        # Watermark both outputs when unvalidated data was forced through
+        if pin_data.validation_errors:
+            from .core import mark_glb_unvalidated
+            for generated in _both_output_paths(str(output_path)):
+                if Path(generated).exists():
+                    mark_glb_unvalidated(generated, pin_data.validation_errors)
+            print("Warning: Outputs are marked UNVALIDATED (validated=false in GLB extras).")
     else:
         # Single output mode (existing behaviour)
         process_datasheet(
             input_path=input_path,
             output_path=output_path,
-            api_key=api_key,
             model=args.model,
             part_number=args.part_number,
             layout_mode=args.layout_mode,
@@ -1092,6 +1106,7 @@ def main():
             min_confidence=args.min_confidence,
             verbose=args.verbose,
             package_index=args.package_index,
+            force_best_effort=args.force_best_effort,
         )
 
 

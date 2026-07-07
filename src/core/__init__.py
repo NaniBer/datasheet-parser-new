@@ -12,6 +12,7 @@ from .reference_glb_hierarchy import (
     validate_glb_similarity_to_reference,
     validate_pcb_footprint_similarity_to_reference,
 )
+from .validation_marker import mark_glb_unvalidated
 
 __all__ = [
     "format_pin_data",
@@ -23,4 +24,5 @@ __all__ = [
     "validate_pcb_footprint_hierarchy",
     "validate_glb_similarity_to_reference",
     "validate_pcb_footprint_similarity_to_reference",
+    "mark_glb_unvalidated",
 ]

@@ -37,3 +37,4 @@ class PinData:
     selected_package_type: Optional[str] = None  # Preferred package label/type when available
     selection_reason: Optional[str] = None  # Human-readable explanation for the chosen variant
     extraction_method: str = "Table"  # Table, Diagram, Mixed
+    validation_errors: Optional[List[str]] = None  # Set only when invalid data was accepted via --force-best-effort

@@ -5,7 +5,7 @@ import os
 import time
 from dotenv import load_dotenv
 
-from .exceptions import LLMExtractionError, ErrorCodes
+from .exceptions import LLMExtractionError, APICredentialsError, ErrorCodes
 
 load_dotenv()
 
@@ -16,14 +16,31 @@ nest_asyncio.apply()
 
 BASE_URL = "https://fastchat.ideeza.com/v1"
 #BASE_URL = "https://fastchattest.ideeza.com/v1"
-API_KEY = os.getenv("FASTCHAT_API_KEY")
+
+_client = None
 
 
-#
-client = OpenAI(
-    api_key=API_KEY,
-    base_url=BASE_URL
-)
+def _get_client() -> OpenAI:
+    """Return the FastChat client, creating it on first use.
+
+    The client is constructed lazily so FASTCHAT_API_KEY is read at call
+    time rather than import time (BUG-001), and a missing key fails with a
+    clear error instead of an opaque authentication failure.
+    """
+    global _client
+    if _client is None:
+        api_key = os.getenv("FASTCHAT_API_KEY")
+        if not api_key:
+            raise APICredentialsError(
+                message=(
+                    "FASTCHAT_API_KEY is not set. Add it to your .env file "
+                    "or export it in the environment before running."
+                ),
+                error_code=ErrorCodes.MISSING_API_KEY,
+                details={"env_var": "FASTCHAT_API_KEY"},
+            )
+        _client = OpenAI(api_key=api_key, base_url=BASE_URL)
+    return _client
 
 
 def get_completion_from_messages(messages, model="llama-3", temperature=0, max_retries=3, retry_delay=1):
@@ -44,6 +61,10 @@ def get_completion_from_messages(messages, model="llama-3", temperature=0, max_r
         LLMExtractionError: If all retries fail
     """
     last_exception = None
+
+    # Resolve the client before the retry loop so a missing API key raises
+    # APICredentialsError directly instead of being wrapped as an LLM error.
+    client = _get_client()
 
     for attempt in range(max_retries):
         try:

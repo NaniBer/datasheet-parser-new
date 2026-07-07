@@ -5,10 +5,13 @@ This module helps identify and validate package types
 from the pin data extracted from datasheets.
 """
 
+import logging
 import re
 from typing import Optional, Tuple, Dict, List
 
 from ..models.pin_data import PinData, PackageInfo
+
+logger = logging.getLogger(__name__)
 
 
 class PackageDetector:
@@ -252,7 +255,14 @@ class PackageDetector:
         # Get expected dimensions
         expected_dims = self._get_expected_dimensions(pkg_type_upper, pin_count)
         if not expected_dims:
-            return True  # No validation data available
+            # No reference data — the package type is unverifiable, not verified.
+            # Surface that distinction instead of silently passing (ARCH-005).
+            logger.warning(
+                "No reference dimensions for %s with %d pins; "
+                "package type accepted without dimension validation",
+                pkg_type_upper, pin_count,
+            )
+            return True
 
         min_w, max_w, min_h, max_h = expected_dims
         actual_w = pin_data.package.width

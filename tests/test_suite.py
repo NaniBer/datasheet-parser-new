@@ -821,7 +821,7 @@ def test_dfn_pinout_uses_deterministic_table_parser(monkeypatch):
 
     content = _build_content("pdfs/DFN.pdf")
     pin_data = extract_pin_data(
-        content, api_key="dummy", model="dummy", verbose=False, part_number="TPS62160DSG"
+        content, model="dummy", verbose=False, part_number="TPS62160DSG"
     )
 
     assert pin_data.package is not None
@@ -843,7 +843,7 @@ def test_mpu_pinout_uses_deterministic_table_parser(monkeypatch):
 
     content = _build_content("pdfs/MPU-6000-Datasheet1.pdf")
     pin_data = extract_pin_data(
-        content, api_key="dummy", model="dummy", verbose=False, part_number="MPU-6000"
+        content, model="dummy", verbose=False, part_number="MPU-6000"
     )
 
     assert pin_data.package is not None
@@ -911,7 +911,7 @@ def test_full_pipeline_dfn_pdf_to_pcb_footprint_glb(monkeypatch, tmp_path):
 
     # Stage 3: pin extraction (deterministic table parser — no LLM)
     pin_data = extract_pin_data(
-        content, api_key="dummy", model="dummy",
+        content, model="dummy",
         part_number="TPS62160DSG", verbose=False,
     )
     assert pin_data.pins and len(pin_data.pins) == 8
@@ -942,7 +942,7 @@ def test_both_flag_produces_schematic_and_footprint_glb(monkeypatch, tmp_path):
     candidates = detect_relevant_pages("pdfs/DFN.pdf", min_confidence=3, verbose=False)
     content = extract_content("pdfs/DFN.pdf", candidates, verbose=False)
     pin_data = extract_pin_data(
-        content, api_key="dummy", model="dummy",
+        content, model="dummy",
         part_number="TPS62160DSG", verbose=False,
     )
 
@@ -954,3 +954,195 @@ def test_both_flag_produces_schematic_and_footprint_glb(monkeypatch, tmp_path):
     assert footprint_path.exists(), "footprint GLB not created"
     assert schematic_path.stat().st_size > 0
     assert footprint_path.stat().st_size > 0
+
+
+# ===========================================================================
+# 18. FAIL-CLOSED VALIDATION (ARCH-005)
+# ===========================================================================
+# Regression tests for the fail-open validation fix: invalid pin data must
+# never silently reach GLB generation. See datasheet-parser-new_review.md
+# ARCH-005. No network, no CadQuery — pure mock-based unit tests.
+
+from types import SimpleNamespace
+
+from src.exceptions import LLMExtractionError, ValidationError as DSValidationError
+from src.llm.client import LLMClient
+
+
+_INVALID_LEGACY_RESPONSE = json.dumps({
+    "component_name": "TESTPART",
+    "package": {"type": "DIP-8", "pin_count": 8, "width": 6.0, "height": 9.0},
+    # Duplicate pin number 1 -> fails self-consistency validation every time
+    "pins": [
+        {"number": 1, "name": "VCC"},
+        {"number": 1, "name": "GND"},
+        {"number": 3, "name": "OUT"},
+        {"number": 4, "name": "IN1"},
+        {"number": 5, "name": "IN2"},
+        {"number": 6, "name": "EN"},
+        {"number": 7, "name": "NC"},
+        {"number": 8, "name": "VSS"},
+    ],
+})
+
+
+def test_llm_client_raises_on_validation_exhaustion(monkeypatch):
+    """ARCH-005: client must raise, not return known-bad data (client.py fail-open)."""
+    monkeypatch.setattr(
+        "src.llm.client.get_completion_from_messages",
+        lambda messages, **kwargs: _INVALID_LEGACY_RESPONSE,
+    )
+    client = LLMClient(model="test")
+
+    with pytest.raises(LLMExtractionError) as exc_info:
+        client.extract_pin_data(content="irrelevant", max_retries=2, retry_delay=0)
+
+    assert "Duplicate pin numbers" in str(exc_info.value)
+
+
+def _make_invalid_pin_data():
+    return PinData(
+        component_name="TESTPART",
+        package=PackageInfo(type="DIP-8", pin_count=8, width=6.0, height=9.0),
+        pins=[
+            Pin(number=1, name="VCC"),
+            Pin(number=1, name="GND"),  # duplicate
+            Pin(number=3, name="OUT"),
+            Pin(number=4, name="IN1"),
+            Pin(number=5, name="IN2"),
+            Pin(number=6, name="EN"),
+            Pin(number=7, name="NC"),
+            Pin(number=8, name="VSS"),
+        ],
+    )
+
+
+@pytest.fixture
+def _pipeline_with_invalid_llm(monkeypatch):
+    """Route src.main.extract_pin_data to an LLM stub that always returns invalid data."""
+    import src.main as main_module
+    from src.pdf_extractor.content_extractor import ContentExtractor
+
+    monkeypatch.setattr(main_module, "parse_pin_data_from_tables", lambda *a, **k: None)
+    monkeypatch.setattr(
+        ContentExtractor, "format_for_llm",
+        staticmethod(lambda content, tables_only=False: "formatted"),
+    )
+
+    class _StubLLMClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def extract_pin_data(self, **kwargs):
+            return _make_invalid_pin_data()
+
+    monkeypatch.setattr(main_module, "LLMClient", _StubLLMClient)
+    content = SimpleNamespace(tables=[], images=[], text_content="datasheet text")
+    return main_module, content
+
+
+def test_main_extract_pin_data_fails_closed(_pipeline_with_invalid_llm):
+    """ARCH-005: exhausted validation retries must raise, not return bad data."""
+    main_module, content = _pipeline_with_invalid_llm
+
+    with pytest.raises(DSValidationError) as exc_info:
+        main_module.extract_pin_data(
+            content, model="m", verbose=False, part_number="TESTPART",
+        )
+
+    assert "force-best-effort" in str(exc_info.value)
+    assert exc_info.value.details.get("errors")
+
+
+def test_main_extract_pin_data_force_best_effort(_pipeline_with_invalid_llm):
+    """ARCH-005: --force-best-effort returns the data but records the errors."""
+    main_module, content = _pipeline_with_invalid_llm
+
+    pin_data = main_module.extract_pin_data(
+        content, model="m", verbose=False, part_number="TESTPART",
+        force_best_effort=True,
+    )
+
+    assert pin_data is not None
+    assert pin_data.validation_errors, "forced output must carry its validation errors"
+    assert any("duplicate" in e.lower() for e in pin_data.validation_errors)
+
+
+def test_mark_glb_unvalidated_sets_scene_extras(tmp_path):
+    """ARCH-005: forced output is watermarked as validated=false in scene extras."""
+    from src.core.validation_marker import mark_glb_unvalidated
+
+    glb_path = tmp_path / "unvalidated.glb"
+    gltf = GLTF2(scene=0, scenes=[Scene(nodes=[])], nodes=[])
+    gltf.save_binary(str(glb_path))
+
+    mark_glb_unvalidated(str(glb_path), ["duplicate pin number 1"])
+
+    reloaded = GLTF2().load_binary(str(glb_path))
+    extras = reloaded.scenes[0].extras
+    assert extras["validated"] is False
+    assert extras["validationErrors"] == ["duplicate pin number 1"]
+
+
+# ===========================================================================
+# 19. LAZY LLM CLIENT / API KEY HANDLING (BUG-001)
+# ===========================================================================
+# Regression tests for the fail-closed/lazy-client fix of review issue
+# BUG-001. FASTCHAT_API_KEY is the single source of truth and must be read
+# at call time, not import time. No network — the OpenAI class is stubbed.
+
+
+@pytest.fixture
+def _fresh_chat_bot_client(monkeypatch):
+    """Reset the cached chat_bot client so each test exercises lazy creation."""
+    from src import chat_bot
+
+    monkeypatch.setattr(chat_bot, "_client", None)
+    return chat_bot
+
+
+def test_missing_api_key_raises_credentials_error(_fresh_chat_bot_client, monkeypatch):
+    """BUG-001: a missing FASTCHAT_API_KEY fails loudly, not with an opaque 401."""
+    from src.exceptions import APICredentialsError
+
+    chat_bot = _fresh_chat_bot_client
+    monkeypatch.delenv("FASTCHAT_API_KEY", raising=False)
+
+    with pytest.raises(APICredentialsError) as exc_info:
+        chat_bot.get_completion_from_messages([{"role": "user", "content": "hi"}])
+
+    assert "FASTCHAT_API_KEY" in str(exc_info.value)
+
+
+def test_client_reads_key_at_call_time(_fresh_chat_bot_client, monkeypatch):
+    """BUG-001: the client picks up a key set after import, and is cached."""
+    chat_bot = _fresh_chat_bot_client
+    captured = {}
+
+    class _StubOpenAI:
+        def __init__(self, api_key=None, base_url=None):
+            captured["api_key"] = api_key
+            captured["base_url"] = base_url
+
+    monkeypatch.setattr(chat_bot, "OpenAI", _StubOpenAI)
+    monkeypatch.setenv("FASTCHAT_API_KEY", "key-set-after-import")
+
+    first = chat_bot._get_client()
+    second = chat_bot._get_client()
+
+    assert captured["api_key"] == "key-set-after-import"
+    assert first is second, "client must be created once and cached"
+
+
+def test_api_key_cli_flag_removed(monkeypatch):
+    """BUG-001: the dead --api-key flag is gone; argparse rejects it."""
+    import sys
+
+    from src import main as main_module
+
+    monkeypatch.setattr(
+        sys, "argv", ["prog", "in.pdf", "out.glb", "--api-key", "x"]
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.parse_arguments()
+    assert exc_info.value.code == 2  # argparse usage error

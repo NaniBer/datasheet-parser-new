@@ -171,9 +171,15 @@ class LLMClient:
                         time.sleep(retry_delay * (attempt + 1))
                         continue
                     else:
-                        # All retries exhausted — return best available result
-                        print(f"Warning: Validation failed after all retries: {issue}. Using best available result.")
-                        return pin_data
+                        # All retries exhausted — fail closed rather than return
+                        # known-bad data. The caller decides whether to force
+                        # best-effort output.
+                        raise LLMExtractionError(
+                            f"Pin data failed self-consistency validation after "
+                            f"{max_retries} attempts: {issue}",
+                            error_code=ErrorCodes.LLM_INVALID_RESPONSE,
+                            details={"validation_issue": issue},
+                        )
 
                 return pin_data
 
