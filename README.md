@@ -63,6 +63,16 @@ export FASTCHAT_API_KEY=YOUR_API_KEY
 python -m src.main datasheet.pdf output.glb
 ```
 
+To set up a local `.env`, copy the template and fill in your key:
+
+```bash
+cp .env.example .env
+```
+
+Keys are personal: request your own rather than copying a teammate's,
+and rotate the key if it may have been exposed. `.env` is gitignored —
+never commit it.
+
 ### Advanced Options
 
 ```bash

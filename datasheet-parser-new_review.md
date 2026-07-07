@@ -671,7 +671,7 @@ Issue ID prefixes: `ARCH` (architectural), `BUG` (functional defects, listed und
 | **Impact** | Key sprawl with no rotation story; new developers learn to share the real key. |
 | **Recommended Fix** | **Rotate `FASTCHAT_API_KEY` now**; commit a `.env.example` with placeholder values (`FASTCHAT_API_KEY=`, `IMAGE_AI_URL=`); document rotation in the README. |
 | **Fix Priority** | Pre-Beta |
-| **Status** | ⬜ Not handled |
+| **Status** | 🟡 Partially handled (2026-07-07 — `.env.example` committed with placeholders, README onboarding/rotation note added, placeholder-only test in test_suite.py §22; **key rotation deliberately deferred by owner — still pending**) |
 
 | Field | Detail |
 |---|---|

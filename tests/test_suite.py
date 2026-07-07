@@ -1257,3 +1257,27 @@ def test_ci_installs_from_requirements():
     not an ad-hoc package list."""
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     assert "pip install -r requirements.txt" in ci
+
+
+# ===========================================================================
+# 22. SECRETS HYGIENE (SEC-003)
+# ===========================================================================
+# .env.example is the committed onboarding template — it must exist and
+# must never contain an actual secret value.
+
+
+def test_env_example_exists_with_placeholders_only():
+    """SEC-003: .env.example declares the required vars with empty values."""
+    env_example = ROOT / ".env.example"
+    assert env_example.exists(), ".env.example template is missing"
+
+    text = env_example.read_text()
+    assignments = dict(
+        line.split("=", 1)
+        for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    )
+
+    assert "FASTCHAT_API_KEY" in assignments
+    for key, value in assignments.items():
+        assert value.strip() == "", f"{key} in .env.example must be a placeholder, not a value"
