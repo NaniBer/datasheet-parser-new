@@ -73,11 +73,16 @@ class DimensionExtractor:
               "A": 2.50,    # total height
             }
         """
+        doc = None
         try:
+            # Open the document once and share the handle; per-render opens
+            # leaked one file handle and re-parsed the PDF for every page.
+            doc = fitz.open(pdf_path)
+
             if hint_pages is not None:
                 dimension_pages = self._pages_from_hints(hint_pages, target_package_type)
             else:
-                dimension_pages = self._scan_pages(pdf_path)
+                dimension_pages = self._scan_pages(doc)
 
             if not dimension_pages:
                 logger.debug("DimensionExtractor: no dimension pages found")
@@ -85,7 +90,7 @@ class DimensionExtractor:
 
             candidates = []
             for entry in dimension_pages:
-                data = self._extract_page(pdf_path, entry["page"], entry["package_type"])
+                data = self._extract_page(doc, entry["page"], entry["package_type"])
                 if data:
                     candidates.append({"page": entry["page"], "data": data})
 
@@ -120,20 +125,19 @@ class DimensionExtractor:
         except Exception as exc:
             logger.debug("DimensionExtractor: failed with %s", exc)
             return None
+        finally:
+            if doc is not None:
+                doc.close()
 
     # -------------------------------------------------------------------------
     # Internal phases
     # -------------------------------------------------------------------------
 
-    def _scan_pages(self, pdf_path: str, dpi: int = 120) -> List[Dict]:
+    def _scan_pages(self, doc: "fitz.Document", dpi: int = 120) -> List[Dict]:
         """Phase 1: scan all pages and return list of {page, package_type} for dimension drawings."""
-        doc = fitz.open(pdf_path)
-        page_count = len(doc)
-        doc.close()
-
         found = []
-        for i in range(page_count):
-            image_bytes = self._render_page(pdf_path, i, dpi=dpi)
+        for i in range(len(doc)):
+            image_bytes = self._render_page(doc, i, dpi=dpi)
             raw = self._call_api(image_bytes, SCAN_PROMPT)
             parsed = self._parse_json(raw)
 
@@ -166,13 +170,13 @@ class DimensionExtractor:
                 result.append({"page": page_0indexed, "package_type": pkg})
         return result
 
-    def _extract_page(self, pdf_path: str, page: int, package_type: str) -> Optional[Dict]:
+    def _extract_page(self, doc: "fitz.Document", page: int, package_type: str) -> Optional[Dict]:
         """Phase 2: extract dimensions from a single dimension page."""
         is_fine = self._is_fine_pitch(package_type)
         dpi = 300 if is_fine else 200
         prompt = self._build_extract_prompt(package_type)
 
-        image_bytes = self._render_page(pdf_path, page, dpi=dpi)
+        image_bytes = self._render_page(doc, page, dpi=dpi)
         raw = self._call_api(image_bytes, prompt)
         parsed = self._parse_json(raw)
 
@@ -233,8 +237,7 @@ class DimensionExtractor:
     # Helpers
     # -------------------------------------------------------------------------
 
-    def _render_page(self, pdf_path: str, page_number: int, dpi: int = 150) -> bytes:
-        doc = fitz.open(pdf_path)
+    def _render_page(self, doc: "fitz.Document", page_number: int, dpi: int = 150) -> bytes:
         page = doc[page_number]
         mat = fitz.Matrix(dpi / 72, dpi / 72)
         pix = page.get_pixmap(matrix=mat)

@@ -509,7 +509,7 @@ Issue ID prefixes: `ARCH` (architectural), `BUG` (functional defects, listed und
 | **Impact** | One leaked file handle + full document parse per page; a 60-page datasheet leaks 60 `fitz.Document` handles and re-parses the PDF 60 times. Risk of `Too many open files` in batch runs; significant wasted I/O. |
 | **Recommended Fix** | Open the document once in `extract()`, pass the handle to `_render_page`, close in a `finally`. |
 | **Fix Priority** | Pre-Beta |
-| **Status** | ⬜ Not handled |
+| **Status** | ✅ Handled (2026-07-07 — extract() opens once and closes in a finally; _scan_pages/_extract_page/_render_page take the shared handle; 2 lifecycle regression tests in test_suite.py §23) |
 
 | Field | Detail |
 |---|---|

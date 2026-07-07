@@ -1281,3 +1281,95 @@ def test_env_example_exists_with_placeholders_only():
     assert "FASTCHAT_API_KEY" in assignments
     for key, value in assignments.items():
         assert value.strip() == "", f"{key} in .env.example must be a placeholder, not a value"
+
+
+# ===========================================================================
+# 23. DIMENSION EXTRACTOR DOCUMENT LIFECYCLE (BUG-003)
+# ===========================================================================
+# _render_page used to fitz.open() the PDF for every page render and never
+# close it — one leaked handle plus a full re-parse per page. The document
+# must now be opened exactly once per extract() call and always closed.
+# fitz and the vision API are stubbed — no files, no network.
+
+_SCAN_JSON = '{"has_dimensions": true, "page_type": "package_drawing", "package_type": "SOIC-16"}'
+_EXTRACT_JSON = '{"package_type": "SOIC-16", "unit": "mm", "dimensions": {"e": 1.27, "D": 9.9}}'
+
+
+class _FakePixmap:
+    def tobytes(self, fmt):
+        return b"png-bytes"
+
+
+class _FakePage:
+    def get_pixmap(self, matrix=None):
+        return _FakePixmap()
+
+
+class _FakeFitzDoc:
+    def __init__(self):
+        self.closed = False
+
+    def __len__(self):
+        return 3
+
+    def __getitem__(self, index):
+        return _FakePage()
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeFitz:
+    Matrix = staticmethod(lambda *a: None)
+
+    def __init__(self):
+        self.open_calls = 0
+        self.docs = []
+
+    def open(self, path):
+        self.open_calls += 1
+        doc = _FakeFitzDoc()
+        self.docs.append(doc)
+        return doc
+
+
+@pytest.fixture
+def _dim_extractor(monkeypatch):
+    from src.pdf_extractor import dimension_extractor as dim_mod
+
+    fake_fitz = _FakeFitz()
+    monkeypatch.setattr(dim_mod, "fitz", fake_fitz)
+    monkeypatch.setattr(dim_mod.time, "sleep", lambda s: None)
+    return dim_mod, fake_fitz
+
+
+def test_extract_opens_document_once_and_closes(_dim_extractor, monkeypatch):
+    """BUG-003: a full scan+extract run must use a single, closed fitz handle."""
+    dim_mod, fake_fitz = _dim_extractor
+
+    def _fake_api(self, image_bytes, prompt):
+        return _SCAN_JSON if prompt == dim_mod.SCAN_PROMPT else _EXTRACT_JSON
+
+    monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _fake_api)
+
+    result = dim_mod.DimensionExtractor().extract("fake.pdf")
+
+    assert result is not None and result["e"] == 1.27
+    assert fake_fitz.open_calls == 1, "PDF must be opened exactly once per extract()"
+    assert all(doc.closed for doc in fake_fitz.docs)
+
+
+def test_extract_closes_document_on_failure(_dim_extractor, monkeypatch):
+    """BUG-003: the handle is closed even when the vision API blows up."""
+    dim_mod, fake_fitz = _dim_extractor
+
+    def _boom(self, image_bytes, prompt):
+        raise RuntimeError("vision API down")
+
+    monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _boom)
+
+    result = dim_mod.DimensionExtractor().extract("fake.pdf")
+
+    assert result is None
+    assert fake_fitz.open_calls == 1
+    assert all(doc.closed for doc in fake_fitz.docs)
