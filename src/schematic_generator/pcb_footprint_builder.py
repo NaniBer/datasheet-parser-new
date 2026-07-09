@@ -111,9 +111,32 @@ class PcbFootprintBuilder:
         # Calculate pin positions
         self.pin_positions = layout_pins(self.params, custom_layout)
 
+        # IPC-7351: SMD pads are centered on the lead foot, not the lead
+        # tip. layout_pins places pads at half the lead span (E/2); pull
+        # them inward by half the lead length. Only applies when L comes
+        # from real data (JEDEC table or PDF), and never to through-hole
+        # packages, whose rows sit at the drill spacing exactly.
+        lead_length_known = bool(
+            (jedec_defaults or {}).get("L") or (extracted_dims or {}).get("L")
+        )
+        if lead_length_known and not self.is_through_hole():
+            inset = self.params.pin_geometry.leg_length / 2.0
+            for pos in self.pin_positions:
+                if pos.side == "left":
+                    pos.x += inset
+                elif pos.side == "right":
+                    pos.x -= inset
+                elif pos.side == "top":
+                    pos.y -= inset
+                elif pos.side == "bottom":
+                    pos.y += inset
+
         logger.info(
             "Initialized 2D PCB schematic builder for %s (%d pins)" % (package_type, pin_count)
         )
+
+    def is_through_hole(self) -> bool:
+        return self.package_type.upper().startswith(("DIP", "PDIP", "CDIP"))
 
     def _apply_extracted_dims(self, dims: Dict[str, Any]) -> None:
         """Override SchematicParameters fields with extracted PDF dimensions."""
@@ -362,8 +385,8 @@ class PcbFootprintBuilder:
 
         x, y = pin_pos.x, pin_pos.y
 
-        # Check if through-hole (DIP/CDIP) or surface mount (SOIC/TQFP/QFN)
-        is_through_hole = self.package_type.upper().startswith(("DIP", "CDIP"))
+        # Check if through-hole (DIP/PDIP/CDIP) or surface mount (SOIC/TQFP/QFN)
+        is_through_hole = self.is_through_hole()
 
         if is_through_hole:
             # For through-hole packages, preserve the reference GLB order exactly:
@@ -608,7 +631,7 @@ class PcbFootprintBuilder:
                 is_valid, hierarchy_errors = validate_pcb_footprint_glb(
                     output_path,
                     pin_count=self.pin_count,
-                    through_hole=self.package_type.upper().startswith(("DIP", "CDIP")),
+                    through_hole=self.is_through_hole(),
                 )
             except Exception as exc:
                 logger.warning("Skipping PCB footprint hierarchy validation: %s" % exc)
@@ -620,8 +643,8 @@ class PcbFootprintBuilder:
                     )
                     return False
 
-            # Keep DIP/CDIP workflow output structurally aligned with the reference 2d.glb.
-            if self.package_type.upper().startswith(("DIP", "CDIP")):
+            # Keep through-hole workflow output structurally aligned with the reference 2d.glb.
+            if self.is_through_hole():
                 try:
                     is_similar, similarity_errors = validate_glb_similarity_to_reference(
                         output_path

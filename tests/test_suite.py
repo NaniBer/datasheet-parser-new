@@ -1630,8 +1630,9 @@ def test_tssop16_footprint_uses_jedec_defaults(tmp_path):
     pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]
     assert build_pcb_footprint_direct("TSSOP-16", 16, "X", pins, str(out))
 
+    # IPC-7351: pads centered on the lead foot -> span = E - L = 6.4 - 0.6
     row_spacing, pitch = _row_spacing_and_pitch(_glb_pad_positions(out))
-    assert row_spacing == pytest.approx(6.4, abs=0.01)
+    assert row_spacing == pytest.approx(5.8, abs=0.01)
     assert pitch == pytest.approx(0.65, abs=0.01)
 
 
@@ -1640,8 +1641,9 @@ def test_soic16_footprint_uses_jedec_defaults(tmp_path):
     pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]
     assert build_pcb_footprint_direct("SOIC-16", 16, "X", pins, str(out))
 
+    # narrow SOIC: pad span = E - L = 6.0 - 0.84
     row_spacing, pitch = _row_spacing_and_pitch(_glb_pad_positions(out))
-    assert row_spacing == pytest.approx(6.0, abs=0.01), "narrow SOIC lead span"
+    assert row_spacing == pytest.approx(5.16, abs=0.01)
     assert pitch == pytest.approx(1.27, abs=0.01)
 
 
@@ -1653,8 +1655,29 @@ def test_extracted_dims_still_override_jedec_defaults(tmp_path):
         extracted_dims={"e": 0.65, "E": 6.6},
     )
 
+    # extracted E=6.6 wins over JEDEC 6.4; default L=0.6 still insets pads
     row_spacing, _ = _row_spacing_and_pitch(_glb_pad_positions(out))
-    assert row_spacing == pytest.approx(6.6, abs=0.01)
+    assert row_spacing == pytest.approx(6.0, abs=0.01)
+
+
+def test_pdip_footprint_is_through_hole_at_drill_spacing(tmp_path):
+    # PDIP was previously treated as SMD (startswith check missed it) and
+    # through-hole rows must sit at the drill spacing with no IPC inset.
+    out = tmp_path / "pdip8.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 9)]
+    assert build_pcb_footprint_direct("PDIP-8", 8, "X", pins, str(out))
+
+    glb = GLTF2().load(str(out))
+    pin_types = {
+        n.extras["pinData"]["pinType"]
+        for n in glb.nodes
+        if n.extras and "pinData" in n.extras
+    }
+    assert pin_types == {"ThroughHole"}
+
+    row_spacing, pitch = _row_spacing_and_pitch(_glb_pad_positions(out))
+    assert row_spacing == pytest.approx(7.62, abs=0.01)
+    assert pitch == pytest.approx(2.54, abs=0.01)
 
 
 def test_schematic_symbol_keeps_display_proportions():

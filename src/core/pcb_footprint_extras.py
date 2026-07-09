@@ -289,7 +289,7 @@ def inject_pcb_footprint_extras(
     if not nodes:
         return 0
 
-    is_through_hole = package_type.upper().startswith(("DIP", "CDIP"))
+    is_through_hole = package_type.upper().startswith(("DIP", "PDIP", "CDIP"))
     parent_map = _build_parent_map(nodes)
 
     # Resolve per-layer half-dimensions, falling back to legacy body_width/height
