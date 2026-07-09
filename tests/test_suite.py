@@ -1391,6 +1391,11 @@ class _FakePage:
     def get_pixmap(self, matrix=None):
         return _FakePixmap()
 
+    def get_text(self):
+        # No text content: the text-based phase finds nothing and the
+        # extractor falls through to the vision flow under test here.
+        return ""
+
 
 class _FakeFitzDoc:
     def __init__(self):
@@ -1460,3 +1465,123 @@ def test_extract_closes_document_on_failure(_dim_extractor, monkeypatch):
     assert result is None
     assert fake_fitz.open_calls == 1
     assert all(doc.closed for doc in fake_fitz.docs)
+
+
+# ===========================================================================
+# 24. TEXT-BASED DIMENSION EXTRACTION (no vision API, no table of contents)
+# ===========================================================================
+# Dimensions in vector-drawn datasheets are real PDF text. The text phase
+# must find drawing pages by scanning page content only — never the PDF
+# table of contents — and its output must pass the plausibility gate that
+# also guards the vision fallback.
+
+import fitz as _fitz
+
+from src.pdf_extractor.text_dimensions import (
+    extract_text_dimensions,
+    find_dimension_pages,
+    parse_prose,
+    parse_ti_outline,
+    plausible_dims,
+)
+
+# Ground truth read visually from the drawings (see test_dimension_api.py).
+_TSSOP16_TRUTH = {"e": 0.65, "E": 6.4, "D": 5.0, "b": 0.235, "L": 0.625, "A": 1.2}
+
+
+def test_text_dims_ti_tssop16_matches_ground_truth():
+    with _fitz.open("pdfs/74HC595_TI.pdf") as doc:
+        result = extract_text_dimensions(doc, target_package_type="TSSOP-16")
+
+    assert result is not None
+    for key, truth in _TSSOP16_TRUTH.items():
+        assert result.get(key) == pytest.approx(truth, abs=0.05), key
+
+
+def test_text_dims_selects_target_variant_among_multiple_drawings():
+    # 74HC595 documents SOIC/CDIP/LCCC/TSSOP/PDIP/SSOP variants; asking for
+    # SSOP must not return TSSOP values even though both are 0.65mm pitch.
+    with _fitz.open("pdfs/74HC595_TI.pdf") as doc:
+        result = extract_text_dimensions(doc, target_package_type="SSOP-16")
+
+    assert result is not None
+    assert result["e"] == pytest.approx(0.65, abs=0.03)
+    assert result["E"] == pytest.approx(7.8, abs=0.1)   # SSOP span, not TSSOP 6.4
+    assert result["A"] == pytest.approx(2.0, abs=0.05)  # SSOP height, not TSSOP 1.2
+
+
+def test_text_dims_prose_style_ft232r():
+    # FTDI states dimensions in prose; the drawing itself is a raster image.
+    with _fitz.open("pdfs/FT232R.pdf") as doc:
+        result = extract_text_dimensions(doc, target_package_type="SSOP-28")
+
+    assert result is not None
+    assert result["e"] == pytest.approx(0.65, abs=0.03)
+    assert result["D"] == pytest.approx(10.2, abs=0.1)
+    assert result["E1"] == pytest.approx(5.3, abs=0.1)
+
+
+def test_text_dims_work_without_table_of_contents():
+    # Many datasheets have no TOC/bookmarks; page discovery must rely on
+    # page content only. Strip the TOC and expect identical results.
+    with _fitz.open("pdfs/74HC595_TI.pdf") as doc:
+        with_toc = extract_text_dimensions(doc, target_package_type="TSSOP-16")
+        doc.set_toc([])
+        without_toc = extract_text_dimensions(doc, target_package_type="TSSOP-16")
+
+    assert without_toc == with_toc
+    assert without_toc is not None
+
+
+def test_find_dimension_pages_skips_board_layout_pages():
+    with _fitz.open("pdfs/74HC595_TI.pdf") as doc:
+        pages = find_dimension_pages(doc)
+        texts = [doc[p].get_text().upper() for p in pages]
+
+    assert pages, "expected mechanical drawing pages to be found"
+    assert all("BOARD LAYOUT" not in t for t in texts)
+
+
+def test_parse_ti_outline_pitch_crosscheck_rejects_bad_span():
+    # If the "2X <row span>" annotation contradicts the pitch, drop the pitch.
+    text = "14X 0.65\n2X 9.99\n"
+    assert "e" not in parse_ti_outline(text, 16)
+
+
+def test_parse_prose_orders_body_axes():
+    text = "nominally 10.20mm x 5.30mm body (7.80mm x 10.20mm including pins) on a 0.65 mm pitch"
+    dims = parse_prose(text)
+    assert dims["E1"] == 5.30 and dims["D"] == 10.20
+    assert dims["E"] == 7.80 and dims["e"] == 0.65
+
+
+def test_plausible_dims_rejects_scrambled_vision_output():
+    # Real responses observed from the vision API on 74HC595: values read
+    # off the drawing but assigned to the wrong dimension letters.
+    scrambled_tssop = {"e": 0.15, "E": 0.75, "D": 0.3, "b": 4.5, "L": 0.25, "A": 6.2}
+    scrambled_soic = {"e": 0.07, "D": 9.3, "E1": 0.05, "A": 2.65, "b": 1.27, "L": 0.07}
+    assert not plausible_dims(scrambled_tssop)
+    assert not plausible_dims(scrambled_soic)
+
+
+def test_plausible_dims_accepts_real_packages():
+    assert plausible_dims(_TSSOP16_TRUTH)
+    assert plausible_dims({"e": 1.27, "E": 6.0, "D": 9.9, "b": 0.41, "A": 1.75})  # SOIC-16
+    assert plausible_dims({"e": 2.54, "E": 7.62, "b": 0.46, "A": 4.57})           # DIP
+
+
+def test_vision_fallback_result_is_gated(_dim_extractor, monkeypatch):
+    # A vision response with implausible values must be discarded, not
+    # forwarded into footprint geometry.
+    dim_mod, _ = _dim_extractor
+    bad_extract = (
+        '{"package_type": "SOIC-16", "unit": "mm",'
+        ' "dimensions": {"e": 0.07, "b": 1.27, "D": 9.3}}'
+    )
+
+    def _fake_api(self, image_bytes, prompt):
+        return _SCAN_JSON if prompt == dim_mod.SCAN_PROMPT else bad_extract
+
+    monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _fake_api)
+
+    assert dim_mod.DimensionExtractor().extract("fake.pdf") is None

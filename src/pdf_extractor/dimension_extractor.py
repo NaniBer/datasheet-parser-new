@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 import fitz  # PyMuPDF
 import requests
 
+from .text_dimensions import extract_text_dimensions, plausible_dims
+
 logger = logging.getLogger(__name__)
 
 SCAN_PROMPT = """Look at this page and classify it. Answer ONLY with JSON, no other text.
@@ -79,6 +81,18 @@ class DimensionExtractor:
             # leaked one file handle and re-parsed the PDF for every page.
             doc = fitz.open(pdf_path)
 
+            # Phase 0: text-based extraction. Most vector-drawn datasheets
+            # carry dimensions as real text; this is free (no API calls),
+            # deterministic, and scans page content only — never the PDF
+            # table of contents, which many datasheets lack.
+            text_result = extract_text_dimensions(doc, target_package_type)
+            if text_result:
+                logger.debug(
+                    "DimensionExtractor: text-based extraction succeeded: %s",
+                    text_result,
+                )
+                return text_result
+
             if hint_pages is not None:
                 dimension_pages = self._pages_from_hints(hint_pages, target_package_type)
             else:
@@ -120,7 +134,17 @@ class DimensionExtractor:
             if not best:
                 return None
 
-            return self._flatten(best)
+            flat = self._flatten(best)
+            if flat and not plausible_dims(flat):
+                # Vision models sometimes read real numbers off the drawing
+                # but assign them to the wrong dimension letters; feeding
+                # those into the footprint is worse than using defaults.
+                logger.debug(
+                    "DimensionExtractor: vision result failed plausibility gate: %s",
+                    flat,
+                )
+                return None
+            return flat
 
         except Exception as exc:
             logger.debug("DimensionExtractor: failed with %s", exc)
