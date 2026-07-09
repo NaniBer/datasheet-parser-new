@@ -28,7 +28,7 @@ from .utils import PackageDetector
 from .models import PinData, Pin, PackageInfo
 from .exceptions import (
     ValidationError, ErrorCodes, APICredentialsError, DatasheetParserError,
-    LLMExtractionError,
+    LLMExtractionError, SchematicGenerationError,
 )
 
 
@@ -597,6 +597,63 @@ def get_dynamic_min_confidence(pdf_path: Path, user_min_confidence: int = 5, ver
         return user_min_confidence
 
 
+def enforce_known_package_type(
+    pin_data: PinData,
+    part_number: Optional[str] = None,
+    package_index: Optional[int] = None,
+    force_best_effort: bool = False,
+) -> None:
+    """
+    Fail closed on package types with no known geometry (ARCH-006).
+
+    Unknown package types used to render silently as DIP. Now they raise
+    SchematicGenerationError unless --force-best-effort is set, in which
+    case the DIP substitution is made explicit: the selected package type
+    is rewritten to "DIP-<pin_count>" and the substitution is recorded in
+    pin_data.validation_errors (which triggers the GLB unvalidated
+    watermark).
+    """
+    from .schematic_generator import parse_package_type
+
+    package_type, pin_count, _, _ = pin_data_to_builder_format(
+        pin_data,
+        package_index=package_index,
+        part_number=part_number,
+    )
+
+    try:
+        parse_package_type(package_type)
+        return
+    except SchematicGenerationError as e:
+        if not force_best_effort:
+            raise SchematicGenerationError(
+                f"{e} Re-run with --force-best-effort to substitute DIP "
+                "geometry (output will be marked unvalidated).",
+                error_code=ErrorCodes.PACKAGE_UNKNOWN,
+                details=e.details,
+            )
+
+    substitute = f"DIP-{pin_count}"
+    message = (
+        f"Unknown package type '{package_type}'; substituted {substitute} "
+        "geometry (--force-best-effort)"
+    )
+    print(f"Warning: {message}")
+
+    if pin_data.packages:
+        from .pdf_extractor.variant_selection import select_package_variant
+        selection = select_package_variant(
+            pin_data, part_number=part_number, package_index=package_index
+        )
+        selection.package["type"] = substitute
+    elif pin_data.package:
+        pin_data.package.type = substitute
+
+    errors = list(pin_data.validation_errors or [])
+    errors.append(message)
+    pin_data.validation_errors = errors
+
+
 def process_datasheet(
     input_path: Path,
     output_path: Path,
@@ -697,6 +754,16 @@ def process_datasheet(
                 % (selected_type, selected_package.index + 1)
             )
             print(f"  Selection reason: {selected_package.reason}")
+
+        # Fail closed on unknown package geometry before any builder runs;
+        # with --force-best-effort this substitutes explicit DIP geometry
+        # and records it in validation_errors instead (ARCH-006).
+        enforce_known_package_type(
+            pin_data,
+            part_number=resolved_part_number,
+            package_index=package_index,
+            force_best_effort=force_best_effort,
+        )
 
         # Step 6: Generate schematic
         if verbose:
@@ -1048,6 +1115,19 @@ def main():
             sys.exit(1)
         except APICredentialsError as e:
             print(f"API credentials error: {e}")
+            sys.exit(1)
+
+        # Fail closed on unknown package geometry (ARCH-006); with
+        # --force-best-effort this substitutes explicit DIP geometry instead.
+        try:
+            enforce_known_package_type(
+                pin_data,
+                part_number=resolved_part_number,
+                package_index=args.package_index,
+                force_best_effort=args.force_best_effort,
+            )
+        except SchematicGenerationError as e:
+            print(f"Error: {e}")
             sys.exit(1)
 
         # Extract real package dimensions from PDF for the footprint builder

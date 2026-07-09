@@ -6,9 +6,14 @@ schematic symbols using cadquery. Parameters are based on standard package
 dimensions and can be customized as needed.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Tuple, List
 from enum import Enum
+
+from ..exceptions import SchematicGenerationError, ErrorCodes
+
+logger = logging.getLogger(__name__)
 
 
 class PackageType(Enum):
@@ -687,24 +692,46 @@ PACKAGE_TYPE_ALIASES = {
     "LCCC": PackageType.LCCC,
 }
 
+# Aliases that approximate a physically different package with the nearest
+# supported geometry — resolvable, but worth a warning.
+LOSSY_ALIASES = {"TSOP", "SSOP", "MSOP", "SOP", "LGA"}
+
 
 def parse_package_type(package_str: str) -> PackageType:
     """
     Parse package type from string (e.g., "LQFP64" -> PackageType.LQFP).
+
+    Raises:
+        SchematicGenerationError: If the package type is not recognized
+            (error code PACKAGE_UNKNOWN). Unknown packages must not be
+            silently rendered with substitute geometry (ARCH-006); the
+            pipeline's --force-best-effort flag handles explicit fallback.
     """
-    package_str = package_str.upper().strip()
+    normalized = (package_str or "").upper().strip()
+
+    def _resolve(alias: str) -> PackageType:
+        if alias in LOSSY_ALIASES:
+            logger.warning(
+                "Package type '%s' has no dedicated geometry; approximating with %s",
+                package_str, PACKAGE_TYPE_ALIASES[alias].value,
+            )
+        return PACKAGE_TYPE_ALIASES[alias]
 
     # Try direct match
-    if package_str in PACKAGE_TYPE_ALIASES:
-        return PACKAGE_TYPE_ALIASES[package_str]
+    if normalized in PACKAGE_TYPE_ALIASES:
+        return _resolve(normalized)
 
     # Try prefix match (e.g., "LQFP64" -> "LQFP")
-    for alias, ptype in PACKAGE_TYPE_ALIASES.items():
-        if package_str.startswith(alias):
-            return ptype
+    for alias in PACKAGE_TYPE_ALIASES:
+        if normalized.startswith(alias):
+            return _resolve(alias)
 
-    # Default to DIP for unknown types
-    return PackageType.DIP
+    raise SchematicGenerationError(
+        f"Unknown package type '{package_str}'. Supported families: "
+        f"{', '.join(sorted(set(PACKAGE_TYPE_ALIASES)))}",
+        error_code=ErrorCodes.PACKAGE_UNKNOWN,
+        details={"package_type": package_str},
+    )
 
 
 def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicParameters:
@@ -750,8 +777,13 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
     elif ptype == PackageType.CDIP:
         return get_cdip_parameters(pin_count)
     else:
-        # Default to DIP
-        return get_dip_parameters(pin_count)
+        # Unreachable for current PackageType members; fail loudly if a new
+        # member is added without a parameter builder.
+        raise SchematicGenerationError(
+            f"No geometry parameters implemented for package type {ptype.value}",
+            error_code=ErrorCodes.PACKAGE_UNKNOWN,
+            details={"package_type": ptype.value},
+        )
 
 
 # ============================================================================

@@ -785,9 +785,9 @@ def test_reference_file_is_self_similar():
 
 @pytest.mark.parametrize(
     "package_type,pin_count",
-    [("WSON-8", 8), ("SOT-23-6", 6), ("WLCSP-8", 8), ("SON-10", 10)],
+    [("WSON-8", 8), ("SON-10", 10)],
 )
-def test_unknown_package_families_generate_valid_footprints(tmp_path, package_type, pin_count):
+def test_aliased_package_families_generate_valid_footprints(tmp_path, package_type, pin_count):
     output_path = tmp_path / f"{package_type.lower().replace('-', '_')}.glb"
     pins = [{"number": n, "name": f"PIN{n}"} for n in range(1, pin_count + 1)]
 
@@ -796,6 +796,93 @@ def test_unknown_package_families_generate_valid_footprints(tmp_path, package_ty
     is_valid, errors = validate_pcb_footprint_glb(str(output_path), pin_count=pin_count, through_hole=False)
     assert is_valid, errors
     assert output_path.stat().st_size > 0
+
+
+@pytest.mark.parametrize(
+    "package_type,pin_count",
+    [("SOT-23-6", 6), ("WLCSP-8", 8)],
+)
+def test_unknown_package_families_fail_closed(tmp_path, package_type, pin_count):
+    """ARCH-006: packages with no known geometry must raise, not render as DIP."""
+    from src.exceptions import ErrorCodes, SchematicGenerationError
+
+    output_path = tmp_path / f"{package_type.lower().replace('-', '_')}.glb"
+    pins = [{"number": n, "name": f"PIN{n}"} for n in range(1, pin_count + 1)]
+
+    with pytest.raises(SchematicGenerationError) as exc_info:
+        build_pcb_footprint(package_type, pin_count, "TEST", pins, str(output_path))
+
+    assert exc_info.value.error_code == ErrorCodes.PACKAGE_UNKNOWN
+    assert not output_path.exists(), "no GLB may be written for unknown packages"
+
+
+def _unknown_package_pin_data():
+    return PinData(
+        component_name="MYSTERY",
+        package=PackageInfo(type="WLCSP-8", pin_count=8, width=2.0, height=2.0),
+        pins=[Pin(number=n, name=f"P{n}") for n in range(1, 9)],
+        extraction_method="Table",
+    )
+
+
+def test_enforce_known_package_type_raises_without_force():
+    from src.exceptions import ErrorCodes, SchematicGenerationError
+    from src.main import enforce_known_package_type
+
+    pin_data = _unknown_package_pin_data()
+    with pytest.raises(SchematicGenerationError) as exc_info:
+        enforce_known_package_type(pin_data)
+
+    assert exc_info.value.error_code == ErrorCodes.PACKAGE_UNKNOWN
+    assert "--force-best-effort" in str(exc_info.value)
+    assert pin_data.package.type == "WLCSP-8", "package must not be mutated on failure"
+
+
+def test_enforce_known_package_type_force_substitutes_dip_and_flags():
+    from src.main import enforce_known_package_type
+
+    pin_data = _unknown_package_pin_data()
+    enforce_known_package_type(pin_data, force_best_effort=True)
+
+    # Substitution is explicit: type rewritten and recorded so the GLB
+    # gets the unvalidated watermark.
+    assert pin_data.package.type == "DIP-8"
+    assert any("WLCSP-8" in e and "DIP-8" in e for e in pin_data.validation_errors)
+
+
+def test_enforce_known_package_type_force_substitutes_multi_package_variant():
+    from src.main import enforce_known_package_type
+
+    pin_data = PinData(
+        component_name="MYSTERY",
+        packages=[
+            {
+                "type": "WLCSP-8",
+                "pin_count": 8,
+                "pins": [{"number": n, "name": f"P{n}"} for n in range(1, 9)],
+            }
+        ],
+        extraction_method="Table",
+    )
+    enforce_known_package_type(pin_data, force_best_effort=True)
+
+    assert pin_data.packages[0]["type"] == "DIP-8"
+    assert pin_data.validation_errors
+
+
+def test_enforce_known_package_type_accepts_known_packages():
+    from src.main import enforce_known_package_type
+
+    pin_data = PinData(
+        component_name="NE555",
+        package=PackageInfo(type="DIP-8", pin_count=8, width=6.5, height=10.2),
+        pins=[Pin(number=n, name=f"P{n}") for n in range(1, 9)],
+        extraction_method="Table",
+    )
+    enforce_known_package_type(pin_data)
+
+    assert pin_data.package.type == "DIP-8"
+    assert not pin_data.validation_errors
 
 
 # ===========================================================================
