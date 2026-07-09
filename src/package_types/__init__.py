@@ -26,6 +26,7 @@ from .package_geometry import (
     get_lccc_parameters,
     get_cdip_parameters,
 )
+from .footprint_defaults import get_footprint_defaults
 
 __all__ = [
     "PackageType",
@@ -33,6 +34,7 @@ __all__ = [
     "BodyGeometry",
     "SchematicParameters",
     "get_schematic_parameters",
+    "get_footprint_defaults",
     "parse_package_type",
     "calculate_pin_position",
     # Parameter functions

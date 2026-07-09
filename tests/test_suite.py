@@ -1585,3 +1585,100 @@ def test_vision_fallback_result_is_gated(_dim_extractor, monkeypatch):
     monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _fake_api)
 
     assert dim_mod.DimensionExtractor().extract("fake.pdf") is None
+
+
+# ===========================================================================
+# 25. JEDEC FOOTPRINT DEFAULTS (footprints must not inherit display dims)
+# ===========================================================================
+# Schematic symbols use exaggerated "display" proportions for readability
+# (e.g. DIP: 2.5mm pitch / 20mm body). Footprints must default to real
+# JEDEC package dimensions instead, with PDF-extracted dims overriding.
+
+from src.package_types.footprint_defaults import get_footprint_defaults
+
+
+def _glb_pad_positions(path):
+    glb = GLTF2().load(str(path))
+    pos = {}
+    for n in glb.nodes:
+        if n.extras and "pinData" in n.extras:
+            p = n.extras["pinData"]["position"]
+            pos[int(n.name)] = (p["x"], p["y"])
+    return pos
+
+
+def _row_spacing_and_pitch(pos):
+    xs = sorted({round(x, 3) for x, _ in pos.values()})
+    ys = sorted({round(y, 3) for _, y in pos.values()})
+    row_spacing = xs[-1] - xs[0]
+    pitch = ys[1] - ys[0]
+    return row_spacing, pitch
+
+
+def test_dip8_footprint_uses_jedec_row_spacing(tmp_path):
+    out = tmp_path / "dip8.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 9)]
+    assert build_pcb_footprint_direct("DIP-8", 8, "NE555", pins, str(out))
+
+    row_spacing, pitch = _row_spacing_and_pitch(_glb_pad_positions(out))
+    assert row_spacing == pytest.approx(7.62, abs=0.01), "DIP rows must be 300mil apart"
+    assert pitch == pytest.approx(2.54, abs=0.01), "DIP pitch must be 100mil"
+
+
+def test_tssop16_footprint_uses_jedec_defaults(tmp_path):
+    out = tmp_path / "tssop16.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]
+    assert build_pcb_footprint_direct("TSSOP-16", 16, "X", pins, str(out))
+
+    row_spacing, pitch = _row_spacing_and_pitch(_glb_pad_positions(out))
+    assert row_spacing == pytest.approx(6.4, abs=0.01)
+    assert pitch == pytest.approx(0.65, abs=0.01)
+
+
+def test_soic16_footprint_uses_jedec_defaults(tmp_path):
+    out = tmp_path / "soic16.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]
+    assert build_pcb_footprint_direct("SOIC-16", 16, "X", pins, str(out))
+
+    row_spacing, pitch = _row_spacing_and_pitch(_glb_pad_positions(out))
+    assert row_spacing == pytest.approx(6.0, abs=0.01), "narrow SOIC lead span"
+    assert pitch == pytest.approx(1.27, abs=0.01)
+
+
+def test_extracted_dims_still_override_jedec_defaults(tmp_path):
+    out = tmp_path / "tssop16_dims.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]
+    assert build_pcb_footprint_direct(
+        "TSSOP-16", 16, "X", pins, str(out),
+        extracted_dims={"e": 0.65, "E": 6.6},
+    )
+
+    row_spacing, _ = _row_spacing_and_pitch(_glb_pad_positions(out))
+    assert row_spacing == pytest.approx(6.6, abs=0.01)
+
+
+def test_schematic_symbol_keeps_display_proportions():
+    # The readable schematic-symbol geometry must be unaffected.
+    params = get_schematic_parameters("DIP-8", 8)
+    assert params.body_width == 20.0
+    assert params.pin_pitch == 2.5
+
+
+def test_footprint_defaults_known_families():
+    assert get_footprint_defaults("DIP-8", 8)["E"] == 7.62
+    assert get_footprint_defaults("PDIP-16", 16)["e"] == 2.54
+    assert get_footprint_defaults("SOIC-28", 28)["E"] == 10.3   # wide body
+    assert get_footprint_defaults("SSOP-28", 28)["E"] == 7.8
+    assert get_footprint_defaults("QFN-32", 32)["e"] == 0.5
+
+
+def test_footprint_defaults_unknown_family_returns_none():
+    assert get_footprint_defaults("LCCC-20", 20) is None
+
+
+def test_footprint_defaults_are_plausible():
+    for pkg, pins in [("DIP-8", 8), ("SOIC-16", 16), ("TSSOP-16", 16),
+                      ("SSOP-28", 28), ("QFN-32", 32), ("DFN-8", 8)]:
+        dims = get_footprint_defaults(pkg, pins)
+        assert dims is not None, pkg
+        assert plausible_dims(dims), (pkg, dims)

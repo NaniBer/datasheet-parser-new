@@ -24,6 +24,7 @@ import cadquery as cq
 from ..package_types import (
     PackageType,
     SchematicParameters,
+    get_footprint_defaults,
     get_schematic_parameters,
 )
 from ..core import (
@@ -97,7 +98,13 @@ class PcbFootprintBuilder:
         # Get schematic parameters
         self.params = get_schematic_parameters(package_type, pin_count)
 
-        # Override hardcoded params with extracted dims if provided
+        # Schematic parameters carry display proportions for readable
+        # symbols; footprints must use real JEDEC dimensions instead.
+        jedec_defaults = get_footprint_defaults(package_type, pin_count)
+        if jedec_defaults:
+            self._apply_extracted_dims(jedec_defaults)
+
+        # Dimensions extracted from the datasheet PDF override defaults
         if extracted_dims:
             self._apply_extracted_dims(extracted_dims)
 
