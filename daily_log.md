@@ -327,3 +327,35 @@ Each day should follow this structure:
 - Cache OpenDataLoader results
 - Add table visualization
 - Support custom table prompts
+
+## 2026-07-09 — Catch-up (covers 2026-06-04 → 2026-07-09)
+
+The log was not maintained for five weeks; this entry is reconstructed from git history.
+
+### What We Did
+
+**GLB output fidelity (mid/late June)**
+- Fixed schematic GLB hierarchy to match the reference `schematic.glb` (ccfbb76) and PCB hierarchy to match the `2d.glb` reference (d3f2e9c, 917888b, d59a139).
+- Fixed `boundingBox` to cover the leg area instead of the pin-number text (8d2e892).
+- Added per-layer spacing between fab / silk / courtyard body outlines and used `LINE_THICKNESS` for PCB body lines (05188a1, f305f27).
+- Added page detector unit tests + benchmarks (5b067a6) and a 9-component schematic test suite with pipeline fixes (dbfac11); test GLBs live in `compare/` and `schematic_tests/noTOC/`.
+
+**Architecture change: dropped OpenDataLoader (2026-07-02)**
+- Replaced OpenDataLoader with PyMuPDF for table extraction and added an LLM validation retry loop (765bd64). No more Java dependency — the "Notes" section above and `plan.md` describe the old architecture.
+- Consolidated 14 test files into a single `test_suite.py`, all 60 passing (8169801).
+- Added `--both` flag to generate schematic and footprint in one pass (a77cdff, 103af4a).
+- Added GitHub Actions CI workflow (316040b).
+
+**Dimension extraction from mechanical drawings (2026-07-05/06)**
+- Integrated dimension extraction into the footprint builder so real datasheet dimensions (pitch, body size, pad size) override hardcoded JEDEC defaults (996980a).
+- Return None when the extracted package type doesn't match the target; skip full page scan when pipeline candidates exist; improved cross-package and legacy-format dimension matching (f276d71, b87af66, 5d68faf).
+- Exploration scripts (untracked): `test_dimension_api.py`, `test_tssop_investigation.py`, `compare_dims.py` — testing the Qwen vision endpoint against known JEDEC reference specs.
+
+**Code review remediation (2026-07-07 →)**
+- Working through `datasheet-parser-new_review.md`: fail-closed validation + lazy API-key client (ARCH-005, BUG-001), `json_str` init fix (BUG-002), pyproject as single dependency source (CFG-001), `.env.example` template (SEC-003 partial), open PDF once per dimension run (BUG-003).
+- **In progress (uncommitted)**: ARCH-006 — `parse_package_type()` now raises `SchematicGenerationError` for unknown packages instead of silently defaulting to DIP; `--force-best-effort` makes the DIP substitution explicit and records it in `validation_errors`.
+
+### Current Status
+- **Branch**: main at 1727ef5, with ARCH-006 changes uncommitted in `src/main.py` and `src/package_types/package_geometry.py`.
+- Table extraction: PyMuPDF + deterministic parser first, LLM fallback second. OpenDataLoader/Java no longer required.
+- Remaining review items: rest of ARCH-001..004, ARCH-007, BUG-004+, SEC items.
