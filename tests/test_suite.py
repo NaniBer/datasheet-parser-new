@@ -1570,6 +1570,128 @@ def test_plausible_dims_accepts_real_packages():
     assert plausible_dims({"e": 2.54, "E": 7.62, "b": 0.46, "A": 4.57})           # DIP
 
 
+_PARTIAL_TEXT_DIMS = {
+    "package_type": "SOIC",
+    "unit": "mm",
+    "A": 2.65,
+    "e": 1.27,
+    "b": 0.45,
+}
+
+_FULL_SOIC_EXTRACT_JSON = (
+    '{"package_type": "SOIC-16", "unit": "mm", "dimensions": {'
+    '"b": {"min": "0.31", "max": "0.51"},'
+    '"D": {"min": "9.80", "max": "10.00"},'
+    '"E": {"min": "10.00", "max": "10.65"},'
+    '"e": "1.27",'
+    '"L": {"min": "0.40", "max": "1.27"}}}'
+)
+
+
+def test_partial_text_result_does_not_short_circuit_vision(_dim_extractor, monkeypatch):
+    # 74HC595 regression: text extraction returned only A/e/b and the vision
+    # phase (which reads the full table) never ran. Partial text hits must
+    # continue to vision and merge, with deterministic text values winning.
+    dim_mod, _ = _dim_extractor
+    monkeypatch.setattr(
+        dim_mod, "extract_text_dimensions", lambda doc, tgt=None: dict(_PARTIAL_TEXT_DIMS)
+    )
+
+    def _fake_api(self, image_bytes, prompt):
+        return _SCAN_JSON if prompt == dim_mod.SCAN_PROMPT else _FULL_SOIC_EXTRACT_JSON
+
+    monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _fake_api)
+
+    result = dim_mod.DimensionExtractor().extract("fake.pdf", target_package_type="SOIC-16")
+
+    assert result is not None
+    # vision fills the keys text missed
+    assert result["E"] == pytest.approx(10.325, abs=0.01)
+    assert result["D"] == pytest.approx(9.90, abs=0.01)
+    assert result["L"] == pytest.approx(0.835, abs=0.01)
+    # text (deterministic) wins over vision for keys both provide
+    assert result["b"] == pytest.approx(0.45, abs=0.001)
+
+
+def test_complete_text_result_skips_vision(_dim_extractor, monkeypatch):
+    dim_mod, _ = _dim_extractor
+    complete = {
+        "package_type": "SOIC-16", "unit": "mm",
+        "e": 1.27, "E": 6.0, "D": 9.9, "b": 0.41, "L": 0.84,
+    }
+    monkeypatch.setattr(
+        dim_mod, "extract_text_dimensions", lambda doc, tgt=None: dict(complete)
+    )
+
+    def _no_api(self, image_bytes, prompt):
+        raise AssertionError("vision API must not be called for a complete text result")
+
+    monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _no_api)
+
+    result = dim_mod.DimensionExtractor().extract("fake.pdf", target_package_type="SOIC-16")
+    assert result == complete
+
+
+def test_partial_text_result_survives_vision_failure(_dim_extractor, monkeypatch):
+    # If vision yields nothing, the partial text dims are still a valid
+    # override (the builder overlays them on JEDEC defaults).
+    dim_mod, _ = _dim_extractor
+    monkeypatch.setattr(
+        dim_mod, "extract_text_dimensions", lambda doc, tgt=None: dict(_PARTIAL_TEXT_DIMS)
+    )
+
+    def _boom(self, image_bytes, prompt):
+        raise RuntimeError("vision API down")
+
+    monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _boom)
+
+    result = dim_mod.DimensionExtractor().extract("fake.pdf", target_package_type="SOIC-16")
+    assert result == _PARTIAL_TEXT_DIMS
+
+
+def test_merge_candidates_combines_partial_pages():
+    from src.pdf_extractor.dimension_extractor import DimensionExtractor
+
+    candidates = [
+        {"page": 3, "data": {"package_type": "SOIC-16", "unit": "mm", "dimensions": {
+            "e": "1.27", "b": {"min": "0.31", "max": "0.51"},
+        }}},
+        {"page": 5, "data": {"package_type": "SOIC-16", "unit": "mm", "dimensions": {
+            "E": {"min": "10.00", "max": "10.65"},
+            "D": {"min": "9.80", "max": "10.00"},
+            "L": {"min": "0.40", "max": "1.27"},
+            "b": "0.4",  # single value must NOT displace page 3's min/max pair
+        }}},
+    ]
+
+    merged = DimensionExtractor()._merge_candidates(candidates)
+    dims = merged["dimensions"]
+    assert set(dims) == {"e", "b", "E", "D", "L"}
+    assert dims["b"] == {"min": "0.31", "max": "0.51"}
+
+
+def test_merge_candidates_ignores_other_package_families():
+    from src.pdf_extractor.dimension_extractor import DimensionExtractor
+
+    candidates = [
+        {"page": 3, "data": {"package_type": "SOIC-16", "unit": "mm", "dimensions": {
+            "e": "1.27", "E": {"min": "5.80", "max": "6.20"},
+        }}},
+        {"page": 9, "data": {"package_type": "PDIP-16", "unit": "mm", "dimensions": {
+            "e": "2.54", "E": "7.62", "D": "19.3", "b": "0.46", "L": "3.3",
+        }}},
+    ]
+
+    merged = DimensionExtractor()._merge_candidates(candidates)
+    dims = merged["dimensions"]
+    # PDIP page has more keys and would win a completeness contest, but it
+    # must not contribute values to a SOIC merge... the base is whichever
+    # scores best; the other family is excluded entirely.
+    assert merged["package_type"] == "PDIP-16"
+    assert dims["e"] == "2.54"
+    assert "E" in dims and dims["E"] == "7.62"
+
+
 def test_vision_fallback_result_is_gated(_dim_extractor, monkeypatch):
     # A vision response with implausible values must be discarded, not
     # forwarded into footprint geometry.

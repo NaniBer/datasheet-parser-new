@@ -3,7 +3,8 @@ Dimension extractor — 3-phase vision API flow.
 
 Phase 1: Scan all PDF pages to find mechanical package dimension drawings.
 Phase 2: Extract labeled dimensions from those pages using package-aware prompts.
-Phase 3: Deduplicate, score, and pick the best result.
+Phase 3: Deduplicate and merge candidates key-by-key (pages often carry
+         complementary subsets of the dimensions).
 
 Returns a flat dict of float values (midpoints of min/max ranges) suitable for
 overriding hardcoded package geometry in PcbFootprintBuilder.
@@ -43,6 +44,11 @@ class DimensionExtractor:
     API_URL = "https://qwen.ideeza.com/describe_image/"
     FINE_PITCH_KEYWORDS = ["tssop", "ssop", "qfn", "qfp", "lqfp", "tqfp", "vssop", "msop"]
 
+    # Keys the footprint builder consumes. A text result missing any of
+    # these is only a partial hit: vision extraction still runs and the
+    # results are merged (text values win — they are deterministic).
+    CRITICAL_KEYS = ("e", "E", "D", "b", "L")
+
     def extract(
         self,
         pdf_path: str,
@@ -76,6 +82,7 @@ class DimensionExtractor:
             }
         """
         doc = None
+        text_result: Optional[Dict[str, Any]] = None
         try:
             # Open the document once and share the handle; per-render opens
             # leaked one file handle and re-parsed the PDF for every page.
@@ -86,12 +93,19 @@ class DimensionExtractor:
             # deterministic, and scans page content only — never the PDF
             # table of contents, which many datasheets lack.
             text_result = extract_text_dimensions(doc, target_package_type)
-            if text_result:
+            if text_result and all(
+                text_result.get(k) is not None for k in self.CRITICAL_KEYS
+            ):
                 logger.debug(
-                    "DimensionExtractor: text-based extraction succeeded: %s",
+                    "DimensionExtractor: text-based extraction complete: %s",
                     text_result,
                 )
                 return text_result
+            if text_result:
+                logger.debug(
+                    "DimensionExtractor: partial text result %s — running vision to fill gaps",
+                    text_result,
+                )
 
             if hint_pages is not None:
                 dimension_pages = self._pages_from_hints(hint_pages, target_package_type)
@@ -100,7 +114,7 @@ class DimensionExtractor:
 
             if not dimension_pages:
                 logger.debug("DimensionExtractor: no dimension pages found")
-                return None
+                return text_result
 
             candidates = []
             for entry in dimension_pages:
@@ -110,7 +124,7 @@ class DimensionExtractor:
 
             if not candidates:
                 logger.debug("DimensionExtractor: extraction yielded no usable data")
-                return None
+                return text_result
 
             # Filter to candidates matching the target package type
             if target_package_type:
@@ -130,11 +144,18 @@ class DimensionExtractor:
                     return None
                 candidates = filtered
 
-            best = self._pick_best(candidates)
+            best = self._merge_candidates(candidates)
             if not best:
-                return None
+                return text_result
 
             flat = self._flatten(best)
+            if flat and text_result:
+                # Deterministic text values win over vision reads for keys
+                # both sources provide; vision fills the gaps.
+                flat.update(
+                    {k: v for k, v in text_result.items()
+                     if k not in ("package_type", "unit")}
+                )
             if flat and not plausible_dims(flat):
                 # Vision models sometimes read real numbers off the drawing
                 # but assign them to the wrong dimension letters; feeding
@@ -143,12 +164,14 @@ class DimensionExtractor:
                     "DimensionExtractor: vision result failed plausibility gate: %s",
                     flat,
                 )
-                return None
-            return flat
+                return text_result
+            return flat or text_result
 
         except Exception as exc:
+            # A partial text result is still a valid override; only the
+            # vision refinement was lost.
             logger.debug("DimensionExtractor: failed with %s", exc)
-            return None
+            return text_result
         finally:
             if doc is not None:
                 doc.close()
@@ -207,8 +230,18 @@ class DimensionExtractor:
         time.sleep(0.5)
         return parsed
 
-    def _pick_best(self, candidates: List[Dict]) -> Optional[Dict]:
-        """Phase 3: deduplicate and return the highest-scoring candidate's data dict."""
+    def _merge_candidates(self, candidates: List[Dict]) -> Optional[Dict]:
+        """
+        Phase 3: deduplicate and merge candidates key-by-key.
+
+        Different pages often carry complementary subsets of the dimensions
+        (e.g. the outline drawing gives e/b, the dimension table gives
+        D/E/L), so merging beats picking a single page. The most complete
+        candidate is the base; others contribute a key only when their value
+        is stronger (min/max pair > single value) AND their package type is
+        compatible with the base — dimensions from a different package
+        variant must never mix in.
+        """
         if not candidates:
             return None
 
@@ -221,8 +254,27 @@ class DimensionExtractor:
                 seen.add(fp)
                 unique.append(entry)
 
-        best = max(unique, key=lambda e: self._completeness_score(e.get("data", {})))
-        return best.get("data")
+        ordered = sorted(
+            unique,
+            key=lambda e: self._completeness_score(e.get("data", {})),
+            reverse=True,
+        )
+        base = dict(ordered[0].get("data") or {})
+        base_pkg = base.get("package_type", "")
+        dims = dict(base.get("dimensions") or {})
+
+        for entry in ordered[1:]:
+            data = entry.get("data", {})
+            if base_pkg and not self._matches_target(
+                data.get("package_type", ""), base_pkg
+            ):
+                continue
+            for key, val in (data.get("dimensions") or {}).items():
+                if self._value_strength(val) > self._value_strength(dims.get(key)):
+                    dims[key] = val
+
+        base["dimensions"] = dims
+        return base
 
     def _flatten(self, raw: Dict) -> Optional[Dict[str, Any]]:
         """
@@ -328,23 +380,22 @@ class DimensionExtractor:
 
         return False
 
-    def _completeness_score(self, extracted: Dict) -> float:
-        """Score completeness: min+max pair = 1.0, single value = 0.5, missing = 0."""
-        dims = extracted.get("dimensions", {})
-        if not dims:
+    def _value_strength(self, v: Any) -> float:
+        """Strength of one dimension value: min+max pair = 1.0, single = 0.5."""
+        if isinstance(v, dict):
+            has_min = bool(v.get("min") and str(v.get("min")).strip() not in ("", "-", "- "))
+            has_max = bool(v.get("max") and str(v.get("max")).strip() not in ("", "-", "- "))
+            if has_min and has_max:
+                return 1.0
+            if has_min or has_max:
+                return 0.5
             return 0.0
-        total = 0.0
-        for v in dims.values():
-            if isinstance(v, dict):
-                has_min = bool(v.get("min") and str(v.get("min")).strip() not in ("", "-", "- "))
-                has_max = bool(v.get("max") and str(v.get("max")).strip() not in ("", "-", "- "))
-                if has_min and has_max:
-                    total += 1.0
-                elif has_min or has_max:
-                    total += 0.5
-            elif v:
-                total += 0.5
-        return total
+        return 0.5 if v else 0.0
+
+    def _completeness_score(self, extracted: Dict) -> float:
+        """Score completeness: sum of per-key value strengths."""
+        dims = extracted.get("dimensions", {})
+        return sum(self._value_strength(v) for v in dims.values()) if dims else 0.0
 
     def _to_float(self, v: Any) -> Optional[float]:
         """Convert a value to float, stripping non-numeric suffixes like 'BSC', 'REF', 'TYP'."""
