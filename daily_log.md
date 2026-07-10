@@ -359,3 +359,27 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - **Branch**: main at 1727ef5, with ARCH-006 changes uncommitted in `src/main.py` and `src/package_types/package_geometry.py`.
 - Table extraction: PyMuPDF + deterministic parser first, LLM fallback second. OpenDataLoader/Java no longer required.
 - Remaining review items: rest of ARCH-001..004, ARCH-007, BUG-004+, SEC items.
+
+---
+
+## 2026-07-10 — Footprint dimension verification against official footprints; pad geometry + extraction fixes
+
+### What We Did
+
+**Verified dimension translation into GLBs**
+- Built a measurement flow (trimesh world-space checks, `verify_glb_dims.py`) proving extracted dims do reach GLB geometry: pitch `e`, lead span `E` (with IPC-7351 inset), body length `D` all translate correctly.
+- Compared generated footprints per-pin against 6 official footprints (Ultra Librarian `ul_74HC595/`, SnapEDA `ATMEGA328P-PU/`, `MCP3208-CI_P/`, `MM74HC594M/`, `TLO62CDR/`, `ESP32-C3-WROOM-02-N4/` — untracked, third-party): pin grids match exactly (0.000mm on DIP-16s, exact pitch everywhere); remaining deltas are IPC density-level style choices.
+
+**Fixed in `pcb_footprint_builder.py` / `footprint_defaults.py`**
+- Pads recentered on the body: `layout_pins()` uses schematic top-margin placement, which mis-centered pad columns by ~4.5mm once real body dims replaced display proportions (`_recenter_pins()`).
+- Real pad geometry via `pad_spec`: through-hole = drill + 2×0.35 annular ring (Ø1.53 vs official 1.524); SMD = IPC-7351 rects from b/L with ≥0.2mm clearance clamp. Fixes TSSOP 0.65mm-pitch pads that previously overlapped (fixed 1.25mm circles).
+- Fab outline now drawn at plastic body width E1 (new per-family E1/D1 in JEDEC defaults), not lead span E; courtyard computed to enclose body or pads, whichever is larger.
+
+**Fixed dimension extraction short-circuit (74HC595 regression)**
+- Root cause: partial text-phase result ({A,e,b} only) ended extraction; vision (which reads the full page-23 table) never ran.
+- `extract()` now requires all critical keys (e,E,D,b,L) from text to short-circuit; otherwise vision runs and merges, text values winning conflicts. `_pick_best` → `_merge_candidates` (key-by-key merge across pages, min/max pairs beat singles, foreign package families excluded). Vision failure returns the partial text result instead of None.
+- Live result on 74HC595: complete dim set {A,A1,b,D,E,e,L}. Note: extractor found the wide-body (DW) SOIC drawing; D-vs-DW disambiguation needs part-number-aware variant matching (open item).
+
+### Current Status
+- Test suite: 104 passing (was 93 at session start); new regression tests include a per-pin comparison against the official `DIP16_300_TEX.kicad_mod` (skips if fixture absent).
+- Open items: pad sizing from b_max/L_min (needs min/max preserved through `_flatten`), drill from lead width, targeted retry for missing keys, provenance tagging + extraction eval harness, module packages (ESP32-style) unsupported by design.
