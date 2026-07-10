@@ -1647,6 +1647,91 @@ def test_soic16_footprint_uses_jedec_defaults(tmp_path):
     assert pitch == pytest.approx(1.27, abs=0.01)
 
 
+from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+
+
+def test_through_hole_pad_has_annular_ring():
+    # IPC minimum annular ring: pad = drill + 2 * 0.35mm ring.
+    # Reference: Ultra Librarian DIP16_300_TEX uses 1.524 pad / 0.813 drill.
+    b = PcbFootprintBuilder("DIP-16", 16, "X")
+    assert b.pad_spec["shape"] == "circle"
+    assert b.pad_spec["diameter"] == pytest.approx(1.53, abs=0.05)
+    assert b.pad_spec["mask_diameter"] > b.pad_spec["diameter"]
+
+
+def test_smd_pads_are_rects_sized_from_b_and_l():
+    # IPC-7351 gull-wing: length = L + toe + heel, width = b + side margins.
+    b = PcbFootprintBuilder("TSSOP-16", 16, "X")
+    assert b.pad_spec["shape"] == "rect"
+    assert b.pad_spec["length"] == pytest.approx(0.6 + 0.7, abs=0.05)
+    assert b.pad_spec["width"] == pytest.approx(0.25 + 0.06, abs=0.02)
+    # adjacent pads must keep clearance at 0.65mm pitch
+    assert b.pad_spec["width"] <= 0.65 - 0.2
+
+
+def test_smd_pad_width_respects_extracted_b():
+    b = PcbFootprintBuilder(
+        "SOIC-16", 16, "X",
+        extracted_dims={"e": 1.27, "E": 10.325, "b": 0.51, "L": 0.835},
+    )
+    assert b.pad_spec["shape"] == "rect"
+    assert b.pad_spec["width"] == pytest.approx(0.51 + 0.06, abs=0.02)
+    assert b.pad_spec["length"] == pytest.approx(0.835 + 0.7, abs=0.05)
+
+
+def test_fab_outline_uses_body_width_not_lead_span():
+    # SOIC-16 narrow: body E1 = 3.9, lead span E = 6.0. The drawn body
+    # must be E1 wide while pads stay placed from E.
+    b = PcbFootprintBuilder("SOIC-16", 16, "X")
+    assert b.fab_outline_width == pytest.approx(3.9, abs=0.01)
+    assert abs(b.pin_positions[0].x) == pytest.approx((6.0 - 0.84) / 2, abs=0.01)
+
+    b2 = PcbFootprintBuilder("DIP-16", 16, "X")
+    assert b2.fab_outline_width == pytest.approx(6.35, abs=0.01)
+    assert abs(b2.pin_positions[0].x) == pytest.approx(7.62 / 2, abs=0.01)
+
+
+def test_dip16_pins_match_official_kicad_footprint(tmp_path):
+    # Per-pin regression against the Ultra Librarian DIP16_300_TEX footprint.
+    kicad_mod = Path("ul_74HC595/KiCADv6/footprints.pretty/DIP16_300_TEX.kicad_mod")
+    if not kicad_mod.exists():
+        pytest.skip("official footprint fixture not present")
+
+    import re as _re
+    text = kicad_mod.read_text()
+    matches = _re.findall(r'\(pad "(\d+)" thru_hole \w+ \(at ([\d.-]+) ([\d.-]+)\)', text)
+    official = {int(n): (float(x), float(y)) for n, x, y in matches}
+    ox = [p[0] for p in official.values()]
+    oy = [p[1] for p in official.values()]
+    cx, cy = (min(ox) + max(ox)) / 2, (min(oy) + max(oy)) / 2
+
+    out = tmp_path / "dip16.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]
+    assert build_pcb_footprint_direct("DIP-16", 16, "74HC595", pins, str(out))
+    ours = _glb_pad_positions(out)
+
+    for n, (x, y) in official.items():
+        # KiCad Y grows downward; ours grows upward
+        expected = (x - cx, -(y - cy))
+        assert ours[n][0] == pytest.approx(expected[0], abs=0.01), f"pin {n} x"
+        assert ours[n][1] == pytest.approx(expected[1], abs=0.01), f"pin {n} y"
+
+
+def test_footprint_pad_columns_centered_on_body(tmp_path):
+    out = tmp_path / "soic16_centered.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]
+    assert build_pcb_footprint_direct(
+        "SOIC-16", 16, "X", pins, str(out),
+        extracted_dims={"e": 1.27, "E": 10.325, "D": 9.90, "b": 0.41, "L": 0.835},
+    )
+
+    # Real body dims must not inherit the schematic top_margin offset:
+    # each pad column has to be symmetric about the body center (y=0).
+    pos = _glb_pad_positions(out)
+    ys = [y for _, y in pos.values()]
+    assert (max(ys) + min(ys)) / 2 == pytest.approx(0.0, abs=0.01)
+
+
 def test_extracted_dims_still_override_jedec_defaults(tmp_path):
     out = tmp_path / "tssop16_dims.glb"
     pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]

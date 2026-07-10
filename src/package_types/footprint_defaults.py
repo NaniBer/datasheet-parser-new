@@ -9,11 +9,13 @@ extracted from the datasheet PDF override these defaults.
 
 Dimension keys mirror the extracted-dims dict consumed by
 PcbFootprintBuilder._apply_extracted_dims():
-    e — lead pitch (mm)
-    E — lead span / through-hole row spacing (mm); drives pad x positions
-    D — body length (mm)
-    b — lead width (mm)
-    L — lead foot length (mm)
+    e  — lead pitch (mm)
+    E  — lead span / through-hole row spacing (mm); drives pad x positions
+    E1 — plastic body width (mm); drives the drawn fab outline
+    D  — body length (mm)
+    D1 — plastic body size on the second axis (quad packages)
+    b  — lead width (mm)
+    L  — lead foot length (mm)
 
 Sources: JEDEC MS-001 (PDIP), MS-012/MS-013 (SOIC), MO-153 (TSSOP),
 MO-150 (SSOP), MO-187 (MSOP), MO-220 (QFN), MS-026 (LQFP/TQFP).
@@ -64,6 +66,7 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         return {
             "e": 2.54,
             "E": 7.62 if pin_count <= 28 else 15.24,
+            "E1": 6.35 if pin_count <= 28 else 13.7,
             "D": _dual_row_body_length(pin_count, 2.54, margin=1.3),
         }
 
@@ -72,6 +75,7 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         return {
             "e": 1.27,
             "E": 10.3 if wide else 6.0,
+            "E1": 7.5 if wide else 3.9,
             "D": (_SOIC_WIDE_D if wide else _SOIC_NARROW_D).get(
                 pin_count, _dual_row_body_length(pin_count, 1.27, margin=1.0)
             ),
@@ -83,6 +87,7 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         return {
             "e": 0.65,
             "E": 6.4,
+            "E1": 4.4,
             "D": _TSSOP_D.get(pin_count, _dual_row_body_length(pin_count, 0.65)),
             "b": 0.25,
             "L": 0.6,
@@ -92,6 +97,7 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         return {
             "e": 0.65,
             "E": 7.8,
+            "E1": 5.3,
             "D": _SSOP_D.get(pin_count, _dual_row_body_length(pin_count, 0.65)),
             "b": 0.3,
             "L": 0.75,
@@ -101,6 +107,7 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         return {
             "e": 0.5 if pin_count >= 10 else 0.65,
             "E": 4.9,
+            "E1": 3.0,
             "D": 3.0,
             "b": 0.33,
             "L": 0.53,
@@ -124,7 +131,9 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         pitch = _QFP_PITCH.get(pin_count, 0.5)
         # Lead span: pin row span + shoulders + lead feet on both sides.
         span = round((pin_count // 4 - 1) * pitch + 4.0, 2)
-        return {"e": pitch, "E": span, "D": span, "b": round(pitch * 0.45, 2), "L": 0.6}
+        body = round(span - 2.0, 2)  # MS-026: span = body + 2x (shoulder + foot)
+        return {"e": pitch, "E": span, "E1": body, "D": span, "D1": body,
+                "b": round(pitch * 0.45, 2), "L": 0.6}
 
     # BGA, LGA, LCCC, TSOP: no tabulated defaults yet.
     return None

@@ -57,6 +57,13 @@ class PcbFootprintBuilder:
     SOLDER_MASK_DIAMETER = 1.352  # mm (largest circle)
     COPPER_PAD_DIAMETER = 1.250  # mm (medium circle)
     HOLE_DIAMETER = 0.830  # mm (standard 0.032" drill)
+
+    # Pad sizing (IPC-7351 nominal density)
+    ANNULAR_RING = 0.35     # mm per side, through-hole pad = drill + 2x ring
+    PAD_TOE_HEEL = 0.70     # mm, gull-wing pad length = L + toe + heel
+    PAD_SIDE_MARGIN = 0.06  # mm, gull-wing pad width = b + side margins
+    PAD_MIN_GAP = 0.20      # mm, minimum copper gap between adjacent pads
+    MASK_MARGIN = 0.102     # mm, solder mask opening beyond copper
     PIN_CYLINDER_HEIGHT = 0.200  # mm (through PCB thickness)
     PAD_HEIGHT = 0.020  # mm (thin layer)
     TINY_HEIGHT = 0.001  # mm (minimum height for extrusion)
@@ -72,8 +79,7 @@ class PcbFootprintBuilder:
 
     # Layer clearance offsets (matching reference 2d.glb spacing between layers)
     SILK_MARGIN_Y = 0.12   # silk extends this far beyond fab on Y (= LINE_THICKNESS)
-    CRTYD_MARGIN_X = 0.875  # crtyd extends beyond body edge on X (PAD_OUTER_RADIUS + 0.25)
-    CRTYD_MARGIN_Y = 0.25   # crtyd extends beyond fab on Y
+    CRTYD_MARGIN_Y = 0.25  # crtyd clearance beyond body/pads (both axes)
 
     def __init__(self, package_type: str, pin_count: int, component_name: str = "IC",
                  custom_layout: Optional[Dict[str, List[int]]] = None,
@@ -98,6 +104,11 @@ class PcbFootprintBuilder:
         # Get schematic parameters
         self.params = get_schematic_parameters(package_type, pin_count)
 
+        # Real plastic body size (E1/D1) when known; the datasheet "E" is the
+        # lead span, which drives pad placement but not the drawn body.
+        self._body_outline_w: Optional[float] = None
+        self._body_outline_l: Optional[float] = None
+
         # Schematic parameters carry display proportions for readable
         # symbols; footprints must use real JEDEC dimensions instead.
         jedec_defaults = get_footprint_defaults(package_type, pin_count)
@@ -108,8 +119,19 @@ class PcbFootprintBuilder:
         if extracted_dims:
             self._apply_extracted_dims(extracted_dims)
 
+        # Pad shape/size from real dimensions (drill+ring for through-hole,
+        # IPC-7351 rects from b/L for SMD; legacy circles when unknown).
+        self.pad_spec = self._compute_pad_spec(jedec_defaults, extracted_dims)
+
         # Calculate pin positions
         self.pin_positions = layout_pins(self.params, custom_layout)
+
+        # layout_pins places rows using schematic display margins (top of body
+        # minus top_margin), which only centers the pins when body_height is a
+        # display proportion sized to fit them. Footprints use the real body
+        # dimensions, so recenter each pad row/column on the origin to match
+        # the body outline (and the reference 2d.glb).
+        self._recenter_pins()
 
         # IPC-7351: SMD pads are centered on the lead foot, not the lead
         # tip. layout_pins places pads at half the lead span (E/2); pull
@@ -138,6 +160,23 @@ class PcbFootprintBuilder:
     def is_through_hole(self) -> bool:
         return self.package_type.upper().startswith(("DIP", "PDIP", "CDIP"))
 
+    def _recenter_pins(self) -> None:
+        """Center left/right columns (Y) and top/bottom rows (X) on the origin."""
+        columns = [p for p in self.pin_positions if p.side in ("left", "right")]
+        if columns:
+            dy = (max(p.y for p in columns) + min(p.y for p in columns)) / 2.0
+            for p in columns:
+                p.y -= dy
+                p.text_y -= dy
+                p.num_y -= dy
+        rows = [p for p in self.pin_positions if p.side in ("top", "bottom")]
+        if rows:
+            dx = (max(p.x for p in rows) + min(p.x for p in rows)) / 2.0
+            for p in rows:
+                p.x -= dx
+                p.text_x -= dx
+                p.num_x -= dx
+
     def _apply_extracted_dims(self, dims: Dict[str, Any]) -> None:
         """Override SchematicParameters fields with extracted PDF dimensions."""
         if dims.get("e"):
@@ -150,6 +189,82 @@ class PcbFootprintBuilder:
             self.params.pin_geometry.leg_width = float(dims["b"])
         if dims.get("L"):
             self.params.pin_geometry.leg_length = float(dims["L"])
+        if dims.get("E1"):
+            self._body_outline_w = float(dims["E1"])
+        if dims.get("D1"):
+            self._body_outline_l = float(dims["D1"])
+
+    @property
+    def fab_outline_width(self) -> float:
+        """Drawn body width: real body (E1) when known, else lead span."""
+        return self._body_outline_w or self.params.body_width
+
+    @property
+    def fab_outline_length(self) -> float:
+        """Drawn body length: real body (D1) when known, else D."""
+        return self._body_outline_l or self.params.body_height
+
+    def _compute_pad_spec(self, jedec_defaults: Optional[Dict[str, Any]],
+                          extracted_dims: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Pad shape and size per IPC-7351 from the best available dims."""
+        if self.is_through_hole():
+            diameter = self.HOLE_DIAMETER + 2 * self.ANNULAR_RING
+            return {
+                "shape": "circle",
+                "diameter": diameter,
+                "mask_diameter": diameter + self.MASK_MARGIN,
+            }
+
+        dims = dict(jedec_defaults or {})
+        dims.update(extracted_dims or {})
+        b, lead_len = dims.get("b"), dims.get("L")
+        if b and lead_len:
+            width = float(b) + self.PAD_SIDE_MARGIN
+            if self.params.pin_pitch:
+                width = min(width, self.params.pin_pitch - self.PAD_MIN_GAP)
+            return {
+                "shape": "rect",
+                "width": width,
+                "length": float(lead_len) + self.PAD_TOE_HEEL,
+            }
+
+        # No real lead dims: keep the legacy reference-GLB circles.
+        return {
+            "shape": "circle",
+            "diameter": self.COPPER_PAD_DIAMETER,
+            "mask_diameter": self.SOLDER_MASK_DIAMETER,
+        }
+
+    def _pad_extents(self) -> tuple:
+        """Outermost pad reach from origin on X and Y (for the courtyard)."""
+        spec = self.pad_spec
+        max_x = max_y = 0.0
+        for pos in self.pin_positions:
+            if spec["shape"] == "rect":
+                if pos.side in ("top", "bottom"):
+                    xd, yd = spec["width"], spec["length"]
+                else:
+                    xd, yd = spec["length"], spec["width"]
+            else:
+                xd = yd = spec["diameter"]
+            max_x = max(max_x, abs(pos.x) + xd / 2)
+            max_y = max(max_y, abs(pos.y) + yd / 2)
+        return max_x, max_y
+
+    def _layer_half_dims(self) -> tuple:
+        """Half-dimensions of fab, silk and courtyard layers.
+
+        The courtyard must enclose both the body and the pads, whichever
+        reaches further, plus clearance.
+        """
+        fab_hw = self.fab_outline_width / 2
+        fab_hh = self.fab_outline_length / 2
+        silk_hw = fab_hw
+        silk_hh = fab_hh + self.SILK_MARGIN_Y
+        pad_x, pad_y = self._pad_extents()
+        crtyd_hw = max(fab_hw, pad_x) + self.CRTYD_MARGIN_Y
+        crtyd_hh = max(fab_hh, pad_y) + self.CRTYD_MARGIN_Y
+        return fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh
 
     def calculate_pin_positions_footprint(self) -> List[PinPosition]:
         """
@@ -185,18 +300,11 @@ class PcbFootprintBuilder:
         """
         body_assy = cq.Assembly(name="Body")
 
-        body_width = self.params.body_width
-        body_height = self.params.body_height
         line_thickness = self.LINE_THICKNESS
         line_height = self.params.body_geometry.border_height
 
         # Per-layer half-dimensions (each layer expands slightly outward)
-        fab_hw = body_width / 2
-        fab_hh = body_height / 2
-        silk_hw = fab_hw                         # silk: same width as fab
-        silk_hh = fab_hh + self.SILK_MARGIN_Y    # silk: slightly taller
-        crtyd_hw = fab_hw + self.CRTYD_MARGIN_X  # crtyd: wider (covers pads)
-        crtyd_hh = fab_hh + self.CRTYD_MARGIN_Y  # crtyd: slightly taller
+        fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh = self._layer_half_dims()
 
         # 1. fab_layer - Complete outline (4 lines)
         # CadQuery requires unique sibling names during construction.
@@ -394,7 +502,7 @@ class PcbFootprintBuilder:
             # CopperCirclePin, text.
 
             # CopperCirclePad (F.Cu layer) - top layer copper pad
-            copper_pad_radius = self.COPPER_PAD_DIAMETER / 2
+            copper_pad_radius = self.pad_spec["diameter"] / 2
             copper_pad = cq.Workplane("XY").workplane(offset=self.PIN_CYLINDER_HEIGHT/2).center(
                 x, y
             ).circle(copper_pad_radius).extrude(self.PAD_HEIGHT)
@@ -403,7 +511,7 @@ class PcbFootprintBuilder:
             pin_assy.add(copper_pad_assy)
 
             # SolderMask (brown, largest)
-            solder_mask_radius = self.SOLDER_MASK_DIAMETER / 2
+            solder_mask_radius = self.pad_spec["mask_diameter"] / 2
             solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
                 x, y
             ).circle(solder_mask_radius).extrude(self.PAD_HEIGHT)
@@ -430,7 +538,7 @@ class PcbFootprintBuilder:
 
             # CopperCirclePin (B.Cu layer) - bottom layer copper pad
             # This is the copper pad on the BOTTOM side of the PCB
-            copper_circle_pin_radius = self.COPPER_PAD_DIAMETER / 2
+            copper_circle_pin_radius = self.pad_spec["diameter"] / 2
             copper_circle_pin = cq.Workplane("XY").workplane(offset=-self.PIN_CYLINDER_HEIGHT/2).center(
                 x, y
             ).circle(copper_circle_pin_radius).extrude(self.PAD_HEIGHT)
@@ -438,21 +546,36 @@ class PcbFootprintBuilder:
             copper_circle_pin_assy.add(copper_circle_pin, color=self.RED_COLOR)
             pin_assy.add(copper_circle_pin_assy)
         else:
-            # For surface mount packages (SOIC/TQFP/QFN)
+            # For surface mount packages (SOIC/TQFP/QFN).
+            # With real lead dims the pad is an IPC-7351 rectangle (length
+            # along the lead direction); otherwise the legacy circles.
+            spec = self.pad_spec
+            if spec["shape"] == "rect":
+                if pin_pos.side in ("top", "bottom"):
+                    pad_x, pad_y = spec["width"], spec["length"]
+                else:
+                    pad_x, pad_y = spec["length"], spec["width"]
+
+                solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
+                    x, y
+                ).rect(pad_x + self.MASK_MARGIN, pad_y + self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
+                copper_pad = cq.Workplane("XY").center(
+                    x, y
+                ).rect(pad_x, pad_y).extrude(self.PAD_HEIGHT)
+            else:
+                solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
+                    x, y
+                ).circle(spec["mask_diameter"] / 2).extrude(self.PAD_HEIGHT)
+                copper_pad = cq.Workplane("XY").center(
+                    x, y
+                ).circle(spec["diameter"] / 2).extrude(self.PAD_HEIGHT)
+
             # SolderMask (brown, largest)
-            solder_mask_radius = self.SOLDER_MASK_DIAMETER / 2
-            solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
-                x, y
-            ).circle(solder_mask_radius).extrude(self.PAD_HEIGHT)
             solder_mask_assy = cq.Assembly(name="SolderMask")
             solder_mask_assy.add(solder_mask, color=self.BROWN_COLOR)
             pin_assy.add(solder_mask_assy)
 
             # Only top copper pad
-            copper_pad_radius = self.COPPER_PAD_DIAMETER / 2
-            copper_pad = cq.Workplane("XY").center(
-                x, y
-            ).circle(copper_pad_radius).extrude(self.PAD_HEIGHT)
             copper_pad_assy = cq.Assembly(name="CopperCirclePad")
             copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
             pin_assy.add(copper_pad_assy)
@@ -612,16 +735,15 @@ class PcbFootprintBuilder:
                     pos.pin_number: (pos.x, pos.y)
                     for pos in self.pin_positions
                 }
-                fab_hw = self.params.body_width / 2
-                fab_hh = self.params.body_height / 2
+                fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh = self._layer_half_dims()
                 extras_nodes = inject_pcb_footprint_extras(
                     output_path,
                     component_name=self.component_name,
                     package_type=self.package_type,
                     pin_position_map=pin_position_map,
                     fab_dims=(fab_hw, fab_hh),
-                    silk_dims=(fab_hw, fab_hh + self.SILK_MARGIN_Y),
-                    crtyd_dims=(fab_hw + self.CRTYD_MARGIN_X, fab_hh + self.CRTYD_MARGIN_Y),
+                    silk_dims=(silk_hw, silk_hh),
+                    crtyd_dims=(crtyd_hw, crtyd_hh),
                 )
                 logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:
