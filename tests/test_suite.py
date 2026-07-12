@@ -601,6 +601,34 @@ def test_llm_client_parses_selected_variant_metadata():
     assert "SOIC" in (pd.selection_reason or "")
 
 
+def test_llm_client_clamps_stray_index_on_single_package():
+    # AMS1117 flow-eval find: the LLM extracted one package but said
+    # selected_package_index 2, hard-failing validation. With a single
+    # variant there is no ambiguity — the index must normalize to 0.
+    response = """
+    {
+      "component_name": "AMS1117",
+      "packages": [
+        {"type": "SOIC-8", "pin_count": 8, "pins": [{"number": 1, "name": "GND"}]}
+      ],
+      "selected_package_index": 2,
+      "extraction_method": "Table"
+    }
+    """
+    pd = LLMClient()._parse_llm_response(response)
+    assert pd.selected_package_index == 0
+
+    # Multiple variants: an out-of-range index is real ambiguity and must
+    # be preserved so validation rejects it.
+    multi = response.replace(
+        '{"type": "SOIC-8", "pin_count": 8, "pins": [{"number": 1, "name": "GND"}]}',
+        '{"type": "SOIC-8", "pin_count": 8, "pins": [{"number": 1, "name": "GND"}]},'
+        ' {"type": "DIP-8", "pin_count": 8, "pins": [{"number": 1, "name": "GND"}]}',
+    )
+    pd = LLMClient()._parse_llm_response(multi)
+    assert pd.selected_package_index == 2
+
+
 def test_llm_client_preserves_explicitly_numbered_thermal_pad():
     """_parse_llm_response keeps all pins returned by the LLM, including explicitly
     numbered thermal pads — filtering is the LLM's responsibility via prompts."""

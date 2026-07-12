@@ -355,6 +355,20 @@ class LLMClient:
 
                     packages_list.append(pkg_info)
 
+                # A stray index pointing outside a single-variant list is a
+                # formatting slip, not ambiguity — normalize instead of
+                # letting validation hard-fail the whole extraction.
+                if (
+                    selected_package_index is not None
+                    and len(packages_list) == 1
+                    and selected_package_index != 0
+                ):
+                    print(
+                        f"Warning: selected_package_index {selected_package_index} "
+                        "with a single package variant; using index 0."
+                    )
+                    selected_package_index = 0
+
                 # Create PinData with new multi-package format
                 pin_data = PinData(
                     component_name=data.get("component_name", "Unknown"),
