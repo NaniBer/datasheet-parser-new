@@ -430,3 +430,33 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 ### Open items
 - Unchanged: pad sizing from b_max/L_min, drill derived from lead width,
   extraction eval harness + provenance, module packages.
+
+## 2026-07-12 (third session — batch flow eval)
+
+### What We Did
+- Built run_full_flow_eval.py: runs every PDF through `--both`, measures the
+  footprint GLB pin grid (count/span/pitch/centering), writes a JSON report.
+- Ran it on pdfs/ (31 files) and pdfs/noTOC/ (19 files):
+  27/31 and 16/19 produced GLBs; results identical with and without TOC —
+  page detection is fully content-based and deterministic.
+- 17 datasheets verified correct (all DIPs incl. wide DIP-40, both SOIC
+  widths, SSOP, TSSOP, 4 QFNs). Reports: flow_eval_report.json,
+  flow_eval_notoc_report.json.
+- Diagnosed TPS63060: alphabetical pin table mangled the parse (9 pins),
+  "DSC PACKAGE" not in vocabulary so package_detector invented "SOIC" from
+  pin count; validation rejected it but the leftover GLB fooled the eval —
+  eval now requires validation success, not file existence.
+- Fixed + committed (7449a3e): SO-8 -> SOIC alias (longest-prefix +
+  letter-guard so SOT-23 stays fail-closed) and explicit pin-count suffix
+  in SOT23-8 beating the SOT-23=3 family default. Tests 120 -> 122.
+
+### Open items (priority order)
+1. INA219: SOT23 footprint geometry family missing entirely (exposed once
+   the validator fix let extraction pass).
+2. AMS1117: LLM selected_package_index out of range — weak validation path.
+3. Wrong-variant class: lm358 (nondeterministic pin count), NRF24L01 (wrong
+   pitch), STM32F103 x2 (wrong spans), ULN2001A (8.5 vs 7.62 span) — variant
+   selection needs generalizing beyond TI drawing codes.
+4. package_detector._get_default_package invents SOIC from pin count —
+   should fail closed (TPS63060 root cause).
+5. Backlog: pad sizing from b_max/L_min, drill from lead width, modules.
