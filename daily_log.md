@@ -460,3 +460,41 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 4. package_detector._get_default_package invents SOIC from pin count —
    should fail closed (TPS63060 root cause).
 5. Backlog: pad sizing from b_max/L_min, drill from lead width, modules.
+
+---
+
+## 2026-07-12 (fourth session — variant selection fixes + lm358)
+
+### What We Did
+- ✅ TI designator vocabulary: "DSC PACKAGE" headers name the family
+  (DSC/DSG/DRC=WSON, DBV/DCN/DDC=SOT23, ...); ambiguous multi-designator
+  headers resolve via the part-number suffix (3000078)
+- ✅ Fused "NAME NO." pin-table cells ("L2 10") parse correctly (3000078)
+- ✅ Family-consistency gate: extracted dims must match the target family's
+  JEDEC geometry (pitch ±25%, span ±40%); catches vision parroting (63e2541)
+- ✅ Quad-package centering: top/bottom rows recenter per side — every
+  QFN/LQFP footprint previously had ~4mm offset rows (63e2541)
+- ✅ Through-hole DIP spans snap to the JEDEC 300/600-mil grid (b0cc2ef)
+- ✅ lm358 multi-package pin table: pin numbers now read from the column
+  whose header matches the inferred family, not the first numeric cell
+  (the LCCC column gave 16-20 pins for an 8-pin part); V+/V– recognized
+  as rail labels with power/ground functions (5e448eb)
+- ✅ Full batch re-eval (flow_eval_v2_report.json): 28/31 PASS, suite at 134
+
+### Issues Encountered
+- The batch eval processed lm358 before the fix landed; re-ran it and
+  patched the report entry (verified deterministic: 8 pins, 7.62/2.54)
+- src.main's positional `output` is a file prefix, not a directory
+
+### What We Learned
+- Multi-package datasheets print one pin-number column per package group;
+  "first cell with numbers" is wrong whenever LCCC/CDIP variants exist
+- ADXL345 classifies as BGA-14 (correct 3x5mm body) but the builder has no
+  real LGA/BGA pad grid — generic two-row fallback invents the pitch
+
+### Tomorrow's Plan
+- [ ] Remaining FAIL is TVS diode (SMB package) — fails closed by design;
+      decide whether discrete 2-terminal packages are in scope
+- [ ] LGA/BGA pad-grid support (ADXL345)
+- [ ] Backlog: pad sizing from b_max/L_min, drill from lead width,
+      dims provenance tagging, SnapEDA regression for remaining downloads
