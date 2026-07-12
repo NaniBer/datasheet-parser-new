@@ -1890,6 +1890,57 @@ def test_smd_pad_width_respects_extracted_b():
     assert b.pad_spec["length"] == pytest.approx(0.835 + 0.7, abs=0.05)
 
 
+def test_glb_pin_extras_match_pad_spec(tmp_path):
+    # The pinData extras must mirror the computed pad_spec: an SMD footprint
+    # with real b/L dims gets rectangle pads, not the legacy 1.25mm circles.
+    out = tmp_path / "soic16_extras.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]
+    assert build_pcb_footprint_direct(
+        "SOIC-16", 16, "X", pins, str(out),
+        extracted_dims={"e": 1.27, "E": 10.325, "D": 9.90, "b": 0.41, "L": 0.835},
+    )
+
+    glb = GLTF2().load(str(out))
+    pads = {
+        n.name: n.extras["pinData"]
+        for n in glb.nodes
+        if n.extras and "pinData" in n.extras
+    }
+    assert len(pads) == 16
+    for pd in pads.values():
+        assert pd["pinType"] == "SMD"
+        assert pd["pinShape"] == "rectangle"
+        assert pd.get("outerDiameter") is None
+        # SOIC pins sit on left/right columns: pad length runs along X
+        assert pd["length"] == pytest.approx(0.835 + 0.7, abs=0.01)
+        assert pd["width"] == pytest.approx(0.41 + 0.06, abs=0.01)
+
+
+def test_glb_through_hole_extras_use_pad_spec(tmp_path):
+    # Through-hole pinData must carry the annular-ring pad diameter and the
+    # real drill size from pad_spec, not hardcoded 1.25/0.83 legacy values.
+    out = tmp_path / "dip16_extras.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 17)]
+    assert build_pcb_footprint_direct("DIP-16", 16, "X", pins, str(out))
+
+    glb = GLTF2().load(str(out))
+    pads = {
+        n.name: n.extras["pinData"]
+        for n in glb.nodes
+        if n.extras and "pinData" in n.extras
+    }
+    assert len(pads) == 16
+    for num, pd in pads.items():
+        assert pd["pinType"] == "ThroughHole"
+        assert pd["innerDiameter"] == pytest.approx(0.83, abs=0.01)
+        if num == "1":
+            assert pd["pinShape"] == "rectangle"
+            assert pd["length"] == pytest.approx(0.83 + 2 * 0.35, abs=0.01)
+        else:
+            assert pd["pinShape"] == "circle"
+            assert pd["outerDiameter"] == pytest.approx(0.83 + 2 * 0.35, abs=0.01)
+
+
 def test_fab_outline_uses_body_width_not_lead_span():
     # SOIC-16 narrow: body E1 = 3.9, lead span E = 6.0. The drawn body
     # must be E1 wide while pads stay placed from E.

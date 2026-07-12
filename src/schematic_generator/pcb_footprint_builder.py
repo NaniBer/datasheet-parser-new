@@ -213,6 +213,7 @@ class PcbFootprintBuilder:
                 "shape": "circle",
                 "diameter": diameter,
                 "mask_diameter": diameter + self.MASK_MARGIN,
+                "drill": self.HOLE_DIAMETER,
             }
 
         dims = dict(jedec_defaults or {})
@@ -744,6 +745,10 @@ class PcbFootprintBuilder:
                     fab_dims=(fab_hw, fab_hh),
                     silk_dims=(silk_hw, silk_hh),
                     crtyd_dims=(crtyd_hw, crtyd_hh),
+                    pad_spec=self.pad_spec,
+                    pin_side_map={
+                        pos.pin_number: pos.side for pos in self.pin_positions
+                    },
                 )
                 logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:

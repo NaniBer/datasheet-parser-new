@@ -408,3 +408,25 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 ### Open items
 - Pad sizing from b_max/L_min (preserve min/max through _flatten), drill from
   lead width, extraction eval harness + provenance, module packages.
+
+## 2026-07-12 (second session)
+
+### What We Did
+- Full-flow verification on 74HC595_TI.pdf (--both, part SN74HC595DWR):
+  pin extraction recovered via LLM corrective retry, wide-SOIC dims extracted
+  (e=1.27, E=10.325, D=9.9, b=0.41, L=0.835), GLB geometry measured correct
+  (pitch 1.270, row span 9.490 = E−L, pads 1.535×0.470, columns centered).
+- Found and fixed stale pin metadata: `_build_pin_extras` in
+  src/core/pcb_footprint_extras.py hardcoded every SMD pin as a 1.25mm circle
+  and every through-hole drill as 0.83, ignoring the computed pad_spec — so
+  any viewer reading pinData (not the meshes) showed the old fixed pads.
+- inject_pcb_footprint_extras now takes pad_spec + pin_side_map: SMD rect
+  pads write pinShape "rectangle" with length/width as X/Y extents (oriented
+  by pin side), through-hole pins carry the annular-ring pad diameter and the
+  real drill from pad_spec ("drill" added to the through-hole spec), and the
+  CopperCirclePad outline "points" trace the real pad shape.
+- Live re-run confirmed pinData now matches geometry. Tests 118 → 120.
+
+### Open items
+- Unchanged: pad sizing from b_max/L_min, drill derived from lead width,
+  extraction eval harness + provenance, module packages.

@@ -186,26 +186,39 @@ def _sibling_index(idx: int, nodes, parent_map: Dict[int, int]) -> int:
         return 0
 
 
+def _rect_pad_xy_extents(pad_spec: dict, side: Optional[str]) -> Tuple[float, float]:
+    """X/Y extents of a rect pad: pad length runs toward the body, so it lies
+    along X for left/right pins and along Y for top/bottom pins."""
+    if side in ("top", "bottom"):
+        return pad_spec["width"], pad_spec["length"]
+    return pad_spec["length"], pad_spec["width"]
+
+
 def _build_pin_extras(
     pin_number: str,
     x: float,
     y: float,
     is_through_hole: bool,
+    pad_spec: Optional[dict] = None,
+    side: Optional[str] = None,
 ) -> dict:
+    spec = pad_spec or {}
     is_pin1 = pin_number == "1"
     if is_through_hole:
+        pad_diameter = spec.get("diameter", _PAD_OUTER_RADIUS * 2)
+        drill = spec.get("drill", _HOLE_RADIUS * 2)
         if is_pin1:
             pin_data = {
                 "unit": "mm",
                 "pinType": "ThroughHole",
                 "pinShape": "rectangle",
                 "coordinates": [],
-                "length": 1.25,
-                "width": 1.25,
+                "length": pad_diameter,
+                "width": pad_diameter,
                 "outerDiameter": None,
                 "thruHoleType": "plated",
                 "thruHoleShape": "circle",
-                "innerDiameter": 0.83,
+                "innerDiameter": drill,
                 "thruHoleLth": 0,
                 "thruHoleWth": 0,
                 "position": {"x": x, "y": y},
@@ -220,23 +233,37 @@ def _build_pin_extras(
                 "coordinates": [],
                 "length": None,
                 "width": None,
-                "outerDiameter": 1.25,
+                "outerDiameter": pad_diameter,
                 "thruHoleType": "plated",
                 "thruHoleShape": "circle",
-                "innerDiameter": 0.83,
+                "innerDiameter": drill,
                 "thruHoleLth": 0,
                 "thruHoleWth": 0,
                 "position": {"x": x, "y": y},
                 "rotation": 0,
                 "solder_mask_margin": 0.102,
             }
+    elif spec.get("shape") == "rect":
+        length_x, width_y = _rect_pad_xy_extents(spec, side)
+        pin_data = {
+            "unit": "mm",
+            "pinType": "SMD",
+            "pinShape": "rectangle",
+            "coordinates": [],
+            "length": length_x,
+            "width": width_y,
+            "outerDiameter": None,
+            "position": {"x": x, "y": y},
+            "rotation": 0,
+            "solder_mask_margin": 0.102,
+        }
     else:
         pin_data = {
             "unit": "mm",
             "pinType": "SMD",
             "pinShape": "circle",
             "coordinates": [],
-            "outerDiameter": 1.25,
+            "outerDiameter": spec.get("diameter", _PAD_OUTER_RADIUS * 2),
             "position": {"x": x, "y": y},
             "rotation": 0,
             "solder_mask_margin": 0.102,
@@ -258,6 +285,8 @@ def inject_pcb_footprint_extras(
     fab_dims: Optional[Tuple[float, float]] = None,
     silk_dims: Optional[Tuple[float, float]] = None,
     crtyd_dims: Optional[Tuple[float, float]] = None,
+    pad_spec: Optional[dict] = None,
+    pin_side_map: Optional[Dict[str, str]] = None,
     # Legacy params kept for backwards compatibility
     body_width: Optional[float] = None,
     body_height: Optional[float] = None,
@@ -275,6 +304,12 @@ def inject_pcb_footprint_extras(
         fab_dims: (half_width, half_height) of the fab layer in mm.
         silk_dims: (half_width, half_height) of the silk layer in mm.
         crtyd_dims: (half_width, half_height) of the crtyd layer in mm.
+        pad_spec: PcbFootprintBuilder.pad_spec dict describing the real pad
+                  geometry ({"shape": "rect", "width", "length"} or
+                  {"shape": "circle", "diameter", ["drill"]}). Falls back to
+                  the legacy reference-GLB circles when omitted.
+        pin_side_map: pin_number_str -> side ("left"/"right"/"top"/"bottom"),
+                      used to orient rect pads in pinData and pad outlines.
         body_width: Deprecated — use fab_dims instead.
         body_height: Deprecated — use fab_dims instead.
 
@@ -306,11 +341,16 @@ def inject_pcb_footprint_extras(
         "crtyd_layer": crtyd_dims,
     }
 
-    # Pre-compute circle point lists (shared across all pins)
-    pad_circle_pts = _circle_points(_PAD_OUTER_RADIUS)
-    hole_circle_pts = _circle_points(_HOLE_RADIUS)
+    # Pre-compute point lists (shared across all pins) from the real pad
+    # geometry when available, else the legacy reference-GLB sizes.
+    spec = pad_spec or {}
+    sides = pin_side_map or {}
+    pad_radius = spec.get("diameter", _PAD_OUTER_RADIUS * 2) / 2.0
+    hole_radius = spec.get("drill", _HOLE_RADIUS * 2) / 2.0
+    pad_circle_pts = _circle_points(pad_radius)
+    hole_circle_pts = _circle_points(hole_radius)
     marker_circle_pts = _circle_points(_MARKER_RADIUS)
-    pad_rect_pts = _rect_points(_PAD_OUTER_RADIUS, _PAD_OUTER_RADIUS)
+    pad_rect_pts = _rect_points(pad_radius, pad_radius)
 
     updated = 0
 
@@ -394,13 +434,21 @@ def inject_pcb_footprint_extras(
         # ── Individual pin groups (named by pin number) ────────────────────────
         elif name.isdigit() and par_name == "Legs":
             x, y = pin_position_map.get(name, (0.0, 0.0))
-            extras = _build_pin_extras(name, x, y, is_through_hole)
+            extras = _build_pin_extras(
+                name, x, y, is_through_hole, pad_spec=spec, side=sides.get(name)
+            )
 
         # ── Pin sub-components ────────────────────────────────────────────────
         # ref: no selectParent, no hideTransformControls
         elif name == "CopperCirclePad":
             is_pin1 = par_name == "1"
-            pts = pad_rect_pts if (is_through_hole and is_pin1) else pad_circle_pts
+            if not is_through_hole and spec.get("shape") == "rect":
+                ext_x, ext_y = _rect_pad_xy_extents(spec, sides.get(par_name))
+                pts = _rect_points(ext_x / 2.0, ext_y / 2.0)
+            elif is_through_hole and is_pin1:
+                pts = pad_rect_pts
+            else:
+                pts = pad_circle_pts
             extras = {
                 "points": pts,
                 "originalName": "CopperCirclePad",
