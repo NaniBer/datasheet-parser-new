@@ -13,11 +13,11 @@ from typing import Dict, List, Optional, Tuple
 
 try:
     from ..models.pin_data import Pin, PinData, PackageInfo
-    from .part_number_hint import infer_part_number_hint
+    from .part_number_hint import infer_part_number_hint, family_from_page_designators
     from ..utils.package_detector import PackageDetector
 except ImportError:  # pragma: no cover - compatibility for top-level imports
     from src.models.pin_data import Pin, PinData, PackageInfo
-    from src.pdf_extractor.part_number_hint import infer_part_number_hint
+    from src.pdf_extractor.part_number_hint import infer_part_number_hint, family_from_page_designators
     from src.utils.package_detector import PackageDetector
 
 from .non_pin_features import is_non_pin_feature_name
@@ -227,16 +227,23 @@ def _extract_function(pin_name: str) -> Optional[str]:
     return None
 
 
-def _infer_family(text_content: str, pin_count: int) -> Optional[str]:
+def _infer_family(
+    text_content: str, pin_count: int, part_number: Optional[str] = None
+) -> Optional[str]:
     """Package family named in the page text, or None.
 
-    Never guesses from pin count: an invented family (e.g. "SOIC-9" for the
-    TPS63060 VSON) passes pin validation and renders wrong geometry. With no
-    evidence the deterministic parser yields no candidate and the LLM path,
-    whose output is validation-gated, takes over.
+    Evidence, in order: an explicit family name ("SOIC"), then a TI
+    mechanical designator header ("DSC PACKAGE" -> WSON). Never guesses
+    from pin count: an invented family (e.g. "SOIC-9" for the TPS63060
+    VSON) passes pin validation and renders wrong geometry. With no
+    evidence the deterministic parser yields no candidate and the LLM
+    path, whose output is validation-gated, takes over.
     """
     detector = PackageDetector()
-    return detector._detect_from_text(text_content or "")  # pylint: disable=protected-access
+    detected = detector._detect_from_text(text_content or "")  # pylint: disable=protected-access
+    if detected:
+        return detected
+    return family_from_page_designators(text_content or "", part_number)
 
 
 def _build_pin_data(
@@ -253,7 +260,7 @@ def _build_pin_data(
     if len(pins) < 4:
         return None
 
-    family = _infer_family(text_content, len(pins))
+    family = _infer_family(text_content, len(pins), part_number)
     if not family:
         return None
     package_type = f"{family}-{len(pins)}"
@@ -332,7 +339,14 @@ def _parse_table_rows(
         if not pin_numbers:
             continue
 
-        pin_name = _extract_pin_name(row)
+        # Fused "NAME NO." columns ("L2 10") hide the label: strip the
+        # row's own pin numbers (standalone tokens only) before matching.
+        number_strings = {str(n) for n in pin_numbers}
+        stripped_row = [
+            " ".join(tok for tok in cell.split() if tok not in number_strings)
+            for cell in row
+        ]
+        pin_name = _extract_pin_name(stripped_row) or _extract_pin_name(row)
         if not pin_name:
             continue
 

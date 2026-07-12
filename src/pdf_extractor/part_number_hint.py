@@ -204,9 +204,62 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
 # the prefix of the matching mechanical drawing code on the outline page
 # (e.g. SN74HC595DWR -> designator DW -> drawing code DW0016A).
 _PACKAGE_DESIGNATORS = {
-    "D", "DW", "DB", "DBQ", "DBV", "DCK", "DCT", "DGK", "DGV", "DRL",
-    "N", "NE", "NS", "P", "PS", "PW", "RGE", "RGY", "RUM",
+    "D", "DW", "DB", "DBQ", "DBV", "DCK", "DCN", "DCT", "DDC", "DGK",
+    "DGV", "DRC", "DRL", "DSC", "DSG",
+    "N", "NE", "NS", "P", "PS", "PW", "RGE", "RGT", "RGY", "RUM",
 }
+
+# Designator -> package family (only families with supported geometry;
+# unsupported ones like DCK/SC-70 are deliberately absent so extraction
+# stays fail-closed for them).
+TI_DESIGNATOR_FAMILIES = {
+    "D": "SOIC", "DW": "SOIC", "NS": "SOIC", "PS": "SOIC",
+    "DB": "SSOP", "DBQ": "SSOP",
+    "PW": "TSSOP", "DGV": "TSSOP",
+    "DGK": "MSOP",
+    "DBV": "SOT23", "DCN": "SOT23", "DDC": "SOT23",
+    "DSC": "WSON", "DSG": "WSON", "DRC": "WSON",
+    "RGE": "QFN", "RGT": "QFN", "RGY": "QFN", "RUM": "QFN",
+    "N": "PDIP", "NE": "PDIP", "P": "PDIP",
+}
+
+# "DSC PACKAGE (TOP VIEW)" or "D, DW, N, NS, OR PW PACKAGE (TOP VIEW)".
+# Whitespace is optional throughout: the content extractor squeezes spaces,
+# so the same headers arrive as "DSCPACKAGE" / "D,DW,N,NS,ORPWPACKAGE".
+_DESIGNATOR_HEADER = re.compile(
+    r"\b((?:[A-Z]{1,3}\s*,\s*(?:OR\s*)?)*[A-Z]{1,3})\s*PACKAGE\b"
+)
+
+
+def family_from_page_designators(
+    text: str, part_number: Optional[str] = None
+) -> Optional[str]:
+    """
+    Package family named by TI mechanical designators in a page header.
+
+    A single known designator names the family directly ("DSC PACKAGE" ->
+    WSON). Headers listing several designators are ambiguous and resolve
+    only through the part number's own designator; otherwise None — this
+    never guesses.
+    """
+    designators: set = set()
+    for match in _DESIGNATOR_HEADER.finditer(text or ""):
+        tokens = re.split(r"[,\s]+", match.group(1))
+        for t in tokens:
+            if t.startswith("OR") and t[2:] in TI_DESIGNATOR_FAMILIES:
+                t = t[2:]  # "ORPW" from a space-squeezed ", OR PW"
+            if t != "OR" and t in TI_DESIGNATOR_FAMILIES:
+                designators.add(t)
+
+    if not designators:
+        return None
+    if len(designators) == 1:
+        return TI_DESIGNATOR_FAMILIES[next(iter(designators))]
+
+    pn_designator = package_designator_from_part_number(part_number)
+    if pn_designator in designators:
+        return TI_DESIGNATOR_FAMILIES[pn_designator]
+    return None
 
 # Packing / eco options appended after the package designator.
 _ORDER_OPTION_SUFFIXES = ("E4", "G4", "R", "T")

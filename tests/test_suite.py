@@ -948,12 +948,11 @@ def test_dfn_pinout_uses_deterministic_table_parser(monkeypatch):
 
 
 def test_deterministic_parser_needs_family_evidence():
-    # TPS63060 flow-eval find: its pin table page only says "DSC PACKAGE",
-    # and the parser invented "SOIC-9" from the pin count, sending a wrong
-    # package downstream. With no family evidence in the text the parser
-    # must produce no candidate (LLM fallback), not a guess.
+    # TPS63060 flow-eval find: the parser invented "SOIC-9" from the pin
+    # count when the page named no family. With no evidence at all in the
+    # text it must produce no candidate (LLM fallback), not a guess.
     from src.pdf_extractor.deterministic_table_parser import _infer_family
-    assert _infer_family("DSC PACKAGE (TOP VIEW) pin functions", 9) is None
+    assert _infer_family("Pin Functions PIN I/O DESCRIPTION", 9) is None
     assert _infer_family("SOIC-16 package pinout", 16) == "SOIC"
 
 
@@ -2110,6 +2109,64 @@ def test_sot23_8_footprint_grid(tmp_path):
 
     d = get_footprint_defaults("SO-8", 8)
     assert d is not None and d["E"] == 6.0 and d["e"] == 1.27
+
+
+def test_family_from_page_designators():
+    # TI pin-table headers name the mechanical designator; that names the
+    # package family ("DSC PACKAGE" = VSON/WSON — the TPS63060 case where
+    # the LLM invented QFN-12).
+    from src.pdf_extractor.part_number_hint import family_from_page_designators as ffd
+    assert ffd("DSC PACKAGE\n(TOP VIEW)") == "WSON"
+    assert ffd("DCN PACKAGE (TOP VIEW)") == "SOT23"
+    assert ffd("PW PACKAGE (TOP VIEW)") == "TSSOP"
+    # Multi-designator headers are ambiguous without a part number...
+    header_74 = "D, DW, N, NS, OR PW PACKAGE\n(TOP VIEW)"
+    assert ffd(header_74) is None
+    # ...but the part-number designator resolves them.
+    assert ffd(header_74, part_number="SN74HC595PWR") == "TSSOP"
+    assert ffd(header_74, part_number="SN74HC595DWR") == "SOIC"
+    # No designator header at all -> None, never a guess.
+    assert ffd("Pin Functions PIN I/O DESCRIPTION") is None
+    # The content extractor squeezes spaces ("DSCPACKAGE"); headers must
+    # still parse in that form.
+    assert ffd("DSCPACKAGE\n(TOPVIEW)") == "WSON"
+    assert ffd("D,DW,N,NS,ORPWPACKAGE", part_number="SN74HC595PWR") == "TSSOP"
+
+
+def test_fused_name_number_column_parses_all_pins():
+    # TPS63060's pin table fuses "NAME NO." into one cell ("L2 10"); the
+    # parser dropped that row (label check failed on "L210") and kept
+    # fused names like "L1 1". All ten pins must parse with clean names.
+    from src.pdf_extractor.deterministic_table_parser import _parse_table_rows
+    table = [
+        ["PIN\nNAME NO.", "I/O", "DESCRIPTION"],
+        ["EN 3", "I", "Enable input."],
+        ["FB 8", "I", "Voltage feedback."],
+        ["GND 7", "", "Control ground"],
+        ["L1 1", "I", "Connection for Inductor"],
+        ["L2 10", "I", "Connection for Inductor"],
+        ["PS/SYNC 4", "I", "Power save mode"],
+        ["PG 5", "O", "Power good"],
+        ["PGND PowerPAD™", "", "Power ground"],
+        ["VIN 2", "I", "Supply voltage"],
+        ["VOUT 9", "O", "Converter output"],
+        ["VAUX 6", "", "Connection for Capacitor"],
+    ]
+    cand = _parse_table_rows(table, 4, "DSCPACKAGE (TOPVIEW)", "TPS63060")
+    assert cand is not None
+    pins = {p.number: p.name for p in cand.pin_data.pins}
+    assert len(pins) == 10
+    assert pins[10] == "L2"
+    assert pins[1] == "L1"
+    assert pins[9] == "VOUT"
+    assert cand.pin_data.package.type == "WSON-10"
+
+
+def test_infer_family_uses_page_designator():
+    from src.pdf_extractor.deterministic_table_parser import _infer_family
+    assert _infer_family("DSC PACKAGE (TOP VIEW) pin functions", 10) == "WSON"
+    # Explicit family names still win over designators.
+    assert _infer_family("SOIC-16 package pinout", 16) == "SOIC"
 
 
 def test_package_pin_count_respects_explicit_suffix():
