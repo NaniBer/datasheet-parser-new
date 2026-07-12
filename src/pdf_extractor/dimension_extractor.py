@@ -113,6 +113,10 @@ class DimensionExtractor:
             text_result = extract_text_dimensions(
                 doc, target_package_type, part_number=part_number
             )
+            if text_result:
+                text_result = self._normalize_through_hole_span(
+                    target_package_type, text_result
+                )
             if text_result and all(
                 text_result.get(k) is not None for k in self.CRITICAL_KEYS
             ):
@@ -215,6 +219,8 @@ class DimensionExtractor:
                     flat,
                 )
                 return text_result
+            if flat:
+                flat = self._normalize_through_hole_span(target_package_type, flat)
             return flat or text_result
 
         except Exception as exc:
@@ -444,6 +450,35 @@ class DimensionExtractor:
             return abs(float(span) - expected) <= self.LEAD_SPAN_TOLERANCE
         except (TypeError, ValueError):
             return True
+
+    # Through-hole DIP leads insert on the standard 100-mil grid: row
+    # spacing is 300 or 600 mil by definition, whatever letter convention
+    # the vendor's drawing uses ("E" is the shoulder width at ST).
+    THROUGH_HOLE_SPANS = (7.62, 15.24)
+    THROUGH_HOLE_SNAP_TOLERANCE = 1.2
+
+    def _normalize_through_hole_span(
+        self, target_package_type: Optional[str], flat: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Snap a DIP row spacing to the JEDEC grid, or drop it entirely."""
+        if not flat or not target_package_type:
+            return flat
+        if not target_package_type.upper().startswith(("DIP", "PDIP", "CDIP")):
+            return flat
+        span = flat.get("E")
+        if span is None:
+            return flat
+        try:
+            span = float(span)
+        except (TypeError, ValueError):
+            flat.pop("E", None)
+            return flat
+        for grid in self.THROUGH_HOLE_SPANS:
+            if abs(span - grid) <= self.THROUGH_HOLE_SNAP_TOLERANCE:
+                flat["E"] = grid
+                return flat
+        flat.pop("E", None)
+        return flat
 
     # Lead-span variants that are all legitimate within one family (a
     # single JEDEC default cannot represent both SOIC bodies).

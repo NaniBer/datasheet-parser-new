@@ -2162,6 +2162,25 @@ def test_fused_name_number_column_parses_all_pins():
     assert cand.pin_data.package.type == "WSON-10"
 
 
+def test_through_hole_span_snaps_to_jedec_grid(_dim_extractor):
+    # ULN2001A flow-eval find: ST's dimension letter "E" is the shoulder
+    # width (8.5), not JEDEC's row spacing. DIP leads insert on the
+    # standard 300/600-mil grid regardless of vendor drawing conventions.
+    dim_mod, _ = _dim_extractor
+    ext = dim_mod.DimensionExtractor()
+    flat = {"e": 2.54, "E": 8.5, "D": 20.0}
+    out = ext._normalize_through_hole_span("DIP-16", dict(flat))
+    assert out["E"] == pytest.approx(7.62)
+    out = ext._normalize_through_hole_span("PDIP-40", {"e": 2.54, "E": 14.8})
+    assert out["E"] == pytest.approx(15.24)
+    # Way off any grid position: drop the span rather than snap blindly.
+    out = ext._normalize_through_hole_span("DIP-16", {"e": 2.54, "E": 11.5})
+    assert "E" not in out
+    # SMD packages are untouched.
+    out = ext._normalize_through_hole_span("SOIC-16", {"e": 1.27, "E": 10.3})
+    assert out["E"] == 10.3
+
+
 def test_quad_footprint_rows_centered_per_side():
     # STM32 flow-eval find: LQFP top/bottom rows were each shoved 4.2mm
     # sideways (top all-negative x, bottom all-positive), because joint
