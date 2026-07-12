@@ -197,6 +197,15 @@ class DimensionExtractor:
                     designator,
                 )
                 return text_result
+            if flat and not self._consistent_with_family(target_package_type, flat):
+                # Dims from a different drawing (or a parroted prompt
+                # example) cannot belong to the target family's geometry.
+                logger.debug(
+                    "DimensionExtractor: dims %s inconsistent with family of %s, skipping override",
+                    flat,
+                    target_package_type,
+                )
+                return text_result
             if flat and not plausible_dims(flat):
                 # Vision models sometimes read real numbers off the drawing
                 # but assign them to the wrong dimension letters; feeding
@@ -435,6 +444,57 @@ class DimensionExtractor:
             return abs(float(span) - expected) <= self.LEAD_SPAN_TOLERANCE
         except (TypeError, ValueError):
             return True
+
+    # Lead-span variants that are all legitimate within one family (a
+    # single JEDEC default cannot represent both SOIC bodies).
+    FAMILY_SPAN_VARIANTS = {"SOIC": (6.0, 10.3), "SO": (6.0, 10.3)}
+    PITCH_REL_TOLERANCE = 0.25
+    SPAN_REL_TOLERANCE = 0.4
+
+    def _consistent_with_family(
+        self, target_package_type: Optional[str], flat: Dict[str, Any]
+    ) -> bool:
+        """
+        Reject dims that cannot belong to the target package family.
+
+        Vision models sometimes return dimensions from a different drawing
+        (or parrot the prompt example): TSSOP-shaped values for an LQFP-64
+        target. The family's JEDEC geometry bounds what is possible — the
+        pitch within 25%, the lead span within 40% of a known variant.
+        """
+        if not target_package_type or not flat:
+            return True
+        try:
+            from ..package_types.footprint_defaults import get_footprint_defaults, _family
+        except ImportError:  # pragma: no cover - top-level import compatibility
+            from src.package_types.footprint_defaults import get_footprint_defaults, _family
+
+        m = re.search(r"\d+", target_package_type)
+        pin_count = int(m.group()) if m else 0
+        defaults = get_footprint_defaults(target_package_type, pin_count)
+        if not defaults:
+            return True
+
+        try:
+            e_ext, e_def = flat.get("e"), defaults.get("e")
+            if e_ext and e_def:
+                if abs(float(e_ext) - e_def) / e_def > self.PITCH_REL_TOLERANCE:
+                    return False
+
+            span = flat.get("E")
+            if span:
+                family = _family(target_package_type) or ""
+                variants = self.FAMILY_SPAN_VARIANTS.get(family) or (
+                    (defaults["E"],) if defaults.get("E") else ()
+                )
+                if variants and not any(
+                    abs(float(span) - v) / v <= self.SPAN_REL_TOLERANCE
+                    for v in variants
+                ):
+                    return False
+        except (TypeError, ValueError):
+            return True
+        return True
 
     def _value_strength(self, v: Any) -> float:
         """Strength of one dimension value: min+max pair = 1.0, single = 0.5."""

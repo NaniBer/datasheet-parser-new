@@ -161,21 +161,28 @@ class PcbFootprintBuilder:
         return self.package_type.upper().startswith(("DIP", "PDIP", "CDIP"))
 
     def _recenter_pins(self) -> None:
-        """Center left/right columns (Y) and top/bottom rows (X) on the origin."""
-        columns = [p for p in self.pin_positions if p.side in ("left", "right")]
-        if columns:
-            dy = (max(p.y for p in columns) + min(p.y for p in columns)) / 2.0
-            for p in columns:
-                p.y -= dy
-                p.text_y -= dy
-                p.num_y -= dy
-        rows = [p for p in self.pin_positions if p.side in ("top", "bottom")]
-        if rows:
-            dx = (max(p.x for p in rows) + min(p.x for p in rows)) / 2.0
-            for p in rows:
-                p.x -= dx
-                p.text_x -= dx
-                p.num_x -= dx
+        """Center each side's column (Y) or row (X) on the origin.
+
+        Per side, not jointly: on quad packages the top and bottom rows are
+        offset in opposite directions, so their union looks symmetric and a
+        joint shift would leave both rows off-center.
+        """
+        for side in ("left", "right"):
+            column = [p for p in self.pin_positions if p.side == side]
+            if column:
+                dy = (max(p.y for p in column) + min(p.y for p in column)) / 2.0
+                for p in column:
+                    p.y -= dy
+                    p.text_y -= dy
+                    p.num_y -= dy
+        for side in ("top", "bottom"):
+            row = [p for p in self.pin_positions if p.side == side]
+            if row:
+                dx = (max(p.x for p in row) + min(p.x for p in row)) / 2.0
+                for p in row:
+                    p.x -= dx
+                    p.text_x -= dx
+                    p.num_x -= dx
 
     def _apply_extracted_dims(self, dims: Dict[str, Any]) -> None:
         """Override SchematicParameters fields with extracted PDF dimensions."""

@@ -2162,6 +2162,42 @@ def test_fused_name_number_column_parses_all_pins():
     assert cand.pin_data.package.type == "WSON-10"
 
 
+def test_quad_footprint_rows_centered_per_side():
+    # STM32 flow-eval find: LQFP top/bottom rows were each shoved 4.2mm
+    # sideways (top all-negative x, bottom all-positive), because joint
+    # recentering saw a symmetric union and shifted nothing. Every side's
+    # row must be centered on the origin individually.
+    b = PcbFootprintBuilder("LQFP-64", 64, "X")
+    for side in ("top", "bottom"):
+        row = [p.x for p in b.pin_positions if p.side == side]
+        assert (max(row) + min(row)) / 2 == pytest.approx(0.0, abs=0.01), side
+    for side in ("left", "right"):
+        col = [p.y for p in b.pin_positions if p.side == side]
+        assert (max(col) + min(col)) / 2 == pytest.approx(0.0, abs=0.01), side
+
+    # Pin ring must sit at the JEDEC lead span (E - L inset), not beyond.
+    xs = [p.x for p in b.pin_positions]
+    assert max(xs) - min(xs) == pytest.approx(11.5 - 0.6, abs=0.05)
+
+
+def test_dims_family_consistency_gate(_dim_extractor):
+    # STM32 flow-eval find: vision returned TSSOP-shaped dims (e=0.65,
+    # E=6.4) for an LQFP-64 target and nothing rejected them. Extracted
+    # dims must be consistent with the target family's JEDEC geometry.
+    dim_mod, _ = _dim_extractor
+    ext = dim_mod.DimensionExtractor()
+    tssop_shaped = {"e": 0.65, "E": 6.4, "D": 5.0, "b": 0.245, "L": 0.6}
+    assert not ext._consistent_with_family("LQFP-64", tssop_shaped)
+    # Correct LQFP-64 dims pass.
+    assert ext._consistent_with_family("LQFP-64", {"e": 0.5, "E": 12.0})
+    # Both SOIC width variants are legitimate for a SOIC target.
+    assert ext._consistent_with_family("SOIC-16", {"e": 1.27, "E": 10.325})
+    assert ext._consistent_with_family("SOIC-16", {"e": 1.27, "E": 6.0})
+    # No target or unknown family: gate stays open.
+    assert ext._consistent_with_family(None, tssop_shaped)
+    assert ext._consistent_with_family("LCCC-20", tssop_shaped)
+
+
 def test_infer_family_uses_page_designator():
     from src.pdf_extractor.deterministic_table_parser import _infer_family
     assert _infer_family("DSC PACKAGE (TOP VIEW) pin functions", 10) == "WSON"
