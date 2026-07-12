@@ -227,12 +227,16 @@ def _extract_function(pin_name: str) -> Optional[str]:
     return None
 
 
-def _infer_family(text_content: str, pin_count: int) -> str:
+def _infer_family(text_content: str, pin_count: int) -> Optional[str]:
+    """Package family named in the page text, or None.
+
+    Never guesses from pin count: an invented family (e.g. "SOIC-9" for the
+    TPS63060 VSON) passes pin validation and renders wrong geometry. With no
+    evidence the deterministic parser yields no candidate and the LLM path,
+    whose output is validation-gated, takes over.
+    """
     detector = PackageDetector()
-    detected = detector._detect_from_text(text_content or "")  # pylint: disable=protected-access
-    if detected:
-        return detected
-    return detector._get_default_package(pin_count)  # pylint: disable=protected-access
+    return detector._detect_from_text(text_content or "")  # pylint: disable=protected-access
 
 
 def _build_pin_data(
@@ -250,6 +254,8 @@ def _build_pin_data(
         return None
 
     family = _infer_family(text_content, len(pins))
+    if not family:
+        return None
     package_type = f"{family}-{len(pins)}"
     component_name = part_number or infer_part_number_hint(text_content) or "Unknown"
 

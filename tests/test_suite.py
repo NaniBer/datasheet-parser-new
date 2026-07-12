@@ -947,6 +947,16 @@ def test_dfn_pinout_uses_deterministic_table_parser(monkeypatch):
     assert {p.name for p in pin_data.pins} == {"PGND", "VIN", "EN", "AGND", "FB", "VOS", "SW", "PG"}
 
 
+def test_deterministic_parser_needs_family_evidence():
+    # TPS63060 flow-eval find: its pin table page only says "DSC PACKAGE",
+    # and the parser invented "SOIC-9" from the pin count, sending a wrong
+    # package downstream. With no family evidence in the text the parser
+    # must produce no candidate (LLM fallback), not a guess.
+    from src.pdf_extractor.deterministic_table_parser import _infer_family
+    assert _infer_family("DSC PACKAGE (TOP VIEW) pin functions", 9) is None
+    assert _infer_family("SOIC-16 package pinout", 16) == "SOIC"
+
+
 @pytest.mark.integration
 def test_mpu_pinout_uses_deterministic_table_parser(monkeypatch):
     """MPU-6000 pin table should parse to 24 pins without calling the LLM.
