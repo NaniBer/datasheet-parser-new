@@ -673,9 +673,13 @@ PACKAGE_TYPE_ALIASES = {
     "WSON": PackageType.WSON,
     "SON": PackageType.SON,
 
-    # SOIC aliases ("SO-8" is the classic small-outline name for SOIC-8)
+    # SOIC aliases ("SO-8" is the classic small-outline name for SOIC-8;
+    # SOT23-5/6/8 are dual-row gull-wing per JEDEC MO-178, so the SOIC
+    # geometry class fits — footprint dims come from footprint_defaults)
     "SOIC": PackageType.SOIC,
     "SO": PackageType.SOIC,
+    "SOT23": PackageType.SOIC,
+    "SOT-23": PackageType.SOIC,
 
     # TQFP aliases
     "TQFP": PackageType.TQFP,

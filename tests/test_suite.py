@@ -800,7 +800,7 @@ def test_aliased_package_families_generate_valid_footprints(tmp_path, package_ty
 
 @pytest.mark.parametrize(
     "package_type,pin_count",
-    [("SOT-23-6", 6), ("WLCSP-8", 8)],
+    [("SOD-123", 2), ("WLCSP-8", 8)],
 )
 def test_unknown_package_families_fail_closed(tmp_path, package_type, pin_count):
     """ARCH-006: packages with no known geometry must raise, not render as DIP."""
@@ -2040,11 +2040,35 @@ def test_so_alias_resolves_to_soic():
     from src.package_types.package_geometry import parse_package_type, PackageType
     assert parse_package_type("SO-8") == PackageType.SOIC
     # The 2-letter alias must not shadow longer families via prefix match,
-    # and must not swallow unsupported letter-adjacent families like SOT-23.
+    # and must not swallow unsupported letter-adjacent families like SOJ.
     assert parse_package_type("SON-8") == PackageType.SON
     assert parse_package_type("SOP-16") == PackageType.SOIC
     with pytest.raises(Exception):
-        parse_package_type("SOT-23-6")
+        parse_package_type("SOJ-16")
+
+
+def test_sot23_family_is_supported():
+    # INA219 ships in SOT23-8 (JEDEC MO-178), a dual-row gull-wing package;
+    # it must build with SOIC-class geometry and MO-178 dimensions.
+    from src.package_types.package_geometry import parse_package_type, PackageType
+    assert parse_package_type("SOT-23-8") == PackageType.SOIC
+    assert parse_package_type("SOT23-8") == PackageType.SOIC
+
+    d8 = get_footprint_defaults("SOT23-8", 8)
+    assert d8["e"] == 0.65 and d8["E"] == 2.8 and d8["E1"] == 1.63
+    d6 = get_footprint_defaults("SOT-23-6", 6)
+    assert d6["e"] == 0.95 and d6["E"] == 2.8
+
+
+def test_sot23_8_footprint_grid(tmp_path):
+    out = tmp_path / "sot23_8.glb"
+    pins = [{"number": n, "name": f"P{n}"} for n in range(1, 9)]
+    assert build_pcb_footprint_direct("SOT-23-8", 8, "INA219", pins, str(out))
+
+    # IPC: pads centered on the lead foot -> span = E - L = 2.8 - 0.45
+    row_spacing, pitch = _row_spacing_and_pitch(_glb_pad_positions(out))
+    assert row_spacing == pytest.approx(2.35, abs=0.01)
+    assert pitch == pytest.approx(0.65, abs=0.01)
 
     d = get_footprint_defaults("SO-8", 8)
     assert d is not None and d["E"] == 6.0 and d["e"] == 1.27
