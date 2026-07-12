@@ -198,3 +198,41 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
         return None
 
     return best_token
+
+
+# TI-style package designators: the suffix of an orderable part number and
+# the prefix of the matching mechanical drawing code on the outline page
+# (e.g. SN74HC595DWR -> designator DW -> drawing code DW0016A).
+_PACKAGE_DESIGNATORS = {
+    "D", "DW", "DB", "DBQ", "DBV", "DCK", "DCT", "DGK", "DGV", "DRL",
+    "N", "NE", "NS", "P", "PS", "PW", "RGE", "RGY", "RUM",
+}
+
+# Packing / eco options appended after the package designator.
+_ORDER_OPTION_SUFFIXES = ("E4", "G4", "R", "T")
+
+
+def package_designator_from_part_number(part_number: Optional[str]) -> Optional[str]:
+    """
+    Derive the package designator from an orderable part number suffix.
+
+    "SN74HC595DWR" -> "DW" (wide SOIC), "SN74HC595D" -> "D" (narrow SOIC),
+    "SN74HC595PWR" -> "PW" (TSSOP). Returns None when the part number has no
+    recognizable designator suffix, so callers fall back to family matching.
+    """
+    if not part_number:
+        return None
+    match = re.search(r"\d([A-Z]+)$", part_number.upper().strip())
+    if not match:
+        return None
+    suffix = match.group(1)
+    while suffix:
+        if suffix in _PACKAGE_DESIGNATORS:
+            return suffix
+        for option in _ORDER_OPTION_SUFFIXES:
+            if suffix.endswith(option) and len(suffix) > len(option):
+                suffix = suffix[: -len(option)]
+                break
+        else:
+            return None
+    return None

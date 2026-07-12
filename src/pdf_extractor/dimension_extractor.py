@@ -20,7 +20,12 @@ from typing import Any, Dict, List, Optional
 import fitz  # PyMuPDF
 import requests
 
-from .text_dimensions import extract_text_dimensions, plausible_dims
+from .part_number_hint import package_designator_from_part_number
+from .text_dimensions import (
+    extract_text_dimensions,
+    page_matches_designator,
+    plausible_dims,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +54,21 @@ class DimensionExtractor:
     # results are merged (text values win — they are deterministic).
     CRITICAL_KEYS = ("e", "E", "D", "b", "L")
 
+    # Expected lead span (E, mm) per TI package designator. Used to reject
+    # dimensions read from a codeless page that belongs to a different
+    # variant of the same family (narrow D vs wide DW SOIC).
+    DESIGNATOR_LEAD_SPAN = {
+        "D": 6.0, "DW": 10.3, "DB": 7.8, "NS": 7.8, "PW": 6.4,
+        "N": 7.62, "NE": 7.62, "P": 7.62,
+    }
+    LEAD_SPAN_TOLERANCE = 0.8
+
     def extract(
         self,
         pdf_path: str,
         target_package_type: Optional[str] = None,
         hint_pages: Optional[List] = None,
+        part_number: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Run 3-phase extraction: scan → extract → pick best.
@@ -65,6 +80,9 @@ class DimensionExtractor:
             hint_pages: Optional list of PageCandidate objects already detected by
                 the pipeline. If provided, the expensive full-page scan is skipped
                 and only pages flagged as mechanical/package drawings are used.
+            part_number: Orderable part number (e.g. "SN74HC595DWR"). Its package
+                designator suffix disambiguates same-family variants that the
+                family match cannot (narrow "D" vs wide "DW" SOIC drawings).
 
         Returns:
             Flat dict with float dimension values, or None if extraction fails.
@@ -92,7 +110,9 @@ class DimensionExtractor:
             # carry dimensions as real text; this is free (no API calls),
             # deterministic, and scans page content only — never the PDF
             # table of contents, which many datasheets lack.
-            text_result = extract_text_dimensions(doc, target_package_type)
+            text_result = extract_text_dimensions(
+                doc, target_package_type, part_number=part_number
+            )
             if text_result and all(
                 text_result.get(k) is not None for k in self.CRITICAL_KEYS
             ):
@@ -111,6 +131,18 @@ class DimensionExtractor:
                 dimension_pages = self._pages_from_hints(hint_pages, target_package_type)
             else:
                 dimension_pages = self._scan_pages(doc)
+
+            # A part-number designator (e.g. DW) pins the exact variant:
+            # drop pages whose drawing code names a different one. Extracting
+            # nothing (JEDEC defaults win) beats extracting the wrong variant.
+            designator = package_designator_from_part_number(part_number)
+            if designator:
+                dimension_pages = [
+                    entry for entry in dimension_pages
+                    if page_matches_designator(
+                        doc[entry["page"]].get_text(), designator
+                    )
+                ]
 
             if not dimension_pages:
                 logger.debug("DimensionExtractor: no dimension pages found")
@@ -156,6 +188,15 @@ class DimensionExtractor:
                     {k: v for k, v in text_result.items()
                      if k not in ("package_type", "unit")}
                 )
+            if flat and not self._consistent_with_designator(designator, flat):
+                # The offending span can only come from vision (text pages
+                # were already designator-filtered), so fall back to text.
+                logger.debug(
+                    "DimensionExtractor: dims %s inconsistent with designator %s, skipping override",
+                    flat,
+                    designator,
+                )
+                return text_result
             if flat and not plausible_dims(flat):
                 # Vision models sometimes read real numbers off the drawing
                 # but assign them to the wrong dimension letters; feeding
@@ -379,6 +420,21 @@ class DimensionExtractor:
             return True  # same pin count, same mounting family
 
         return False
+
+    def _consistent_with_designator(
+        self, designator: Optional[str], flat: Dict[str, Any]
+    ) -> bool:
+        """Reject dims whose lead span belongs to a different package variant."""
+        if not designator or not flat:
+            return True
+        expected = self.DESIGNATOR_LEAD_SPAN.get(designator)
+        span = flat.get("E")
+        if expected is None or span is None:
+            return True
+        try:
+            return abs(float(span) - expected) <= self.LEAD_SPAN_TOLERANCE
+        except (TypeError, ValueError):
+            return True
 
     def _value_strength(self, v: Any) -> float:
         """Strength of one dimension value: min+max pair = 1.0, single = 0.5."""

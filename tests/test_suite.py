@@ -1555,6 +1555,95 @@ def test_parse_prose_orders_body_axes():
     assert dims["E"] == 7.80 and dims["e"] == 0.65
 
 
+def test_package_designator_from_part_number():
+    from src.pdf_extractor.part_number_hint import package_designator_from_part_number as pd
+
+    assert pd("SN74HC595DW") == "DW"
+    assert pd("SN74HC595DWR") == "DW"   # tape/reel suffix stripped
+    assert pd("SN74HC595D") == "D"
+    assert pd("SN74HC595PWR") == "PW"
+    assert pd("SN74HC595N") == "N"
+    assert pd("sn74hc595dbr") == "DB"
+    assert pd("SN74HC595") is None      # no package suffix
+    assert pd("ATMEGA328P-PU") is None  # non-TI convention must not misfire
+    assert pd(None) is None
+
+
+def test_text_dims_pick_variant_by_part_number_designator():
+    # The 74HC595 datasheet carries only the WIDE SOIC drawing (DW0016A).
+    # A DW part number must match it; a narrow D part must NOT silently
+    # receive wide-body dimensions (fall back to JEDEC defaults instead).
+    with _fitz.open("pdfs/74HC595_TI.pdf") as doc:
+        wide = extract_text_dimensions(
+            doc, target_package_type="SOIC-16", part_number="SN74HC595DWR"
+        )
+        narrow = extract_text_dimensions(
+            doc, target_package_type="SOIC-16", part_number="SN74HC595D"
+        )
+
+    assert wide is not None
+    assert wide["A"] == pytest.approx(2.65, abs=0.05)  # DW height
+    assert narrow is None
+
+
+class _HintPage:
+    def __init__(self, page_number):
+        self.page_number = page_number
+        self.reasons = ["mechanical drawing"]
+
+
+def test_extract_vision_path_respects_part_number_designator(monkeypatch):
+    from src.pdf_extractor import dimension_extractor as dim_mod
+
+    def _fake_api(self, image_bytes, prompt):
+        return _FULL_SOIC_EXTRACT_JSON
+
+    monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _fake_api)
+    monkeypatch.setattr(dim_mod.time, "sleep", lambda s: None)
+    hints = [_HintPage(24)]  # 1-indexed: the DW0016A wide-SOIC drawing page
+
+    wide = dim_mod.DimensionExtractor().extract(
+        "pdfs/74HC595_TI.pdf", target_package_type="SOIC-16",
+        hint_pages=hints, part_number="SN74HC595DW",
+    )
+    assert wide is not None
+    assert wide["E"] == pytest.approx(10.325, abs=0.01)
+
+    narrow = dim_mod.DimensionExtractor().extract(
+        "pdfs/74HC595_TI.pdf", target_package_type="SOIC-16",
+        hint_pages=hints, part_number="SN74HC595D",
+    )
+    assert narrow is None  # no D drawing in this PDF -> no override
+
+
+def test_extract_rejects_wrong_variant_from_codeless_page(monkeypatch):
+    # Old-style "MECHANICAL DATA" pages carry no TI drawing code, so the
+    # designator page-filter cannot exclude them. If such a page yields
+    # wide-SOIC dims for a narrow-D part, the lead-span consistency gate
+    # must reject the override (JEDEC narrow defaults are then correct).
+    from src.pdf_extractor import dimension_extractor as dim_mod
+
+    def _fake_api(self, image_bytes, prompt):
+        return _FULL_SOIC_EXTRACT_JSON  # wide SOIC: E = 10.00-10.65
+
+    monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _fake_api)
+    monkeypatch.setattr(dim_mod.time, "sleep", lambda s: None)
+    hints = [_HintPage(33)]  # 1-indexed: codeless mechanical-data page
+
+    narrow = dim_mod.DimensionExtractor().extract(
+        "pdfs/74HC595_TI.pdf", target_package_type="SOIC-16",
+        hint_pages=hints, part_number="SN74HC595D",
+    )
+    assert narrow is None
+
+    wide = dim_mod.DimensionExtractor().extract(
+        "pdfs/74HC595_TI.pdf", target_package_type="SOIC-16",
+        hint_pages=hints, part_number="SN74HC595DW",
+    )
+    assert wide is not None
+    assert wide["E"] == pytest.approx(10.325, abs=0.01)
+
+
 def test_plausible_dims_rejects_scrambled_vision_output():
     # Real responses observed from the vision API on 74HC595: values read
     # off the drawing but assigned to the wrong dimension letters.
@@ -1594,7 +1683,7 @@ def test_partial_text_result_does_not_short_circuit_vision(_dim_extractor, monke
     # continue to vision and merge, with deterministic text values winning.
     dim_mod, _ = _dim_extractor
     monkeypatch.setattr(
-        dim_mod, "extract_text_dimensions", lambda doc, tgt=None: dict(_PARTIAL_TEXT_DIMS)
+        dim_mod, "extract_text_dimensions", lambda doc, tgt=None, **kw: dict(_PARTIAL_TEXT_DIMS)
     )
 
     def _fake_api(self, image_bytes, prompt):
@@ -1620,7 +1709,7 @@ def test_complete_text_result_skips_vision(_dim_extractor, monkeypatch):
         "e": 1.27, "E": 6.0, "D": 9.9, "b": 0.41, "L": 0.84,
     }
     monkeypatch.setattr(
-        dim_mod, "extract_text_dimensions", lambda doc, tgt=None: dict(complete)
+        dim_mod, "extract_text_dimensions", lambda doc, tgt=None, **kw: dict(complete)
     )
 
     def _no_api(self, image_bytes, prompt):
@@ -1637,7 +1726,7 @@ def test_partial_text_result_survives_vision_failure(_dim_extractor, monkeypatch
     # override (the builder overlays them on JEDEC defaults).
     dim_mod, _ = _dim_extractor
     monkeypatch.setattr(
-        dim_mod, "extract_text_dimensions", lambda doc, tgt=None: dict(_PARTIAL_TEXT_DIMS)
+        dim_mod, "extract_text_dimensions", lambda doc, tgt=None, **kw: dict(_PARTIAL_TEXT_DIMS)
     )
 
     def _boom(self, image_bytes, prompt):

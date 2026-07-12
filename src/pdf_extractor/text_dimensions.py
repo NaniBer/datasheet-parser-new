@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 
 import fitz  # PyMuPDF
 
+from .part_number_hint import package_designator_from_part_number
+
 # Standard lead pitches (mm) — used both for parsing hints and plausibility.
 STANDARD_PITCHES = (0.35, 0.4, 0.5, 0.65, 0.8, 1.0, 1.27, 1.778, 2.0, 2.54)
 PITCH_TOLERANCE = 0.03
@@ -62,6 +64,28 @@ def find_dimension_pages(doc: "fitz.Document") -> List[int]:
         elif re.search(r"mm\s*(x|×)\s*\d+\.\d+\s*mm", text) and "pitch" in text.lower():
             pages.append(i)
     return pages
+
+
+# TI mechanical drawing code, e.g. "DW0016A": designator + 4 digits + rev.
+_DRAWING_CODE = re.compile(r"\b([A-Z]{1,4})\d{4}[A-Z]?\b")
+
+
+def drawing_code_prefixes(text: str) -> set:
+    """Designator prefixes of TI drawing codes on a page (DW0016A -> DW)."""
+    return {m.group(1) for m in _DRAWING_CODE.finditer(text)}
+
+
+def page_matches_designator(text: str, designator: Optional[str]) -> bool:
+    """
+    False only when the page carries drawing codes and none match the
+    designator. Pages without codes (non-TI datasheets) always pass, and
+    no designator means no filtering — this can only *exclude* a wrong
+    variant, never invent a match.
+    """
+    if not designator:
+        return True
+    prefixes = drawing_code_prefixes(text)
+    return not prefixes or designator in prefixes
 
 
 def page_package_name(text: str) -> str:
@@ -210,6 +234,7 @@ def plausible_dims(dims: Dict[str, Any]) -> bool:
 def extract_text_dimensions(
     doc: "fitz.Document",
     target_package_type: Optional[str] = None,
+    part_number: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Extract dimensions from PDF text only (no API calls, no table of contents).
@@ -219,6 +244,9 @@ def extract_text_dimensions(
         target_package_type: e.g. "TSSOP-16" or "SOIC-16". Used to derive the
             pin count for TI-outline heuristics and to pick the right drawing
             when a datasheet documents several package variants.
+        part_number: Orderable part number (e.g. "SN74HC595DWR"). Its package
+            designator suffix disambiguates same-family variants the family
+            check cannot (narrow "D" vs wide "DW" SOIC).
 
     Returns:
         Flat dims dict (same shape as DimensionExtractor.extract), or None.
@@ -231,9 +259,13 @@ def extract_text_dimensions(
             pin_count = int(m.group())
         family = re.sub(r"[^A-Z]", "", target_package_type.upper().split("-")[0])
 
+    designator = package_designator_from_part_number(part_number)
+
     best: Optional[Dict[str, Any]] = None
     for page_no in find_dimension_pages(doc):
         text = doc[page_no].get_text()
+        if not page_matches_designator(text, designator):
+            continue
         page_pkg = page_package_name(text)
 
         # When we know the target family, skip drawings of other variants.

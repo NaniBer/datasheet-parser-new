@@ -383,3 +383,28 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 ### Current Status
 - Test suite: 104 passing (was 93 at session start); new regression tests include a per-pin comparison against the official `DIP16_300_TEX.kicad_mod` (skips if fixture absent).
 - Open items: pad sizing from b_max/L_min (needs min/max preserved through `_flatten`), drill from lead width, targeted retry for missing keys, provenance tagging + extraction eval harness, module packages (ESP32-style) unsupported by design.
+
+---
+
+## 2026-07-12 — Part-number-aware package variant disambiguation
+
+### What We Did
+- Fixed the wide-vs-narrow SOIC trap: "SOIC-16" alone cannot distinguish TI's
+  D (narrow, 6.0mm span) from DW (wide, 10.3mm span) drawings; the extractor
+  previously returned whichever drawing the datasheet had (74HC595: DW only).
+- `package_designator_from_part_number()` (part_number_hint.py): derives the
+  designator from the orderable suffix (SN74HC595DWR → DW; strips R/T/E4/G4).
+- Page filtering by TI drawing code (`DW0016A` → prefix DW) in both the text
+  phase and the vision candidate list; codeless pages always pass.
+- Lead-span consistency gate (`DESIGNATOR_LEAD_SPAN`): codeless old-style
+  "MECHANICAL DATA" pages can still leak the wrong variant, so extracted E
+  must match the designator's expected span (±0.8mm) or the override is
+  dropped in favor of text/JEDEC defaults. Found via live run: designator D
+  initially still received wide dims from a codeless page.
+- main.py passes resolved_part_number into DimensionExtractor at both sites.
+- Live: DWR → wide dims; D → no override (correct narrow JEDEC defaults);
+  no part number → unchanged. Tests 104 → 108.
+
+### Open items
+- Pad sizing from b_max/L_min (preserve min/max through _flatten), drill from
+  lead width, extraction eval harness + provenance, module packages.
