@@ -45,7 +45,11 @@ def _family(package_type: str) -> Optional[str]:
     """
     normalized = re.sub(r"[^A-Z0-9]", "", (package_type or "").upper().split("-")[0])
     # Longest alias prefix wins so "TSSOP16" matches TSSOP, not SSOP/SOP.
-    matches = [a for a in PACKAGE_TYPE_ALIASES if normalized.startswith(a)]
+    # A letter right after the alias disqualifies it ("SOT" is not "SO").
+    matches = [
+        a for a in PACKAGE_TYPE_ALIASES
+        if normalized.startswith(a) and not normalized[len(a):len(a) + 1].isalpha()
+    ]
     return max(matches, key=len) if matches else None
 
 
@@ -70,7 +74,7 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
             "D": _dual_row_body_length(pin_count, 2.54, margin=1.3),
         }
 
-    if family in ("SOIC", "SOP"):
+    if family in ("SOIC", "SOP", "SO"):
         wide = family == "SOP" or pin_count >= 18
         return {
             "e": 1.27,

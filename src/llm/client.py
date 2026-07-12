@@ -44,16 +44,22 @@ def _parse_pin_count_from_package_type(pkg_type: str) -> Optional[int]:
         "TO-263": 3, "TO263": 3,
         "SC-70": 5, "SC70": 5,
     }
-    for key, count in special.items():
-        if key in pkg_upper:
-            return count
-
     # Valid IC pin counts — numbers that actually represent pin counts
     valid_counts = {
         2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28,
         32, 36, 40, 44, 48, 52, 56, 64, 80, 84, 100, 112, 120, 128,
         144, 160, 176, 208, 256,
     }
+
+    for key, count in special.items():
+        if key in pkg_upper:
+            # An extra number beyond the family name is an explicit pin
+            # count and wins: "SOT23-8" has 8 pins, not SOT-23's 3.
+            rest = pkg_upper.replace(key, "", 1)
+            for num_str in reversed(re.findall(r"\d+", rest)):
+                if int(num_str) in valid_counts:
+                    return int(num_str)
+            return count
 
     # Try numbers in the string from right to left (last number is usually pin count)
     for num_str in reversed(re.findall(r'\d+', pkg_upper)):

@@ -2034,6 +2034,34 @@ def test_schematic_symbol_keeps_display_proportions():
     assert params.pin_pitch == 2.5
 
 
+def test_so_alias_resolves_to_soic():
+    # AMS1117 datasheet calls its package "SO-8" — the classic name for
+    # SOIC-8. Must resolve instead of failing as unknown (flow eval find).
+    from src.package_types.package_geometry import parse_package_type, PackageType
+    assert parse_package_type("SO-8") == PackageType.SOIC
+    # The 2-letter alias must not shadow longer families via prefix match,
+    # and must not swallow unsupported letter-adjacent families like SOT-23.
+    assert parse_package_type("SON-8") == PackageType.SON
+    assert parse_package_type("SOP-16") == PackageType.SOIC
+    with pytest.raises(Exception):
+        parse_package_type("SOT-23-6")
+
+    d = get_footprint_defaults("SO-8", 8)
+    assert d is not None and d["E"] == 6.0 and d["e"] == 1.27
+
+
+def test_package_pin_count_respects_explicit_suffix():
+    # INA219 is a SOT23-8: the "-8" is an explicit pin count and must win
+    # over the bare SOT-23 family default of 3 (flow eval find).
+    from src.llm.client import _parse_pin_count_from_package_type as ppc
+    assert ppc("SOT23-8") == 8
+    assert ppc("SOT-23-5") == 5
+    assert ppc("SOT-23") == 3
+    assert ppc("SOT23") == 3
+    assert ppc("TO-220") == 3
+    assert ppc("SOIC-16") == 16
+
+
 def test_footprint_defaults_known_families():
     assert get_footprint_defaults("DIP-8", 8)["E"] == 7.62
     assert get_footprint_defaults("PDIP-16", 16)["e"] == 2.54

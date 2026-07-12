@@ -673,8 +673,9 @@ PACKAGE_TYPE_ALIASES = {
     "WSON": PackageType.WSON,
     "SON": PackageType.SON,
 
-    # SOIC aliases
+    # SOIC aliases ("SO-8" is the classic small-outline name for SOIC-8)
     "SOIC": PackageType.SOIC,
+    "SO": PackageType.SOIC,
 
     # TQFP aliases
     "TQFP": PackageType.TQFP,
@@ -721,9 +722,12 @@ def parse_package_type(package_str: str) -> PackageType:
     if normalized in PACKAGE_TYPE_ALIASES:
         return _resolve(normalized)
 
-    # Try prefix match (e.g., "LQFP64" -> "LQFP")
-    for alias in PACKAGE_TYPE_ALIASES:
-        if normalized.startswith(alias):
+    # Try prefix match (e.g., "LQFP64" -> "LQFP"); longest alias wins so
+    # the short "SO" alias cannot shadow SON/SOP/SOIC, and the character
+    # after the alias must not be a letter ("SO-8" matches SO, "SOT-23"
+    # must not — SOT is a different, unsupported family).
+    for alias in sorted(PACKAGE_TYPE_ALIASES, key=len, reverse=True):
+        if normalized.startswith(alias) and not normalized[len(alias):len(alias) + 1].isalpha():
             return _resolve(alias)
 
     raise SchematicGenerationError(
