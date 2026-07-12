@@ -168,6 +168,11 @@ def _looks_like_pin_label(text: str) -> bool:
     if upper in _HEADER_STOPWORDS:
         return False
 
+    # Voltage-rail names keep their sign ("V+", "V–", "VS-"); the compact
+    # form below would strip it and leave a bare "V" that matches nothing.
+    if re.fullmatch(r"V[A-Z]{0,2}\d?\s*[+\-−–]", upper):
+        return True
+
     compact = re.sub(r"[^A-Z0-9/']+", "", upper)
     if not compact:
         return False
@@ -211,6 +216,12 @@ def _extract_function(pin_name: str) -> Optional[str]:
     upper = _normalize_cell_text(pin_name).upper()
     if not upper:
         return None
+
+    rail = re.sub(r"[−–]", "-", upper).replace(" ", "")
+    if re.fullmatch(r"V[A-Z]{0,2}\d?\+", rail):
+        return "power"
+    if re.fullmatch(r"V[A-Z]{0,2}\d?-", rail):
+        return "ground"
 
     if upper in {"GND", "VSS", "AGND", "DGND", "PGND"}:
         return "ground"
@@ -289,6 +300,58 @@ def _build_pin_data(
     return ParsedPinTableCandidate(page_number=page_number, score=score, pin_data=pin_data)
 
 
+# Package family names as they appear in multi-package pin-table headers
+# ("NAME | LCCC | SOIC, SOT23-8, VSSOP, CDIP, PDIP, SO, TSSOP | ...").
+# Longer names precede their substrings so alternation matches whole tokens.
+_FAMILY_HEADER_RE = re.compile(
+    r"\b(?:LCCC|PLCC|TSSOP|VSSOP|SSOP|MSOP|SOIC|SOT-?23(?:-\d+)?|SOP|SO|"
+    r"CDIP|PDIP|DIP|CFP|QFN|WSON|SON|DFN)\b"
+)
+
+
+def _package_pin_column(table: List[List[str]], family: Optional[str]) -> Optional[int]:
+    """Column holding pin numbers for the target family, or None.
+
+    Multi-package datasheets (e.g. LM358) print one pin-number column per
+    package group. Taking numbers from the first numeric cell then reads the
+    wrong package's numbering — the LCCC column alone yields 20 pins for an
+    8-pin part. When a header row names families in two or more columns and
+    exactly one matches the inferred family, pin numbers must come from that
+    column only.
+    """
+    if not family:
+        return None
+    fam = re.sub(r"[^A-Z0-9]", "", family.upper())
+    if not fam:
+        return None
+
+    for row in table[:4]:
+        family_columns: Dict[int, List[str]] = {}
+        for idx, cell in enumerate(row):
+            tokens = [
+                re.sub(r"[^A-Z0-9]", "", token)
+                for token in _FAMILY_HEADER_RE.findall((cell or "").upper())
+            ]
+            if tokens:
+                family_columns[idx] = tokens
+
+        if len(family_columns) < 2:
+            continue
+
+        matches = [
+            idx
+            for idx, tokens in family_columns.items()
+            if any(
+                token == fam or token.startswith(fam) or token.endswith(fam)
+                for token in tokens
+            )
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+    return None
+
+
 def _variant_column_index(table: List[List[str]], part_number: Optional[str]) -> Optional[int]:
     if not part_number:
         return None
@@ -323,6 +386,8 @@ def _parse_table_rows(
     part_number: Optional[str],
 ) -> Optional[ParsedPinTableCandidate]:
     variant_column = _variant_column_index(table, part_number)
+    family = _infer_family(text_content, 0, part_number)
+    package_pin_column = _package_pin_column(table, family)
     pin_candidates: Dict[int, List[Pin]] = {}
 
     for row in table:
@@ -330,11 +395,15 @@ def _parse_table_rows(
             continue
 
         pin_numbers: List[int] = []
-        for cell in row:
-            cell_numbers = _extract_pin_numbers(cell)
-            if cell_numbers:
-                pin_numbers = cell_numbers
-                break
+        if package_pin_column is not None:
+            if package_pin_column < len(row):
+                pin_numbers = _extract_pin_numbers(row[package_pin_column])
+        else:
+            for cell in row:
+                cell_numbers = _extract_pin_numbers(cell)
+                if cell_numbers:
+                    pin_numbers = cell_numbers
+                    break
 
         if not pin_numbers:
             continue

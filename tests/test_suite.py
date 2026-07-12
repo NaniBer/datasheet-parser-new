@@ -2162,6 +2162,49 @@ def test_fused_name_number_column_parses_all_pins():
     assert cand.pin_data.package.type == "WSON-10"
 
 
+def test_multi_package_pin_table_selects_family_column():
+    # LM358's Table 4-1 lists one pin-number column per package group
+    # (LCCC vs SOIC/PDIP/...). Reading the first numeric cell took the
+    # 20-pin LCCC numbering — the NC row alone contributed 12 pins — so
+    # an 8-pin part extracted 16-20 pins nondeterministically.
+    from src.pdf_extractor.deterministic_table_parser import _parse_table_rows
+    table = [
+        ["PIN", "", "", "", ""],
+        ["NAME", "LCCC(1)", "SOIC, SOT23-8, VSSOP, CDIP, PDIP, SO, TSSOP", "I/O", "DESCRIPTION"],
+        ["IN1–", "5", "2", "I", "Negative input"],
+        ["IN1+", "7", "3", "I", "Positive input"],
+        ["IN2–", "15", "6", "I", "Negative input"],
+        ["IN2+", "12", "5", "I", "Positive input"],
+        ["OUT1", "2", "1", "O", "Output"],
+        ["OUT2", "17", "7", "O", "Output"],
+        ["V–", "10", "4", "—", "Negative (lowest) supply"],
+        ["NC", "1, 3, 4, 6, 8, 9, 11, 13, 14, 16, 18, 19", "—", "—", "No internal connection"],
+        ["V+", "20", "8", "—", "Positive (highest) supply"],
+    ]
+    text = "Figure 4-1. D, P, PS, PW Package 8-Pin SOIC, PDIP, SO, TSSOP Top View"
+    cand = _parse_table_rows(table, 3, text, "LM358")
+    assert cand is not None
+    pins = {p.number: p.name for p in cand.pin_data.pins}
+    assert sorted(pins) == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert pins[4] == "V–" and pins[8] == "V+"
+    functions = {p.number: p.function for p in cand.pin_data.pins}
+    assert functions[4] == "ground" and functions[8] == "power"
+    assert cand.pin_data.package.pin_count == 8
+
+
+def test_package_pin_column_requires_unambiguous_header():
+    from src.pdf_extractor.deterministic_table_parser import _package_pin_column
+    header = [["NAME", "LCCC(1)", "SOIC, CDIP, PDIP", "I/O"]]
+    assert _package_pin_column(header, "DIP") == 2
+    assert _package_pin_column(header, "SOIC") == 2
+    assert _package_pin_column(header, "LCCC") == 1
+    # No family evidence, or a family matching several columns: no column.
+    assert _package_pin_column(header, None) is None
+    assert _package_pin_column([["NAME", "SOIC", "SOIC (DW)", "I/O"]], "SOIC") is None
+    # Single-package tables have no per-package columns to choose between.
+    assert _package_pin_column([["PIN NO.", "NAME", "DESCRIPTION"]], "SOIC") is None
+
+
 def test_through_hole_span_snaps_to_jedec_grid(_dim_extractor):
     # ULN2001A flow-eval find: ST's dimension letter "E" is the shoulder
     # width (8.5), not JEDEC's row spacing. DIP leads insert on the
