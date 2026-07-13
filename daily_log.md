@@ -532,3 +532,48 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] Gate 4: pad sizing from b_max/L_min (IPC-7351), not nominals
 - [ ] Then: wider corpus (100+ datasheets, more vendors), service wrapper,
       LLM version pinning + telemetry (platform side)
+
+---
+
+## 2026-07-13 (second session — gates 2 & 4, ground truth, drill sizing)
+
+### What We Did
+- ✅ Gate 2: run_ground_truth_eval.py — generated footprints vs official
+  SnapEDA/UltraLibrarian .kicad_mod references (per-pin deltas, pitch,
+  row spacing, drill, pad size). 5/5 MATCH, worst pin delta 0.15mm (e08783f)
+- ✅ Fixes it surfaced: impossible lead spans dropped ((E−E1)/2 > 2.2mm —
+  TL072's narrow body merged with a wide-body span); wide-SOIC span only
+  for ≥14 pins (JEDEC MS-013); MCP3204/3208 device-column selection by
+  part number; page detector knows Microchip "Definition" headers
+- ✅ MCP3208 nondeterminism (14 vs 16 pins) root-caused: pin table never
+  reached the deterministic parser (detector missed the header), LLM
+  improvised from prose. Now 16 pins/7.62mm on 3 consecutive runs
+- ✅ Gate 4: pads sized from IPC tolerance extremes — _flatten preserves
+  b/L min/max; pad width from b_max, length from L_max (baca653)
+- ✅ Drill from lead width per IPC-2222 (lead diagonal + 0.25 clearance,
+  floored at 0.83mm); drawn hole uses computed drill (6faef51)
+- ✅ v4 full-corpus eval: 27 PASS, ADXL345 expected-refusal, TVS
+  fail-closed, 2 junk fixtures; all 29 schematics pass content checks.
+  Suite at 143 tests
+
+### Issues Encountered
+- ⚠️ OPEN REGRESSION: STM32F103X6 footprint now refused. The new
+  "definition" detector pattern exposed STM32's pin table (BGA100 |
+  LQFP48 | LQFP64 | LQFP100 columns) to the deterministic parser; with
+  no resolvable column it mixed numbering schemes into "BGA-25".
+  Fix half-applied: _has_multiple_package_columns() added to
+  deterministic_table_parser.py — still needs wiring into
+  _parse_table_rows (return None when ambiguous), tests, STM32 rerun
+
+### What We Learned
+- Vendor references anchor footprints differently (origin vs pin 1):
+  ground-truth comparison must centroid-normalize both pad sets
+- Through-hole pin 1 pinData has rect keys (pin-1 marking), classify
+  through-hole by innerDiameter, not outerDiameter
+- Every detector-vocabulary change can expose new tables to the
+  deterministic parser — always rerun the full corpus after
+
+### Next
+- [ ] Finish STM32 ambiguous-column fix + suite + corpus rerun
+- [ ] Then: rail merging (GND id ["8","22"]), discrete-package scope
+      decision, platform-side service wrapper / LLM pinning
