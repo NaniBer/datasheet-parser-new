@@ -1927,6 +1927,26 @@ def test_smd_pad_width_respects_extracted_b():
     assert b.pad_spec["length"] == pytest.approx(0.835 + 0.7, abs=0.05)
 
 
+def test_grid_array_footprints_fail_closed(tmp_path):
+    # ADXL345 flow-eval find: its LGA-14 rendered as a two-row perimeter
+    # footprint with an invented pitch — plausible-looking, never fits the
+    # part. Grid-array/leadless packages must refuse footprint generation
+    # (ARCH-006) while the schematic symbol stays available.
+    from src.exceptions import SchematicGenerationError
+    from src.schematic_generator.pinout_diagram_builder import build_pinout_diagram
+
+    pins = [{"number": str(i), "name": f"P{i}"} for i in range(1, 15)]
+    for pkg in ("BGA-14", "LGA-14", "LCCC-20"):
+        with pytest.raises(SchematicGenerationError, match="grid-array/leadless"):
+            build_pcb_footprint_direct(pkg, 14, "ADXL345", pins, str(tmp_path / "no.glb"))
+    assert not (tmp_path / "no.glb").exists()
+
+    # The schematic for the same package still builds.
+    out = tmp_path / "adxl_schematic.glb"
+    assert build_pinout_diagram("BGA-14", 14, "ADXL345", pins, str(out))
+    assert out.exists()
+
+
 def test_schematic_glb_carries_frontend_extras(tmp_path):
     # The platform reference schematic carries extras on every node (pin
     # groups: id/side/pinLength/pinName; text: pinNumber; pinName: the name

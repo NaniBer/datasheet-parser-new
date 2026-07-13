@@ -104,6 +104,22 @@ class PcbFootprintBuilder:
         # Get schematic parameters
         self.params = get_schematic_parameters(package_type, pin_count)
 
+        # Grid-array (BGA/LGA) and leadless-ceramic packages have no
+        # perimeter leads: rendering them with the two-row/quad layout this
+        # builder produces is topologically wrong, and the result would look
+        # plausible while never fitting the part (ADXL345's LGA-14 shipped
+        # with an invented pitch this way). Fail closed instead (ARCH-006);
+        # the schematic symbol for these packages remains valid.
+        if self.params.package_type in (PackageType.BGA, PackageType.LCCC):
+            from ..exceptions import ErrorCodes, SchematicGenerationError
+            raise SchematicGenerationError(
+                f"Package '{package_type}' is a grid-array/leadless type with "
+                "no real pad-grid support; refusing to emit perimeter "
+                "footprint geometry.",
+                error_code=ErrorCodes.PACKAGE_UNKNOWN,
+                details={"package_type": package_type, "pin_count": pin_count},
+            )
+
         # Real plastic body size (E1/D1) when known; the datasheet "E" is the
         # lead span, which drives pad placement but not the drawn body.
         self._body_outline_w: Optional[float] = None
