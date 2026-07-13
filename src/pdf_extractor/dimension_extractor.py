@@ -370,6 +370,13 @@ class DimensionExtractor:
                     result[key] = mn
                 elif mx is not None:
                     result[key] = mx
+                # IPC-7351 sizes pads from the tolerance extremes (widest
+                # lead, longest foot), not nominals: preserve them for the
+                # pad-relevant keys alongside the midpoint.
+                if key in ("b", "L") and mx is not None:
+                    result[f"{key}_max"] = mx
+                if key in ("b", "L") and mn is not None:
+                    result[f"{key}_min"] = mn
             else:
                 f = self._to_float(val)
                 if f is not None:

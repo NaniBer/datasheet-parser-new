@@ -254,13 +254,18 @@ class PcbFootprintBuilder:
         dims.update(extracted_dims or {})
         b, lead_len = dims.get("b"), dims.get("L")
         if b and lead_len:
-            width = float(b) + self.PAD_SIDE_MARGIN
+            # IPC-7351: pads must cover the tolerance extremes — the widest
+            # lead (b_max) and the longest foot (L_max) — not the nominals.
+            # Fall back to midpoints when the datasheet gave single values.
+            b_eff = dims.get("b_max") or b
+            lead_eff = dims.get("L_max") or lead_len
+            width = float(b_eff) + self.PAD_SIDE_MARGIN
             if self.params.pin_pitch:
                 width = min(width, self.params.pin_pitch - self.PAD_MIN_GAP)
             return {
                 "shape": "rect",
                 "width": width,
-                "length": float(lead_len) + self.PAD_TOE_HEEL,
+                "length": float(lead_eff) + self.PAD_TOE_HEEL,
             }
 
         # No real lead dims: keep the legacy reference-GLB circles.

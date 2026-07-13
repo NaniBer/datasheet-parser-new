@@ -2350,6 +2350,29 @@ def test_package_pin_column_requires_unambiguous_header():
     assert _package_pin_column([["PIN NO.", "NAME", "DESCRIPTION"]], "SOIC") is None
 
 
+def test_pads_sized_from_tolerance_extremes(_dim_extractor):
+    # IPC-7351 sizes pads from b_max (widest lead) and L_max (longest
+    # foot); midpoints leave pads marginally undersized for parts at the
+    # tolerance limits. _flatten preserves the extremes for b and L.
+    dim_mod, _ = _dim_extractor
+    ext = dim_mod.DimensionExtractor()
+    raw = {"package_type": "SOIC-8", "unit": "mm", "dimensions": {
+        "e": "1.27", "E": "6.0", "D": "4.9",
+        "b": {"min": "0.31", "max": "0.51"},
+        "L": {"min": "0.40", "max": "1.27"},
+    }}
+    flat = ext._flatten(raw)
+    assert flat["b"] == pytest.approx(0.41)
+    assert flat["b_max"] == pytest.approx(0.51)
+    assert flat["L_max"] == pytest.approx(1.27)
+
+    b = PcbFootprintBuilder("SOIC-8", 8, "X", extracted_dims=flat)
+    assert b.pad_spec["shape"] == "rect"
+    # width from b_max + side margin (clamped by pitch), length from L_max
+    assert b.pad_spec["width"] == pytest.approx(0.51 + 0.06, abs=0.01)
+    assert b.pad_spec["length"] == pytest.approx(1.27 + 0.70, abs=0.01)
+
+
 def test_impossible_lead_span_dropped(_dim_extractor):
     # TL072 ground-truth find: text+vision merge produced a narrow SO-8
     # body (E1=3.9) with a wide-body span (E=10.325) from another page's
