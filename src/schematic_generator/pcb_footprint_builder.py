@@ -56,7 +56,9 @@ class PcbFootprintBuilder:
     # PCB 2D geometry parameters (matching 2d.glb)
     SOLDER_MASK_DIAMETER = 1.352  # mm (largest circle)
     COPPER_PAD_DIAMETER = 1.250  # mm (medium circle)
-    HOLE_DIAMETER = 0.830  # mm (standard 0.032" drill)
+    HOLE_DIAMETER = 0.830  # mm (standard 0.032" drill), floor for lead-driven sizing
+    LEAD_THICKNESS = 0.25  # mm, typical DIP lead stock thickness
+    HOLE_CLEARANCE = 0.25  # mm, IPC-2222 level B hole-over-lead clearance
 
     # Pad sizing (IPC-7351 nominal density)
     ANNULAR_RING = 0.35     # mm per side, through-hole pad = drill + 2x ring
@@ -242,12 +244,22 @@ class PcbFootprintBuilder:
                           extracted_dims: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Pad shape and size per IPC-7351 from the best available dims."""
         if self.is_through_hole():
-            diameter = self.HOLE_DIAMETER + 2 * self.ANNULAR_RING
+            drill = self.HOLE_DIAMETER
+            th_dims = dict(jedec_defaults or {})
+            th_dims.update(extracted_dims or {})
+            b_eff = th_dims.get("b_max") or th_dims.get("b")
+            if b_eff:
+                # IPC-2222: hole = lead diagonal + 0.25 clearance. DIP leads
+                # are rectangular (width b x ~0.25 thick); the diagonal
+                # governs insertion. Never below the standard 0.83 drill.
+                diagonal = (float(b_eff) ** 2 + self.LEAD_THICKNESS ** 2) ** 0.5
+                drill = max(drill, round(diagonal + self.HOLE_CLEARANCE, 2))
+            diameter = drill + 2 * self.ANNULAR_RING
             return {
                 "shape": "circle",
                 "diameter": diameter,
                 "mask_diameter": diameter + self.MASK_MARGIN,
-                "drill": self.HOLE_DIAMETER,
+                "drill": drill,
             }
 
         dims = dict(jedec_defaults or {})
@@ -560,7 +572,7 @@ class PcbFootprintBuilder:
             pin_assy.add(solder_mask_assy)
 
             # HoleCylinderPin (black) - drilled hole
-            hole_radius = self.HOLE_DIAMETER / 2
+            hole_radius = self.pad_spec.get("drill", self.HOLE_DIAMETER) / 2
             hole_cylinder = cq.Workplane("XY").center(
                 x, y
             ).circle(hole_radius).extrude(self.PIN_CYLINDER_HEIGHT)

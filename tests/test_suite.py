@@ -2350,6 +2350,21 @@ def test_package_pin_column_requires_unambiguous_header():
     assert _package_pin_column([["PIN NO.", "NAME", "DESCRIPTION"]], "SOIC") is None
 
 
+def test_through_hole_drill_follows_lead_width():
+    # IPC-2222: hole = lead diagonal + 0.25 clearance, floored at the
+    # standard 0.83mm drill. A fixed drill under-sizes holes for parts
+    # with heavy leads (power DIPs at b~1.0).
+    thin = PcbFootprintBuilder("DIP-16", 16, "X",
+                               extracted_dims={"e": 2.54, "b": 0.46})
+    assert thin.pad_spec["drill"] == pytest.approx(0.83)
+
+    heavy = PcbFootprintBuilder("DIP-16", 16, "X",
+                                extracted_dims={"e": 2.54, "b": 0.9, "b_max": 1.04})
+    expected = round((1.04 ** 2 + 0.25 ** 2) ** 0.5 + 0.25, 2)
+    assert heavy.pad_spec["drill"] == pytest.approx(expected)
+    assert heavy.pad_spec["diameter"] == pytest.approx(expected + 0.7)
+
+
 def test_pads_sized_from_tolerance_extremes(_dim_extractor):
     # IPC-7351 sizes pads from b_max (widest lead) and L_max (longest
     # foot); midpoints leave pads marginally undersized for parts at the
