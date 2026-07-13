@@ -48,6 +48,8 @@ class PageDetector:
         r"pin\s*\.?\s*name",
         r"function",
         r"description",
+        # Microchip-style headers ("MCP3204 | MCP3208 | Symbol | Definition")
+        r"definition",
         r"signal\s*name",
         r"symbol",
         # NEW: Handle I/O columns and multi-row headers

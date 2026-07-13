@@ -2301,6 +2301,42 @@ def test_multi_package_pin_table_selects_family_column():
     assert cand.pin_data.package.pin_count == 8
 
 
+def test_shared_datasheet_selects_device_column_by_part_number():
+    # MCP3204/3208 ground-truth find: one pin-number column per DEVICE
+    # (not per package family). Reading the first numeric cell took the
+    # 14-pin MCP3204 numbering for a 16-pin MCP3208 order code.
+    from src.pdf_extractor.deterministic_table_parser import _parse_table_rows
+    table = [
+        ["MCP3204", "MCP3208", "Symbol", "Definition"],
+        ["PDIP, SOIC, TSSOP", "PDIP, SOIC", "", ""],
+        ["1", "1", "CH0", "Analog Input"],
+        ["2", "2", "CH1", "Analog Input"],
+        ["3", "3", "CH2", "Analog Input"],
+        ["4", "4", "CH3", "Analog Input"],
+        ["—", "5", "CH4", "Analog Input"],
+        ["—", "6", "CH5", "Analog Input"],
+        ["—", "7", "CH6", "Analog Input"],
+        ["—", "8", "CH7", "Analog Input"],
+        ["7", "9", "DGND", "Digital Ground"],
+        ["8", "10", "CS/SHDN", "Chip Select/Shutdown Input"],
+        ["9", "11", "DIN", "Serial Data In"],
+        ["10", "12", "DOUT", "Serial Data Out"],
+        ["11", "13", "CLK", "Serial Clock"],
+        ["12", "14", "AGND", "Analog Ground"],
+        ["13", "15", "VREF", "Reference Voltage Input"],
+        ["14", "16", "VDD", "+2.7V to 5.5V Power Supply"],
+        ["5, 6", "—", "NC", "No Connection"],
+    ]
+    text = "MCP3204/3208 PDIP, SOIC available"
+    c8 = _parse_table_rows(table, 15, text, "MCP3208-CI/P")
+    assert c8 is not None and len(c8.pin_data.pins) == 16
+    assert {p.number: p.name for p in c8.pin_data.pins}[8] == "CH7"
+    c4 = _parse_table_rows(table, 15, text, "MCP3204-CI/P")
+    assert c4 is not None and len(c4.pin_data.pins) == 14
+    # MCP3204: pins 5,6 are NC; CH-channels stop at CH3.
+    assert {p.number: p.name for p in c4.pin_data.pins}[5] == "NC"
+
+
 def test_package_pin_column_requires_unambiguous_header():
     from src.pdf_extractor.deterministic_table_parser import _package_pin_column
     header = [["NAME", "LCCC(1)", "SOIC, CDIP, PDIP", "I/O"]]
@@ -2312,6 +2348,31 @@ def test_package_pin_column_requires_unambiguous_header():
     assert _package_pin_column([["NAME", "SOIC", "SOIC (DW)", "I/O"]], "SOIC") is None
     # Single-package tables have no per-package columns to choose between.
     assert _package_pin_column([["PIN NO.", "NAME", "DESCRIPTION"]], "SOIC") is None
+
+
+def test_impossible_lead_span_dropped(_dim_extractor):
+    # TL072 ground-truth find: text+vision merge produced a narrow SO-8
+    # body (E1=3.9) with a wide-body span (E=10.325) from another page's
+    # drawing — 3.2mm of lead per side is physically impossible. The span
+    # is dropped; the good keys survive and JEDEC defaults fill E.
+    dim_mod, _ = _dim_extractor
+    ext = dim_mod.DimensionExtractor()
+    flat = {"e": 1.27, "E": 10.325, "E1": 3.895, "D": 4.9, "b": 0.41, "L": 0.835}
+    out = ext._reconcile_spans(dict(flat))
+    assert "E" not in out and out["E1"] == 3.895
+    # A plausible pairing is untouched (wide SOIC-16: E=10.3, E1=7.5).
+    out = ext._reconcile_spans({"E": 10.3, "E1": 7.5})
+    assert out["E"] == 10.3
+
+
+def test_wide_soic_span_needs_14_pins(_dim_extractor):
+    # JEDEC MS-013 wide-body SOIC starts at 14 leads: a 10.3mm span on an
+    # 8-pin SOIC target can only be a misread. Same span on 16 pins is fine.
+    dim_mod, _ = _dim_extractor
+    ext = dim_mod.DimensionExtractor()
+    assert not ext._consistent_with_family("SOIC-8", {"e": 1.27, "E": 10.3})
+    assert ext._consistent_with_family("SOIC-16", {"e": 1.27, "E": 10.3})
+    assert ext._consistent_with_family("SOIC-8", {"e": 1.27, "E": 6.0})
 
 
 def test_through_hole_span_snaps_to_jedec_grid(_dim_extractor):

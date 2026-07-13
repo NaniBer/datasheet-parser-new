@@ -128,6 +128,7 @@ class DimensionExtractor:
                 text_result = self._normalize_through_hole_span(
                     target_package_type, text_result
                 )
+                text_result = self._reconcile_spans(text_result)
             if text_result and all(
                 text_result.get(k) is not None for k in self.CRITICAL_KEYS
             ):
@@ -203,6 +204,7 @@ class DimensionExtractor:
                     {k: v for k, v in text_result.items()
                      if k not in ("package_type", "unit")}
                 )
+            flat = self._reconcile_spans(flat)
             if flat and not self._consistent_with_designator(designator, flat):
                 # The offending span can only come from vision (text pages
                 # were already designator-filtered), so fall back to text.
@@ -493,9 +495,34 @@ class DimensionExtractor:
         flat.pop("E", None)
         return flat
 
+    # A lead only reaches so far past the body: (E - E1)/2 is the per-side
+    # lead reach (foot plus bend). Beyond ~2.2mm the span belongs to a
+    # different drawing than the body dims (TL072: narrow SO-8 body E1=3.9
+    # merged with a 10.3 wide-body span from another page).
+    MAX_LEAD_REACH_MM = 2.2
+
+    def _reconcile_spans(
+        self, flat: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Drop a lead span that is physically impossible for the body width."""
+        if not flat:
+            return flat
+        span = self._to_float(flat.get("E"))
+        body = self._to_float(flat.get("E1"))
+        if span and body and (span - body) / 2.0 > self.MAX_LEAD_REACH_MM:
+            logger.debug(
+                "DimensionExtractor: span E=%s impossible for body E1=%s — dropping E",
+                span, body,
+            )
+            flat.pop("E", None)
+        return flat
+
     # Lead-span variants that are all legitimate within one family (a
     # single JEDEC default cannot represent both SOIC bodies).
     FAMILY_SPAN_VARIANTS = {"SOIC": (6.0, 10.3), "SO": (6.0, 10.3)}
+    # JEDEC wide-body SOIC (MS-013) starts at 14 leads; below that only
+    # the narrow body exists.
+    WIDE_BODY_MIN_PINS = 14
     PITCH_REL_TOLERANCE = 0.25
     SPAN_REL_TOLERANCE = 0.4
 
@@ -532,9 +559,11 @@ class DimensionExtractor:
             span = flat.get("E")
             if span:
                 family = _family(target_package_type) or ""
-                variants = self.FAMILY_SPAN_VARIANTS.get(family) or (
-                    (defaults["E"],) if defaults.get("E") else ()
-                )
+                variants = self.FAMILY_SPAN_VARIANTS.get(family)
+                if variants and pin_count and pin_count < self.WIDE_BODY_MIN_PINS:
+                    variants = tuple(v for v in variants if v < 8.0)
+                if not variants:
+                    variants = (defaults["E"],) if defaults.get("E") else ()
                 if variants and not any(
                     abs(float(span) - v) / v <= self.SPAN_REL_TOLERANCE
                     for v in variants

@@ -352,6 +352,47 @@ def _package_pin_column(table: List[List[str]], family: Optional[str]) -> Option
     return None
 
 
+# Device-name tokens in table headers ("MCP3204" / "MCP3208").
+_DEVICE_TOKEN_RE = re.compile(r"[A-Z]{2,}[0-9]{2,}[A-Z0-9]*")
+
+
+def _part_number_pin_column(
+    table: List[List[str]], part_number: Optional[str]
+) -> Optional[int]:
+    """Column holding pin numbers for the target device, or None.
+
+    Shared-family datasheets (MCP3204/3208) print one pin-number column per
+    device, headed by the device name rather than a package family. When a
+    header row names devices in two or more columns and the part number
+    matches exactly one, pin numbers must come from that column only.
+    """
+    if not part_number:
+        return None
+    pn = re.sub(r"[^A-Z0-9]", "", part_number.upper())
+    if not pn:
+        return None
+
+    for row in table[:4]:
+        device_columns: Dict[int, set] = {}
+        for idx, cell in enumerate(row):
+            for token in _DEVICE_TOKEN_RE.findall((cell or "").upper()):
+                if len(token) >= 5:
+                    device_columns.setdefault(idx, set()).add(token)
+
+        if len(device_columns) < 2:
+            continue
+
+        matches = [
+            idx
+            for idx, tokens in device_columns.items()
+            if any(pn.startswith(token) for token in tokens)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+    return None
+
+
 def _variant_column_index(table: List[List[str]], part_number: Optional[str]) -> Optional[int]:
     if not part_number:
         return None
@@ -388,6 +429,8 @@ def _parse_table_rows(
     variant_column = _variant_column_index(table, part_number)
     family = _infer_family(text_content, 0, part_number)
     package_pin_column = _package_pin_column(table, family)
+    if package_pin_column is None:
+        package_pin_column = _part_number_pin_column(table, part_number)
     pin_candidates: Dict[int, List[Pin]] = {}
 
     for row in table:
