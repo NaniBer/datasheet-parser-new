@@ -101,6 +101,17 @@ class DimensionExtractor:
         """
         doc = None
         text_result: Optional[Dict[str, Any]] = None
+
+        def _tagged(
+            dims: Optional[Dict[str, Any]], source: str
+        ) -> Optional[Dict[str, Any]]:
+            # Provenance for downstream consumers: footprints record whether
+            # dimensions came from datasheet text, vision, or JEDEC defaults
+            # so the platform can decide what needs review before use.
+            if dims:
+                dims["dims_source"] = source
+            return dims
+
         try:
             # Open the document once and share the handle; per-render opens
             # leaked one file handle and re-parsed the PDF for every page.
@@ -124,7 +135,7 @@ class DimensionExtractor:
                     "DimensionExtractor: text-based extraction complete: %s",
                     text_result,
                 )
-                return text_result
+                return _tagged(text_result, "text")
             if text_result:
                 logger.debug(
                     "DimensionExtractor: partial text result %s — running vision to fill gaps",
@@ -150,7 +161,7 @@ class DimensionExtractor:
 
             if not dimension_pages:
                 logger.debug("DimensionExtractor: no dimension pages found")
-                return text_result
+                return _tagged(text_result, "text")
 
             candidates = []
             for entry in dimension_pages:
@@ -160,7 +171,7 @@ class DimensionExtractor:
 
             if not candidates:
                 logger.debug("DimensionExtractor: extraction yielded no usable data")
-                return text_result
+                return _tagged(text_result, "text")
 
             # Filter to candidates matching the target package type
             if target_package_type:
@@ -182,7 +193,7 @@ class DimensionExtractor:
 
             best = self._merge_candidates(candidates)
             if not best:
-                return text_result
+                return _tagged(text_result, "text")
 
             flat = self._flatten(best)
             if flat and text_result:
@@ -200,7 +211,7 @@ class DimensionExtractor:
                     flat,
                     designator,
                 )
-                return text_result
+                return _tagged(text_result, "text")
             if flat and not self._consistent_with_family(target_package_type, flat):
                 # Dims from a different drawing (or a parroted prompt
                 # example) cannot belong to the target family's geometry.
@@ -209,7 +220,7 @@ class DimensionExtractor:
                     flat,
                     target_package_type,
                 )
-                return text_result
+                return _tagged(text_result, "text")
             if flat and not plausible_dims(flat):
                 # Vision models sometimes read real numbers off the drawing
                 # but assign them to the wrong dimension letters; feeding
@@ -218,16 +229,18 @@ class DimensionExtractor:
                     "DimensionExtractor: vision result failed plausibility gate: %s",
                     flat,
                 )
-                return text_result
+                return _tagged(text_result, "text")
             if flat:
                 flat = self._normalize_through_hole_span(target_package_type, flat)
-            return flat or text_result
+            if flat:
+                return _tagged(flat, "text+vision" if text_result else "vision")
+            return _tagged(text_result, "text")
 
         except Exception as exc:
             # A partial text result is still a valid override; only the
             # vision refinement was lost.
             logger.debug("DimensionExtractor: failed with %s", exc)
-            return text_result
+            return _tagged(text_result, "text")
         finally:
             if doc is not None:
                 doc.close()

@@ -139,6 +139,17 @@ class PcbFootprintBuilder:
         # IPC-7351 rects from b/L for SMD; legacy circles when unknown).
         self.pad_spec = self._compute_pad_spec(jedec_defaults, extracted_dims)
 
+        # Dimension provenance, recorded in the GLB so the platform can
+        # decide what to auto-accept vs. flag for review: datasheet text is
+        # deterministic, vision reads need a second look, JEDEC defaults are
+        # assumed geometry, and "unverified" means display proportions only.
+        if extracted_dims:
+            self.dims_source = extracted_dims.get("dims_source") or "extracted"
+        elif jedec_defaults:
+            self.dims_source = "jedec_default"
+        else:
+            self.dims_source = "unverified"
+
         # Calculate pin positions
         self.pin_positions = layout_pins(self.params, custom_layout)
 
@@ -772,6 +783,7 @@ class PcbFootprintBuilder:
                     pin_side_map={
                         pos.pin_number: pos.side for pos in self.pin_positions
                     },
+                    dims_source=self.dims_source,
                 )
                 logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:

@@ -287,6 +287,7 @@ def inject_pcb_footprint_extras(
     crtyd_dims: Optional[Tuple[float, float]] = None,
     pad_spec: Optional[dict] = None,
     pin_side_map: Optional[Dict[str, str]] = None,
+    dims_source: Optional[str] = None,
     # Legacy params kept for backwards compatibility
     body_width: Optional[float] = None,
     body_height: Optional[float] = None,
@@ -368,6 +369,11 @@ def inject_pcb_footprint_extras(
                 "originalName": "Package",
                 "renderOrder": 0,
             }
+            if dims_source:
+                # Dimension provenance: "text" (deterministic datasheet
+                # text), "vision"/"text+vision" (model-read drawing),
+                # "jedec_default" (family defaults), "unverified".
+                extras["dimsSource"] = dims_source
 
         # ── Labels ────────────────────────────────────────────────────────────
         elif name == "DesignatorName":

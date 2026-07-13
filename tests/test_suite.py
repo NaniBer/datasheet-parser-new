@@ -1755,7 +1755,7 @@ def test_complete_text_result_skips_vision(_dim_extractor, monkeypatch):
     monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _no_api)
 
     result = dim_mod.DimensionExtractor().extract("fake.pdf", target_package_type="SOIC-16")
-    assert result == complete
+    assert result == {**complete, "dims_source": "text"}
 
 
 def test_partial_text_result_survives_vision_failure(_dim_extractor, monkeypatch):
@@ -1772,7 +1772,7 @@ def test_partial_text_result_survives_vision_failure(_dim_extractor, monkeypatch
     monkeypatch.setattr(dim_mod.DimensionExtractor, "_call_api", _boom)
 
     result = dim_mod.DimensionExtractor().extract("fake.pdf", target_package_type="SOIC-16")
-    assert result == _PARTIAL_TEXT_DIMS
+    assert result == {**_PARTIAL_TEXT_DIMS, "dims_source": "text"}
 
 
 def test_merge_candidates_combines_partial_pages():
@@ -1925,6 +1925,31 @@ def test_smd_pad_width_respects_extracted_b():
     assert b.pad_spec["shape"] == "rect"
     assert b.pad_spec["width"] == pytest.approx(0.51 + 0.06, abs=0.02)
     assert b.pad_spec["length"] == pytest.approx(0.835 + 0.7, abs=0.05)
+
+
+def test_footprint_glb_records_dims_provenance(tmp_path):
+    # Production gate: the platform must be able to tell verified dims
+    # (datasheet text) from assumed ones (JEDEC defaults) to decide what
+    # to flag for review. Recorded as dimsSource on the Package root.
+    from pygltflib import GLTF2
+
+    pins = [{"number": str(i), "name": f"P{i}"} for i in range(1, 9)]
+
+    out_text = tmp_path / "text_dims.glb"
+    dims = {"e": 1.27, "E": 6.0, "D": 4.9, "b": 0.41, "L": 0.84,
+            "dims_source": "text"}
+    assert build_pcb_footprint_direct(
+        "SOIC-8", 8, "NE555", pins, str(out_text), extracted_dims=dims)
+    g = GLTF2().load(str(out_text))
+    root = g.nodes[g.scenes[g.scene or 0].nodes[0]]
+    assert root.extras["dimsSource"] == "text"
+
+    out_default = tmp_path / "default_dims.glb"
+    assert build_pcb_footprint_direct(
+        "SOIC-8", 8, "NE555", pins, str(out_default))
+    g = GLTF2().load(str(out_default))
+    root = g.nodes[g.scenes[g.scene or 0].nodes[0]]
+    assert root.extras["dimsSource"] == "jedec_default"
 
 
 def test_grid_array_footprints_fail_closed(tmp_path):
