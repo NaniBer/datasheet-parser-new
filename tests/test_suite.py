@@ -1927,6 +1927,70 @@ def test_smd_pad_width_respects_extracted_b():
     assert b.pad_spec["length"] == pytest.approx(0.835 + 0.7, abs=0.05)
 
 
+def test_schematic_glb_carries_frontend_extras(tmp_path):
+    # The platform reference schematic carries extras on every node (pin
+    # groups: id/side/pinLength/pinName; text: pinNumber; pinName: the name
+    # string; BodyLine: polyline points). The cadquery export produced none,
+    # so the frontend could not attach wires or show labels.
+    from pygltflib import GLTF2
+    from src.schematic_generator.pinout_diagram_builder import build_pinout_diagram
+
+    out = tmp_path / "lm358_schematic.glb"
+    pins = [
+        {"number": "1", "name": "OUT1"}, {"number": "2", "name": "IN1-"},
+        {"number": "3", "name": "IN1+"}, {"number": "4", "name": "V-"},
+        {"number": "5", "name": "IN2+"}, {"number": "6", "name": "IN2-"},
+        {"number": "7", "name": "OUT2"}, {"number": "8", "name": "V+"},
+    ]
+    assert build_pinout_diagram("DIP-8", 8, "LM358", pins, str(out))
+
+    g = GLTF2().load(str(out))
+    root = g.nodes[g.scenes[g.scene or 0].nodes[0]]
+    assert root.extras["viewType"] == "schematic"
+
+    pin_groups = {n.extras["id"][0]: n for n in g.nodes if "id" in (n.extras or {})}
+    assert sorted(pin_groups, key=int) == [str(i) for i in range(1, 9)]
+    # DIP-8 symbol: 1-4 on the left (side 0), 5-8 on the right (side 2).
+    assert all(pin_groups[str(i)].extras["side"] == 0 for i in range(1, 5))
+    assert all(pin_groups[str(i)].extras["side"] == 2 for i in range(5, 9))
+    assert pin_groups["8"].extras["pinName"] == "V+"
+    assert pin_groups["1"].extras["pinLength"] > 0
+
+    node_by_index = g.nodes
+    children = {node_by_index[ci].name: node_by_index[ci] for ci in pin_groups["1"].children}
+    assert children["text"].extras["pinNumber"] == "1"
+    assert children["pinName"].extras["pinName"] == "OUT1"
+
+    labels = {n.name: n.extras for n in g.nodes if "value" in (n.extras or {}) and "id" not in (n.extras or {})}
+    assert labels["DesignatorName"]["value"] == "U"
+    assert labels["PackageValue"]["value"] == "LM358"
+
+    points = next(n.extras["points"] for n in g.nodes if "points" in (n.extras or {}))
+    assert len(points) == 5 and points[0] == points[-1]
+
+
+def test_schematic_quad_side_codes(tmp_path):
+    # Reference side convention: 0=left, 1=top, 2=right, 3=bottom. Quad
+    # packages number pins counterclockwise from the top-left corner.
+    from pygltflib import GLTF2
+    from src.schematic_generator.pinout_diagram_builder import build_pinout_diagram
+
+    out = tmp_path / "qfn20_schematic.glb"
+    pins = [{"number": str(i), "name": f"P{i}"} for i in range(1, 21)]
+    assert build_pinout_diagram("QFN-20", 20, "NRF24L01", pins, str(out))
+
+    g = GLTF2().load(str(out))
+    sides = {}
+    for n in g.nodes:
+        e = n.extras or {}
+        if "id" in e:
+            sides.setdefault(e["side"], set()).add(int(e["id"][0]))
+    assert sides[0] == {1, 2, 3, 4, 5}
+    assert sides[3] == {6, 7, 8, 9, 10}
+    assert sides[2] == {11, 12, 13, 14, 15}
+    assert sides[1] == {16, 17, 18, 19, 20}
+
+
 def test_glb_pin_extras_match_pad_spec(tmp_path):
     # The pinData extras must mirror the computed pad_spec: an SMD footprint
     # with real b/L dims gets rectangle pads, not the legacy 1.25mm circles.

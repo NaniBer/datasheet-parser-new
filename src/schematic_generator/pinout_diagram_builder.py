@@ -533,6 +533,20 @@ class PinoutDiagramBuilder:
             except Exception as exc:
                 logger.warning("Skipping GLB hierarchy optimization: %s" % exc)
 
+            try:
+                from src.core.schematic_extras import inject_schematic_extras
+
+                pin_name_map = {
+                    str(pin.get("number")): str(pin.get("name") or "")
+                    for pin in pin_data
+                }
+                if not inject_schematic_extras(
+                    output_path, pin_name_map, self.component_name
+                ):
+                    logger.warning("Schematic extras injection found no Package root")
+            except Exception as exc:
+                logger.warning("Skipping schematic extras injection: %s" % exc)
+
             logger.info("Successfully saved schematic to %s" % output_path)
 
             # Verify file exists
