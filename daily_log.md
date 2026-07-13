@@ -498,3 +498,37 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] LGA/BGA pad-grid support (ADXL345)
 - [ ] Backlog: pad sizing from b_max/L_min, drill from lead width,
       dims provenance tagging, SnapEDA regression for remaining downloads
+
+---
+
+## 2026-07-13 — Schematic flow verification + production gates
+
+### What We Did
+- ✅ Schematic flow audit: generated GLBs had ZERO frontend extras — the
+  platform reference carries id/side/pinLength/pinName per pin group,
+  pinNumber on text, name on pinName, BodyLine points, label values.
+  New src/core/schematic_extras.py injects all of it post-export (75711df)
+- ✅ Eval now validates schematic CONTENT (pin count, names, contiguous
+  numbering, sides, bodyline, labels), not just file existence
+- ✅ Production gate 1: BGA/LGA/LCCC footprints fail closed instead of
+  rendering invented perimeter geometry; schematic stays valid (ff7bb16)
+- ✅ Production gate 3: dimension provenance — dims_source tag from the
+  extractor ("text"/"vision"/"text+vision"), resolved by the builder
+  ("jedec_default"/"unverified"), written as dimsSource on the footprint
+  Package root (b837997)
+- ✅ v3 full-corpus eval: 28 PASS + ADXL345 correctly refusing footprint
+  + TVS fail-closed + 2 junk fixtures = 31/31 expected outcomes; all 29
+  schematics pass content checks. Suite at 138 tests
+
+### What We Learned
+- Side codes in the platform reference: 0=left, 1=top, 2=right, 3=bottom;
+  quad pins number counterclockwise from top-left
+- The reference merges same-name rails into one leg (GND id ["8","22"]);
+  we emit them separately — cosmetic gap, wires still attach
+- src.main's positional output arg is a file prefix, not a directory
+
+### Remaining production gates
+- [ ] Gate 2: ground-truth regression vs official SnapEDA footprints
+- [ ] Gate 4: pad sizing from b_max/L_min (IPC-7351), not nominals
+- [ ] Then: wider corpus (100+ datasheets, more vendors), service wrapper,
+      LLM version pinning + telemetry (platform side)
