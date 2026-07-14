@@ -25,9 +25,9 @@ Each benchmark case records:
 
 ## Current Seed Cases
 
-- `ne555_dip8`
+- `ne555_soic8`
 - `sn74hc595_soic16`
-- `tps62160_wson8`
+- `tps63060_wson10`
 
 ## How To Extend
 

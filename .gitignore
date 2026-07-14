@@ -73,3 +73,6 @@ chandra_env/
 # Test outputs
 definition.json
 model*.png
+.ruff_cache/
+datasheet/
+api_result/
