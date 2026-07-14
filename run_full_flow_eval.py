@@ -28,10 +28,27 @@ REPORT = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("flow_eval_report.json
 # Part-number hints where the datasheet covers several variants.
 PART_HINTS = {
     "74HC595_TI": "SN74HC595DWR",
+    # The x in the filename is ST's wildcard (covers T6/C6/R6); pin the
+    # eval to the 48-pin LQFP variant so extraction is deterministic.
+    "STM32F103X6": "STM32F103C6",
 }
 
 # Fixtures that are not real component datasheets: clean failure = pass.
 EXPECT_FAIL_OK = {"foo", "pages", "test"}
+
+# Ground-truth pin counts per PDF stem. A footprint with a different pin
+# count is a WRONG VARIANT, not a pass — grid-consistency checks alone
+# cannot see this (STM32F103RBT7, a 64-pin part, once shipped a 100-pin
+# footprint that measured perfectly consistent).
+EXPECTED_PINS = {
+    "74HC595_TI": 16, "ADXL345": 14, "AMS1117": 8, "ATmega328p": 28,
+    "cd74hc4017": 16, "DFN": 8, "DS3231": 16, "DS_SX1261_2_V2-2": 24,
+    "esp32-c3_datasheet_en": 32, "FT232R": 28, "INA219": 8, "L293D": 16,
+    "lm358": 8, "MAX1487-MAX491": 8, "MAX202E": 16, "MC74HC595A": 16,
+    "MCP3208": 16, "MPU-6000-Datasheet1": 24, "NE555": 8, "NRF24L01": 20,
+    "PIC16F877A": 40, "STM32F103RBT7": 64, "STM32F103X6": 48,
+    "tl072": 8, "TPS63060": 10, "TSSOP": 8, "ULN2001A-ULN2002A": 16,
+}
 
 # Grid-array parts: the correct outcome is a schematic plus a refused
 # footprint (no real pad-grid support; perimeter geometry would be wrong).
@@ -142,7 +159,16 @@ def run_one(pdf: Path) -> dict:
             sc_checks.get(k) for k in
             ("view_type_ok", "all_pins_named", "numbers_contiguous", "bodyline_points")
         )
-        res["status"] = "PASS" if schematic_ok else "FAIL"
+        expected = EXPECTED_PINS.get(stem)
+        pin_count_ok = True
+        for measured in (
+            (res.get("geometry") or {}).get("pin_count"),
+            sc_checks.get("pin_count"),
+        ):
+            if expected and measured and measured != expected:
+                res["wrong_variant"] = f"expected {expected} pins, got {measured}"
+                pin_count_ok = False
+        res["status"] = "PASS" if (schematic_ok and pin_count_ok) else "FAIL"
     return res
 
 

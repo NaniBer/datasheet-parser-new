@@ -9,9 +9,11 @@ from typing import Any, Dict, List, Optional
 try:
     from ..models.pin_data import PinData
     from ..utils.package_detector import PackageDetector
+    from .variant_selection import expected_pin_count_from_part_number
 except ImportError:  # pragma: no cover - compatibility for top-level imports in legacy scripts
     from src.models.pin_data import PinData
     from src.utils.package_detector import PackageDetector
+    from src.pdf_extractor.variant_selection import expected_pin_count_from_part_number
 from .non_pin_features import is_non_pin_feature_name
 
 
@@ -223,6 +225,25 @@ def validate_pin_data_extraction(
     else:
         for package_index, package in enumerate(packages):
             _validate_package(package, package_index, errors, warnings)
+
+        # An order-code pin count is ground truth (STM32F103[R]BT7 = 64
+        # pins). Extractions that offer no variant with that count are
+        # wrong-variant reads of a multi-variant table — the main silent
+        # failure mode on STM32-style datasheets.
+        implied_pins = expected_pin_count_from_part_number(part_number)
+        if implied_pins:
+            counts = []
+            for package in packages:
+                try:
+                    counts.append(int(package.get("pin_count") or 0))
+                except (TypeError, ValueError):
+                    counts.append(0)
+            if implied_pins not in counts:
+                errors.append(
+                    f"target part number {part_number!r} implies a {implied_pins}-pin "
+                    f"package, but the extracted variants have {sorted(set(counts))} pins. "
+                    f"Extract the {implied_pins}-pin variant's pin-number column."
+                )
 
         if len(packages) > 1 and pin_data.selected_package_index is None and not pin_data.selected_package_type:
             errors.append(

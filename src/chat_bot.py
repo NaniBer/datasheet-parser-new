@@ -20,6 +20,27 @@ BASE_URL = "https://fastchat.ideeza.com/v1"
 _client = None
 
 
+def _part_number_hint(part_number, prefix="Target part number"):
+    """Prompt line for the target part, including the pin count its order
+    code implies (STM32F103RBT7 -> 64), so the model reads the right
+    variant column instead of guessing among them."""
+    if not part_number:
+        return ""
+    hint = f"{prefix}: {part_number}\n"
+    try:
+        from .pdf_extractor.variant_selection import expected_pin_count_from_part_number
+    except ImportError:  # pragma: no cover - legacy top-level imports
+        from src.pdf_extractor.variant_selection import expected_pin_count_from_part_number
+    implied = expected_pin_count_from_part_number(part_number)
+    if implied:
+        hint += (
+            f"IMPORTANT: this order code implies a {implied}-pin package. "
+            f"Extract the {implied}-pin variant's pin-number column; do not "
+            f"use pin numbers from other variants' columns.\n"
+        )
+    return hint
+
+
 def _get_client() -> OpenAI:
     """Return the FastChat client, creating it on first use.
 
@@ -128,7 +149,7 @@ def build_table_extraction_prompt(
     Returns:
         List of message dictionaries for LLM API call
     """
-    target_hint_text = f"Target part number: {part_number}\n\n" if part_number else ""
+    target_hint_text = (_part_number_hint(part_number) + "\n") if part_number else ""
     validation_hint_text = (
         f"Validation feedback from a previous attempt:\n{validation_feedback}\n\n"
         if validation_feedback
@@ -235,7 +256,7 @@ def build_table_extraction_prompt(
                 "- If pin count doesn't match expected, check for missing pins in table\n"
                 "- component_name is OPTIONAL: extract if present in headers, else use 'Unknown'\n"
                 "- PRIORITIZE accurate pin extraction over component name\n"
-                + (f"\nTarget part number: {part_number}\n" if part_number else "")
+                + (("\n" + _part_number_hint(part_number)) if part_number else "")
                 + (f"\nValidation feedback:\n{validation_feedback}\n" if validation_feedback else "")
             )
         },
@@ -285,7 +306,7 @@ def build_pin_extraction_prompt(
         List of message dictionaries for LLM API call
     """
     # Build the extraction tasks with part number matching
-    target_part_text = f"TARGET PART NUMBER: {part_number}\n" if part_number else ""
+    target_part_text = _part_number_hint(part_number, prefix="TARGET PART NUMBER") if part_number else ""
     validation_text = (
         f"VALIDATION FEEDBACK:\n{validation_feedback}\n" if validation_feedback else ""
     )
@@ -392,7 +413,7 @@ def build_pin_extraction_prompt(
     messages = [
         {
             "role": "system",
-            "content": system_content + (f"\nTarget part number: {part_number}\n" if part_number else "") + (f"\nValidation feedback:\n{validation_feedback}\n" if validation_feedback else "")
+            "content": system_content + (("\n" + _part_number_hint(part_number)) if part_number else "") + (f"\nValidation feedback:\n{validation_feedback}\n" if validation_feedback else "")
         },
         {
             "role": "user",

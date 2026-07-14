@@ -19,6 +19,41 @@ def _normalize_label(value: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "", (value or "").upper())
 
 
+# ST's STM32 order code encodes the pin count in the letter after the
+# device number: STM32F103[R]BT7 -> R -> 64 pins. Only letters with a
+# documented meaning are mapped; anything else (including the lowercase
+# 'x' wildcard used in datasheet filenames) decodes to None — fail closed.
+_STM32_PIN_COUNT_LETTERS = {
+    "F": 20, "G": 28, "K": 32, "T": 36, "C": 48,
+    "R": 64, "V": 100, "Z": 144, "I": 176,
+}
+_STM32_ORDER_CODE = re.compile(r"STM32[A-Z]\d{3}([A-Z])")
+
+
+def expected_pin_count_from_part_number(part_number: Optional[str]) -> Optional[int]:
+    """
+    Pin count implied by an ST order code, or None.
+
+    "STM32F103RBT7" -> 64, "STM32F103C6" -> 48. Returns None for
+    non-STM32 parts and for wildcard family names ("STM32F103X6" —
+    the datasheet's 'x' placeholder is not a real pin-count letter),
+    so callers never receive a guessed constraint.
+    """
+    if not part_number:
+        return None
+    match = _STM32_ORDER_CODE.search(part_number.upper().replace(" ", ""))
+    if not match:
+        return None
+    return _STM32_PIN_COUNT_LETTERS.get(match.group(1))
+
+
+def _coerce_count(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _package_records(pin_data: PinData) -> List[Dict[str, Any]]:
     """Return the package entries available for selection."""
     if pin_data.packages:
@@ -100,6 +135,22 @@ def select_package_variant(
         raise IndexError(
             f"Requested package_index {package_index} is out of range for {len(packages)} package variants"
         )
+
+    # A pin count decoded from the order code is ground truth: it outranks
+    # the LLM's own selection (STM32F103RBT7 is a 64-pin part regardless of
+    # which variant the model preferred).
+    implied_pins = expected_pin_count_from_part_number(part_number)
+    if implied_pins:
+        matches = [
+            index for index, package in enumerate(packages)
+            if _coerce_count(package.get("pin_count")) == implied_pins
+        ]
+        if len(matches) == 1:
+            return _result(
+                matches[0],
+                f"Part number {part_number!r} implies {implied_pins} pins; "
+                f"selected matching variant {packages[matches[0]].get('type')!r}",
+            )
 
     if pin_data.selected_package_index is not None:
         if 0 <= pin_data.selected_package_index < len(packages):

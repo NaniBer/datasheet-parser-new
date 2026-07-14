@@ -2337,6 +2337,66 @@ def test_shared_datasheet_selects_device_column_by_part_number():
     assert {p.number: p.name for p in c4.pin_data.pins}[5] == "NC"
 
 
+def test_stm32_order_code_pin_count_decoding():
+    # RBT7 eval-v5 find: STM32F103RBT7 (a 64-pin part) shipped a 100-pin
+    # footprint because the LLM read the LQFP100 column and nothing knew
+    # better. ST order codes encode the pin count deterministically.
+    from src.pdf_extractor.variant_selection import expected_pin_count_from_part_number as epc
+    assert epc("STM32F103RBT7") == 64
+    assert epc("STM32F103C6") == 48
+    assert epc("STM32F103VET6") == 100
+    assert epc("stm32f103zet6") == 144
+    # Wildcard family names and non-ST parts decode to None — never guess.
+    assert epc("STM32F103X6") is None
+    assert epc("SN74HC595DWR") is None
+    assert epc(None) is None
+
+
+def test_variant_selection_prefers_order_code_pin_count():
+    # The decoded pin count outranks the LLM's own variant choice.
+    from src.pdf_extractor.variant_selection import select_package_variant
+    pd = PinData(
+        component_name="STM32F103RBT7",
+        package=None,
+        pins=[],
+        packages=[
+            {"type": "LQFP-100", "pin_count": 100, "pins": []},
+            {"type": "LQFP-64", "pin_count": 64, "pins": []},
+        ],
+        selected_package_index=0,  # LLM picked the wrong one
+    )
+    sel = select_package_variant(pd, part_number="STM32F103RBT7")
+    assert sel.package["pin_count"] == 64
+    assert "implies 64 pins" in sel.reason
+
+
+def test_validator_rejects_wrong_variant_pin_count():
+    # If the order code implies 64 pins and no extracted variant has 64,
+    # the extraction read the wrong column(s): hard error -> feedback retry.
+    from src.pdf_extractor.extraction_validator import validate_pin_data_extraction
+    pins100 = [{"number": n, "name": f"P{n}"} for n in range(1, 101)]
+    pd = PinData(
+        component_name="STM32F103RBT7",
+        package=None,
+        pins=[],
+        packages=[{"type": "LQFP-100", "pin_count": 100, "pins": pins100}],
+        selected_package_index=0,
+    )
+    result = validate_pin_data_extraction(pd, part_number="STM32F103RBT7")
+    assert not result.is_valid
+    assert any("implies a 64-pin" in e for e in result.errors)
+
+    pins64 = [{"number": n, "name": f"P{n}"} for n in range(1, 65)]
+    pd_ok = PinData(
+        component_name="STM32F103RBT7",
+        package=None,
+        pins=[],
+        packages=[{"type": "LQFP-64", "pin_count": 64, "pins": pins64}],
+        selected_package_index=0,
+    )
+    assert validate_pin_data_extraction(pd_ok, part_number="STM32F103RBT7").is_valid
+
+
 def test_unresolvable_multi_package_table_yields_no_candidate():
     # STM32F103X6 eval-v4 regression: its pin table has one number column
     # per package (BGA100 | LQFP48 | LQFP64 | LQFP100) and the part number
