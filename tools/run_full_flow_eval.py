@@ -23,7 +23,7 @@ from pygltflib import GLTF2
 
 PDF_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("pdfs")
 OUT_DIR = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("/tmp/flow_eval")
-REPORT = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("flow_eval_report.json")
+REPORT = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("eval_output/flow_eval_report.json")
 
 # Part-number hints where the datasheet covers several variants.
 PART_HINTS = {

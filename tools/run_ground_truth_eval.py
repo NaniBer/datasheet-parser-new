@@ -23,20 +23,20 @@ from pathlib import Path
 from pygltflib import GLTF2
 
 OUT_DIR = Path("/tmp/ground_truth_eval")
-REPORT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("ground_truth_report.json")
+REPORT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("eval_output/ground_truth_report.json")
 
 # (name, pdf, part_number hint or None, reference kicad_mod)
 CASES = [
     ("TL072 SOIC-8", "pdfs/tl072.pdf", "TL072CDR",
-     "TLO62CDR/SOIC127P600X175-8N.kicad_mod"),
+     "tests/ground_truth/TLO62CDR/SOIC127P600X175-8N.kicad_mod"),
     ("74HC595 narrow SOIC-16", "pdfs/74HC595_TI.pdf", "SN74HC595DR",
-     "MM74HC594M/SOIC127P600X175-16N.kicad_mod"),
+     "tests/ground_truth/MM74HC594M/SOIC127P600X175-16N.kicad_mod"),
     ("ATmega328P DIP-28", "pdfs/ATmega328p.pdf", None,
-     "ATMEGA328P-PU/DIP794W46P254L2967H457Q28B.kicad_mod"),
+     "tests/ground_truth/ATMEGA328P-PU/DIP794W46P254L2967H457Q28B.kicad_mod"),
     ("MCP3208 PDIP-16", "pdfs/MCP3208.pdf", "MCP3208-CI/P",
-     "MCP3208-CI_P/DIP254P762X432-16.kicad_mod"),
+     "tests/ground_truth/MCP3208-CI_P/DIP254P762X432-16.kicad_mod"),
     ("74HC595A PDIP-16", "pdfs/MC74HC595A.PDF", None,
-     "ul_74HC595/KiCADv6/footprints.pretty/DIP16_300_TEX.kicad_mod"),
+     "tests/ground_truth/ul_74HC595/KiCADv6/footprints.pretty/DIP16_300_TEX.kicad_mod"),
 ]
 
 # Tolerances (mm)
