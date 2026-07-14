@@ -577,3 +577,55 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] Finish STM32 ambiguous-column fix + suite + corpus rerun
 - [ ] Then: rail merging (GND id ["8","22"]), discrete-package scope
       decision, platform-side service wrapper / LLM pinning
+
+---
+
+## 2026-07-14 — Engineering review + production task list execution
+
+### What We Did
+- ✅ Full two-phase engineering review → datasheet-parser-new_review_2026-07-14.md
+  (1,115 lines, 10 sections, 7 diagrams, 45 issues: 8 High / 19 Medium /
+  18 Low; overall 6/10 "strong core, unhardened shell"). Key finds:
+  PyMuPDF AGPL vs MIT (CFG-002), EOL Python 3.9 (CFG-001), untested
+  LLM/vision layer (COV-001), unauthenticated vision endpoints (SEC-004).
+  API-key finding withdrawn per Nani.
+- ✅ Created 14-task production list (scope: no service wrapper, no
+  external-call work, no licensing/docs — per Nani's deferrals)
+- ✅ Task 1: wired _has_multiple_package_columns guard — unresolvable
+  multi-package tables yield no deterministic candidate (dbcc142);
+  STM32F103X6 recovered (48 pins, 8.9mm ring); lm358/MCP3208 unaffected
+- ✅ Task 2: pushed all 36 local commits to origin (now current)
+- ✅ Task 3: deleted dead code — main.py.backup, schematic_builder.py.bak,
+  main_layout.py (508-LOC duplicate CLI; --layout-mode lives in main.py)
+- ✅ Task 4: removed ~1.8GB working-tree clutter (two venvs, 16 loose
+  GLB/STL, stale output dirs). Kept 2d.glb + schematic.glb (load-bearing
+  references). Benchmark fixtures were untracked and lost in the sweep —
+  reconstructed from documented schema, now git-tracked (353e7c1)
+- ✅ Task 14: STM32 wrong-variant fix — ST order codes decode pin count
+  (STM32F103[R]BT7→64); wired into prompt hint, validator hard error,
+  and variant-selection priority (0391c9b). RBT7 3/3 runs at 64 pins
+  (was 100 in v5); X6 pinned to STM32F103C6 in eval, 2/2 at 48.
+  Eval gained per-PDF EXPECTED_PINS so wrong variants FAIL.
+- ✅ Task 5: tools/ dir for the 4 real harnesses; deleted test_scripts/
+  (26 files) + 4 superseded ad-hoc scripts + setup_env.sh (0daea90)
+- 🔄 Task 6 (in progress): eval reports + dimension caches → eval_output/,
+  6 vendor footprint folders + compare/ → tests/ground_truth/; paths
+  updated in tools/run_ground_truth_eval.py; verification rerun pending
+  (4/4 MATCH before interruption; TL072 pad size now EXACT vs SnapEDA)
+
+### Issues Encountered
+- v5 corpus eval: X6 failed in-eval but passed direct runs — exposed
+  LLM-path variant nondeterminism (root-caused and fixed in task 14)
+- Eval blind spot found: RBT7 shipped a 100-pin footprint marked PASS
+  (grid-consistency checks can't see wrong variants) → EXPECTED_PINS
+- rm -rf of "clutter" destroyed untracked benchmark fixtures → rule:
+  NEVER delete output folders; move only (saved to memory per Nani)
+
+### Suite / eval state
+- 147 tests passing; corpus eval v5: 27 PASS + expected outcomes;
+  ground-truth: 5/5 MATCH (TL072 pad geometry now exact)
+
+### Remaining tasks (7-13)
+- [ ] Error/exit-code contract in main.py; print→logging
+- [ ] LLM/vision layer mock tests; CI hardening; nightly eval smoke
+- [ ] Python 3.11/3.12 migration; Dockerfile
