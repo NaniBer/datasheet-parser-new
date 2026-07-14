@@ -2337,6 +2337,37 @@ def test_shared_datasheet_selects_device_column_by_part_number():
     assert {p.number: p.name for p in c4.pin_data.pins}[5] == "NC"
 
 
+def test_unresolvable_multi_package_table_yields_no_candidate():
+    # STM32F103X6 eval-v4 regression: its pin table has one number column
+    # per package (BGA100 | LQFP48 | LQFP64 | LQFP100) and the part number
+    # names none of them. Falling back to "first numeric cell per row"
+    # mixed numbering schemes into a garbage BGA-25 candidate. The parser
+    # must yield nothing and let the validated LLM path handle it.
+    from src.pdf_extractor.deterministic_table_parser import _parse_table_rows
+    table = [
+        ["Pins", "", "", "", "Pin name", "Type", "Main function"],
+        ["BGA100", "LQFP48", "LQFP64", "LQFP100", "", "", ""],
+        ["A3", "-", "-", "1", "PE2/TRACECK", "I/O", "PE2"],
+        ["B3", "-", "-", "2", "PE3/TRACED0", "I/O", "PE3"],
+        ["B2", "1", "1", "6", "VBAT", "S", "VBAT"],
+        ["A2", "2", "2", "7", "PC13", "I/O", "PC13"],
+        ["A1", "3", "3", "8", "PC14", "I/O", "PC14"],
+        ["B1", "4", "4", "9", "PC15", "I/O", "PC15"],
+        ["C2", "-", "-", "10", "VSS_5", "S", "VSS_5"],
+        ["D2", "-", "-", "11", "VDD_5", "S", "VDD_5"],
+    ]
+    text = "STM32F103xx pin definitions LQFP48 LQFP64 LQFP100 TFBGA64 packages"
+    assert _parse_table_rows(table, 18, text, "STM32F103X6") is None
+
+    # The guard must not disturb resolvable multi-package tables:
+    # lm358 (family column) and MCP3208 (device column) still parse.
+    from src.pdf_extractor.deterministic_table_parser import _has_multiple_package_columns
+    assert _has_multiple_package_columns(table)
+    assert not _has_multiple_package_columns(
+        [["PIN NO.", "NAME", "I/O", "DESCRIPTION"], ["1", "OUT1", "O", "Output"]]
+    )
+
+
 def test_package_pin_column_requires_unambiguous_header():
     from src.pdf_extractor.deterministic_table_parser import _package_pin_column
     header = [["NAME", "LCCC(1)", "SOIC, CDIP, PDIP", "I/O"]]

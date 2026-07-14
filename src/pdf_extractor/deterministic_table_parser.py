@@ -393,6 +393,29 @@ def _part_number_pin_column(
     return None
 
 
+def _has_multiple_package_columns(table: List[List[str]]) -> bool:
+    """True when a header row names packages/devices in two or more columns.
+
+    Such tables carry one pin-number column per package (STM32's
+    "BGA100 | LQFP48 | LQFP64 | LQFP100"); reading the first numeric cell
+    per row mixes numbering schemes into garbage.
+    """
+    for row in table[:4]:
+        columns = set()
+        for idx, cell in enumerate(row):
+            text = (cell or "").upper()
+            if _FAMILY_HEADER_RE.search(text):
+                columns.add(idx)
+                continue
+            for token in _DEVICE_TOKEN_RE.findall(text):
+                if len(token) >= 5:
+                    columns.add(idx)
+                    break
+        if len(columns) >= 2:
+            return True
+    return False
+
+
 def _variant_column_index(table: List[List[str]], part_number: Optional[str]) -> Optional[int]:
     if not part_number:
         return None
@@ -431,6 +454,12 @@ def _parse_table_rows(
     package_pin_column = _package_pin_column(table, family)
     if package_pin_column is None:
         package_pin_column = _part_number_pin_column(table, part_number)
+    if package_pin_column is None and _has_multiple_package_columns(table):
+        # Multi-package table with no resolvable column (STM32's
+        # BGA100/LQFP48/LQFP64/LQFP100): reading the first numeric cell
+        # per row would mix numbering schemes. Yield no candidate and let
+        # the validation-gated LLM path handle the document.
+        return None
     pin_candidates: Dict[int, List[Pin]] = {}
 
     for row in table:
