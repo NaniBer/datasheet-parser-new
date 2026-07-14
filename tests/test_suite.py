@@ -2337,6 +2337,48 @@ def test_shared_datasheet_selects_device_column_by_part_number():
     assert {p.number: p.name for p in c4.pin_data.pins}[5] == "NC"
 
 
+def test_cli_exit_code_contract(monkeypatch, tmp_path):
+    # Exit-code contract: 0 = artifacts produced, 1 = domain failure,
+    # 2 = internal error (bug). Automation and the future service wrapper
+    # depend on these being distinguishable.
+    import src.main as main_mod
+
+    # Domain failure: nonexistent input file -> 1
+    monkeypatch.setattr("sys.argv", ["prog", str(tmp_path / "missing.pdf"), "out.glb"])
+    with pytest.raises(SystemExit) as exc:
+        main_mod.main()
+    assert exc.value.code == main_mod.EXIT_DOMAIN_FAILURE
+
+    # Domain failure: junk PDF with no detectable pinout pages -> 1
+    monkeypatch.setattr("sys.argv", ["prog", "pdfs/foo.pdf", str(tmp_path / "foo.glb")])
+    with pytest.raises(SystemExit) as exc:
+        main_mod.main()
+    assert exc.value.code == main_mod.EXIT_DOMAIN_FAILURE
+
+    # Internal error: a bug in a pipeline stage -> 2 (not silently 1)
+    def _boom(*a, **k):
+        raise TypeError("simulated bug")
+    monkeypatch.setattr(main_mod, "detect_relevant_pages", _boom)
+    monkeypatch.setattr("sys.argv", ["prog", "pdfs/foo.pdf", str(tmp_path / "x.glb")])
+    with pytest.raises(SystemExit) as exc:
+        main_mod.main()
+    assert exc.value.code == main_mod.EXIT_INTERNAL_ERROR
+
+
+@pytest.mark.integration
+def test_cli_exit_zero_on_success(tmp_path):
+    # Deterministic-path part (DFN.pdf needs no LLM): full run -> exit 0.
+    import subprocess, sys
+    proc = subprocess.run(
+        [sys.executable, "-m", "src.main", "pdfs/DFN.pdf",
+         str(tmp_path / "dfn.glb"), "--both"],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert proc.returncode == 0, proc.stdout[-500:] + proc.stderr[-500:]
+    assert (tmp_path / "dfn_schematic.glb").exists()
+    assert (tmp_path / "dfn_footprint.glb").exists()
+
+
 def test_stm32_order_code_pin_count_decoding():
     # RBT7 eval-v5 find: STM32F103RBT7 (a 64-pin part) shipped a 100-pin
     # footprint because the LLM read the LQFP100 column and nothing knew

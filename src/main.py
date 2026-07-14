@@ -36,6 +36,17 @@ from .exceptions import (
 # Validation Functions
 # ============================================================================
 
+# ---------------------------------------------------------------------------
+# Exit-code contract (kept stable for callers and automation):
+#   0 — all requested artifacts were produced
+#   1 — domain failure: unsupported/unvalidatable input, fail-closed refusal
+#   2 — internal error: an unexpected exception (a bug), traceback printed
+# ---------------------------------------------------------------------------
+EXIT_OK = 0
+EXIT_DOMAIN_FAILURE = 1
+EXIT_INTERNAL_ERROR = 2
+
+
 def validate_input_file(input_path: Path) -> None:
     """
     Validate input file exists and has correct extension.
@@ -121,7 +132,7 @@ def detect_relevant_pages(input_path: str, min_confidence: int, verbose: bool = 
     if not candidates:
         print("Error: No relevant pages found in datasheet")
         print("Try lowering --min-confidence")
-        sys.exit(1)
+        sys.exit(EXIT_DOMAIN_FAILURE)
 
     return candidates
 
@@ -189,7 +200,7 @@ def extract_pin_data(
     # Check if we have sufficient content for extraction
     if not tables_only_mode and not content.text_content:
         print("Error: No tables or text content found for extraction")
-        sys.exit(1)
+        sys.exit(EXIT_DOMAIN_FAILURE)
 
     if verbose:
         if tables_only_mode:
@@ -843,53 +854,21 @@ def process_datasheet(
 
         return True
 
-    except ValidationError as e:
-        print(f"Validation error: {e}")
+    except DatasheetParserError as e:
+        # Expected domain failures (validation, credentials, fail-closed
+        # refusals) — message only; the top-level handler owns exit codes.
+        print(f"Error: {e}")
         if verbose:
             print(f"Error code: {e.error_code}")
             if e.details:
                 print(f"Details: {e.details}")
-        sys.exit(1)
-
-    except APICredentialsError as e:
-        print(f"API credentials error: {e}")
-        if verbose:
-            print(f"Error code: {e.error_code}")
-            if e.details:
-                print(f"Details: {e.details}")
-        sys.exit(1)
+        sys.exit(EXIT_DOMAIN_FAILURE)
 
     except FileNotFoundError as e:
         print(f"Error: File not found - {e}")
-        sys.exit(1)
-
-    except ImportError as e:
-        print(f"Error: Missing dependency - {e}")
-        print("Install required packages: pip install -r requirements.txt")
-        sys.exit(1)
-
-    except NotImplementedError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    except RuntimeError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    except DatasheetParserError as e:
-        print(f"Datasheet parser error: {e}")
-        if verbose:
-            print(f"Error code: {e.error_code}")
-            if e.details:
-                print(f"Details: {e.details}")
-        sys.exit(1)
-
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        if verbose:
-            import traceback
-            traceback.print_exc()
-        sys.exit(1)
+        sys.exit(EXIT_DOMAIN_FAILURE)
+    # Anything else is a bug: it propagates to main()'s top-level handler,
+    # which prints the traceback and exits EXIT_INTERNAL_ERROR.
 
 
 def process_datasheet_both(pin_data: PinData, output_path: Path,
@@ -930,11 +909,8 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
         ))
         if verbose:
             print(f"Schematic: {schematic_str}")
-    except Exception as e:
-        print(f"Error generating schematic: {e}")
-        if verbose:
-            import traceback
-            traceback.print_exc()
+    except DatasheetParserError as e:
+        print(f"Schematic refused: {e}")
 
     # --- PCB footprint (2D) ---
     footprint_ok = False
@@ -955,11 +931,10 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
         ))
         if verbose:
             print(f"Footprint: {footprint_str}")
-    except Exception as e:
-        print(f"Error generating footprint: {e}")
-        if verbose:
-            import traceback
-            traceback.print_exc()
+    except DatasheetParserError as e:
+        # Fail-closed refusals (grid-array packages, unknown geometry)
+        # are expected domain outcomes, not bugs.
+        print(f"Failed to generate footprint: {e}")
 
     if not schematic_ok:
         print(f"Failed to generate schematic: {schematic_str}")
@@ -988,6 +963,11 @@ Examples:
 
   # With layout mode (Vision API for layout extraction)
   python -m src.main datasheet.pdf output.glb --layout-mode
+
+Exit codes:
+  0  all requested artifacts were produced
+  1  domain failure (unsupported input, fail-closed refusal, validation)
+  2  internal error (bug) — traceback printed
 
   # Verbose output
   python -m src.main datasheet.pdf output.glb --verbose
@@ -1078,7 +1058,27 @@ Examples:
 
 
 def main():
-    """Main CLI entry point."""
+    """CLI entry point owning the exit-code contract (see EXIT_* above)."""
+    try:
+        _run_cli()
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+        sys.exit(EXIT_INTERNAL_ERROR)
+    except DatasheetParserError as e:
+        print(f"Error: {e}")
+        sys.exit(EXIT_DOMAIN_FAILURE)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        print("Internal error — this is a bug in datasheet-parser, not a "
+              "problem with your datasheet. Please report it with the "
+              "traceback above.")
+        sys.exit(EXIT_INTERNAL_ERROR)
+
+
+def _run_cli():
     args = parse_arguments()
 
     # Mutual exclusion: --both and --pcb-2d cannot be used together
@@ -1111,12 +1111,9 @@ def main():
                 part_number=resolved_part_number,
                 force_best_effort=args.force_best_effort,
             )
-        except ValidationError as e:
-            print(f"Validation error: {e}")
-            sys.exit(1)
-        except APICredentialsError as e:
-            print(f"API credentials error: {e}")
-            sys.exit(1)
+        except DatasheetParserError as e:
+            print(f"Error: {e}")
+            sys.exit(EXIT_DOMAIN_FAILURE)
 
         # Fail closed on unknown package geometry (ARCH-006); with
         # --force-best-effort this substitutes explicit DIP geometry instead.
@@ -1129,7 +1126,7 @@ def main():
             )
         except SchematicGenerationError as e:
             print(f"Error: {e}")
-            sys.exit(1)
+            sys.exit(EXIT_DOMAIN_FAILURE)
 
         # Extract real package dimensions from PDF for the footprint builder
         extracted_dims = None
@@ -1155,8 +1152,8 @@ def main():
             if args.verbose and extracted_dims:
                 print(f"[DimensionExtractor] Extracted dims: {extracted_dims}")
         except Exception as e:
-            if args.verbose:
-                print(f"[DimensionExtractor] Skipping: {e}")
+            print(f"Warning: dimension extraction skipped ({e}); "
+                  "JEDEC family defaults will be used.")
 
         success = process_datasheet_both(
             pin_data=pin_data,
@@ -1167,7 +1164,7 @@ def main():
             extracted_dims=extracted_dims,
         )
         if not success:
-            sys.exit(1)
+            sys.exit(EXIT_DOMAIN_FAILURE)
 
         # Watermark both outputs when unvalidated data was forced through
         if pin_data.validation_errors:
