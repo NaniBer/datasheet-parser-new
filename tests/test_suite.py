@@ -1522,7 +1522,7 @@ from src.pdf_extractor.text_dimensions import (
     plausible_dims,
 )
 
-# Ground truth read visually from the drawings (see test_dimension_api.py).
+# Ground truth read visually from the drawings (read from the datasheet drawings).
 _TSSOP16_TRUTH = {"e": 0.65, "E": 6.4, "D": 5.0, "b": 0.235, "L": 0.625, "A": 1.2}
 
 

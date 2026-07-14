@@ -242,7 +242,7 @@ class ContentExtractor:
         self, page, page_num: int
     ) -> List[Tuple[int, List]]:
         """
-        Extract tables using pdfplumber as fallback when OpenDataLoader fails.
+        Extract tables using pdfplumber as fallback when PyMuPDF finds none.
 
         Args:
             page: pdfplumber Page object
