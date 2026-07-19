@@ -2120,6 +2120,20 @@ def test_smd_pad_width_respects_extracted_b():
     assert b.pad_spec["length"] == pytest.approx(0.835 + 0.7, abs=0.05)
 
 
+def test_odd_pin_count_dual_row_places_all_pins():
+    """SOT-23-5 style packages put 3 pins on one row and 2 on the other; the
+    symmetric n//2 split placed only 4 of 5 pins and the last pin silently
+    vanished from the schematic (and broke footprint hierarchy validation)."""
+    from src.package_types import get_schematic_parameters
+    from src.schematic_generator.pin_layout import layout_pins
+
+    params = get_schematic_parameters("SOT-23", 5)
+    positions = layout_pins(params, None)
+    assert sorted(int(p.pin_number) for p in positions) == [1, 2, 3, 4, 5]
+    assert sum(1 for p in positions if p.side == "left") == 3
+    assert sum(1 for p in positions if p.side == "right") == 2
+
+
 def test_dual_row_family_refuses_quad_custom_layout():
     """A vision misread can hand a four-sided pin layout to a dual-row
     package family; the footprint would look plausible and never fit the
@@ -2167,6 +2181,22 @@ def test_umax_normalizes_to_msop():
     assert detector.normalize_package_name("uMAX-8") == "MSOP"
     from src.package_types.footprint_defaults import get_footprint_defaults
     assert get_footprint_defaults("MSOP", 8)["e"] == pytest.approx(0.65)
+
+
+def test_failed_validation_leaves_no_footprint_file(tmp_path, monkeypatch):
+    """A footprint that fails hierarchy validation must not remain on disk
+    looking like valid output; downstream tooling globs for *.glb (F8)."""
+    import src.schematic_generator.pcb_footprint_builder as fpb
+
+    monkeypatch.setattr(
+        fpb, "validate_pcb_footprint_glb", lambda *a, **k: (False, ["forced failure"])
+    )
+    pins = [{"number": str(i), "name": f"P{i}"} for i in range(1, 9)]
+    b = fpb.PcbFootprintBuilder("SOIC-8", 8, "X")
+    out = tmp_path / "footprint.glb"
+    assert b.save_glb(str(out), pins) is False
+    assert not out.exists()
+    assert list(tmp_path.iterdir()) == []  # no temp litter either
 
 
 def test_footprint_glb_records_dims_provenance(tmp_path):
