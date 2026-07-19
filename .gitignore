@@ -49,6 +49,9 @@ htmlcov/
 *.obj
 !tests/fixtures/*.stl
 !tests/fixtures/*.obj
+# Reference GLBs: required by through-hole footprint validation and tests
+!/2d.glb
+!/schematic.glb
 
 # Temporary files
 *.tmp
