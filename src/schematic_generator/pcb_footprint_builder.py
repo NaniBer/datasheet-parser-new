@@ -122,6 +122,29 @@ class PcbFootprintBuilder:
                 details={"package_type": package_type, "pin_count": pin_count},
             )
 
+        # A vision-read layout can put pins on four sides even when the
+        # package string names a dual-row family; the resulting footprint
+        # looks plausible and never fits the part. Refuse the contradiction
+        # instead of trusting either source (fail closed).
+        dual_row_types = {
+            PackageType.DIP, PackageType.CDIP, PackageType.SOIC,
+            PackageType.TSSOP, PackageType.DFN, PackageType.WSON,
+            PackageType.SON,
+        }
+        if custom_layout and self.params.package_type in dual_row_types:
+            sides_used = [s for s, pins in custom_layout.items() if pins]
+            if len(sides_used) > 2:
+                from ..exceptions import ErrorCodes, SchematicGenerationError
+                raise SchematicGenerationError(
+                    f"Package '{package_type}' is a dual-row family but the "
+                    f"extracted layout places pins on {len(sides_used)} sides "
+                    f"({', '.join(sorted(sides_used))}); refusing the "
+                    "contradictory footprint.",
+                    error_code=ErrorCodes.PACKAGE_UNKNOWN,
+                    details={"package_type": package_type,
+                             "layout_sides": sorted(sides_used)},
+                )
+
         # Real plastic body size (E1/D1) when known; the datasheet "E" is the
         # lead span, which drives pad placement but not the drawn body.
         self._body_outline_w: Optional[float] = None

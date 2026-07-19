@@ -207,6 +207,47 @@ def test_page_detector_needs_verification_without_table(detector):
     assert candidate.needs_verification is True
 
 
+def test_page_detector_heading_found_below_line_10(detector):
+    """Vendor boilerplate (part title, URLs, doc ids) routinely pushes the
+    section heading past line 10; the heading check must scan the whole
+    page, not only its top."""
+    filler = "\n".join(f"boilerplate line {i}" for i in range(15))
+    text = filler + "\nPin Configuration and Functions\n1 VCC supply"
+    score, _ = detector._check_pinout_heading(text)
+    assert score == 3
+
+
+def test_page_detector_toc_page_scores_no_heading_bonus(detector):
+    """A table of contents lists every section heading with dot leaders and
+    page numbers; it must not collect the heading bonus meant for the real
+    section page."""
+    text = (
+        "Table of Contents\n"
+        "1 Features ................................ 1\n"
+        "2 Applications ............................ 1\n"
+        "3 Description ............................. 2\n"
+        "4 Revision History ........................ 3\n"
+        "5 Pin Configuration and Functions ......... 4\n"
+        "6 Specifications .......................... 5\n"
+    )
+    score, _ = detector._check_pinout_heading(text)
+    assert score == 0
+
+
+def test_page_detector_early_page_gets_position_bonus(detector):
+    """Long datasheets routinely put the pin table on page 3 of 40+; only
+    the cover page and the legal/ordering tail are unlikely positions."""
+    detector.total_pages = 40
+    score, _ = detector._check_page_position(3)
+    assert score == 1
+
+
+def test_page_detector_cover_page_no_position_bonus(detector):
+    detector.total_pages = 40
+    score, _ = detector._check_page_position(1)
+    assert score == 0
+
+
 # ---------------------------------------------------------------------------
 # 2a. Page detector benchmark: precision / recall against real PDFs
 # ---------------------------------------------------------------------------
@@ -417,6 +458,20 @@ def test_single_filename_candidate_wins_unconditionally():
     assert result == "ATMEGA328P"
 
 
+def test_filename_hint_survives_underscore_separators():
+    """Underscores in a stem are separators: the part token after an index
+    prefix like `9_` must be found (regex \\b cannot see past `_` otherwise)."""
+    result = infer_part_number_hint("", source_name="9_XC9536XL.pdf")
+    assert result == "XC9536XL"
+
+
+def test_filename_hint_returns_whole_token_not_suffix_fragment():
+    """A hyphenated orderable like AB12C-E3-80 must never degrade to a
+    fragment of itself (`E3-80`) because the leading chars were unreachable."""
+    result = infer_part_number_hint("", source_name="4_AB12C-E3-80.pdf")
+    assert result == "AB12C-E3-80"
+
+
 # ===========================================================================
 # 8. EXTRACTION VALIDATION
 # ===========================================================================
@@ -463,6 +518,144 @@ def test_validate_accepts_explicitly_numbered_thermal_pad():
     # Explicitly numbered exposed pad is accepted as a real pin (may carry a warning)
     assert result.is_valid
     assert any("exposed thermal pad" in w.lower() or "package feature" in w.lower() for w in result.warnings)
+
+
+def _four_pin_data(names):
+    return PinData(
+        component_name="AB1234",
+        package=PackageInfo(type="DIP", pin_count=4, width=5.0, height=5.0),
+        pins=[Pin(number=i, name=name) for i, name in enumerate(names, start=1)],
+        extraction_method="LLM",
+    )
+
+
+def test_validate_flags_pin_names_absent_from_source_text():
+    """A pin name that appears nowhere in the source text is fabricated
+    (hallucinated or garbled OCR) and must fail validation."""
+    pin_data = _four_pin_data(["VCC", "QZX_77", "OUT", "GND"])
+    source = "Pin Functions\n1 VCC supply\n2 EN enable\n3 OUT output\n4 GND ground"
+    result = validate_pin_data_extraction(
+        pin_data, part_number="AB1234", source_text=source
+    )
+    assert not result.is_valid
+    assert any("QZX_77" in e for e in result.errors)
+
+
+def test_validate_accepts_pin_names_grounded_in_source_text():
+    """Names present in the source pass, tolerating line wraps and
+    punctuation differences (VOUT_SET wrapped as 'VOUT_\\nSET')."""
+    pin_data = _four_pin_data(["VCC", "VOUT_SET", "OUT", "GND"])
+    source = "Pin Functions\n1 VCC supply\n2 VOUT_\nSET adjust\n3 OUT output\n4 GND ground"
+    result = validate_pin_data_extraction(
+        pin_data, part_number="AB1234", source_text=source
+    )
+    assert result.is_valid
+
+
+def test_validate_accepts_composite_name_with_segments_in_source():
+    """Composite names the extractor joins itself (e.g. 'GND/PAD' when the
+    sheet lists GND and PAD separately) stay valid when every segment is
+    grounded — joining style must not fail a correct extraction."""
+    pin_data = _four_pin_data(["VCC", "EN", "OUT", "GND/PAD"])
+    source = "Pin Functions\n1 VCC supply\n2 EN enable\n3 OUT output\n4 GND ground\nExposed PAD"
+    result = validate_pin_data_extraction(
+        pin_data, part_number="AB1234", source_text=source
+    )
+    assert result.is_valid
+
+
+def test_validate_grounding_skipped_without_source_text():
+    """No source text means grounding cannot run — structural validation
+    alone decides, so the fabricated name is not caught here."""
+    pin_data = _four_pin_data(["VCC", "QZX_77", "OUT", "GND"])
+    result = validate_pin_data_extraction(pin_data, part_number="AB1234")
+    assert result.is_valid
+
+
+def test_validate_grounding_skips_short_symbol_names():
+    """One-character names (bridge-rectifier '+', '-', diode 'K') carry too
+    little signal to ground; they must not be flagged."""
+    pin_data = _four_pin_data(["+", "-", "AC", "K"])
+    source = "Terminals\nAC input\npositive and negative outputs"
+    result = validate_pin_data_extraction(
+        pin_data, part_number="AB1234", source_text=source
+    )
+    assert result.is_valid
+
+
+def test_validate_rejects_sibling_device_extraction():
+    """Multi-device datasheets (e.g. AB1233/AB1234 on one page) are the top
+    wrong-output cause: extracting the sibling's column must be an error so
+    the retry loop re-extracts the target device, not a mere warning."""
+    pin_data = _four_pin_data(["VCC", "EN", "OUT", "GND"])
+    pin_data.component_name = "AB1233"
+    result = validate_pin_data_extraction(pin_data, part_number="AB1234")
+    assert not result.is_valid
+    assert any("AB1233" in e and "AB1234" in e for e in result.errors)
+
+
+def test_validate_allows_component_name_that_contains_target():
+    """Base name vs orderable suffix (AB1234 vs AB1234ZZ) is the same
+    device — containment must never be treated as a sibling mismatch.
+    (The suffix must not decode as a package designator, which is a
+    separate, legitimate check.)"""
+    pin_data = _four_pin_data(["VCC", "EN", "OUT", "GND"])
+    pin_data.component_name = "AB1234"
+    result = validate_pin_data_extraction(pin_data, part_number="AB1234ZZ")
+    assert result.is_valid
+
+
+def test_validate_letter_divergence_is_not_sibling_error():
+    """Wildcard family names (STM32F103xB vs STM32F103RBT7) diverge at a
+    letter, not inside the numeric device id — warning territory, not an
+    extraction error."""
+    pin_data = _four_pin_data(["VCC", "EN", "OUT", "GND"])
+    pin_data.component_name = "STM32F103XB"
+    result = validate_pin_data_extraction(pin_data, part_number="STM32F103RBT7")
+    # May carry a mismatch warning, but must not fail as a sibling extraction.
+    assert not any("sibling" in e.lower() for e in result.errors)
+
+
+def _sixteen_pin_data(package_type, component="AB1234"):
+    return PinData(
+        component_name=component,
+        package=PackageInfo(type=package_type, pin_count=16, width=5.0, height=5.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+        extraction_method="LLM",
+    )
+
+
+def test_validate_flags_package_family_conflicting_with_designator():
+    """The order-code package designator is ground truth (AB1234PWP is a
+    PowerPAD TSSOP): an extracted family whose grid differs (QFN, 0.5 mm)
+    is a wrong-package read and must fail so the retry can fix it."""
+    pin_data = _sixteen_pin_data("QFN")
+    result = validate_pin_data_extraction(pin_data, part_number="AB1234PWP")
+    assert not result.is_valid
+    assert any("TSSOP" in e for e in result.errors)
+
+
+def test_validate_flags_unknown_package_type_against_known_designator():
+    """Garbage package strings ('P-20') paired with a decodable designator
+    must fail at validation, not later at geometry build."""
+    pin_data = _sixteen_pin_data("P-20")
+    result = validate_pin_data_extraction(pin_data, part_number="AB1234PWP")
+    assert not result.is_valid
+    assert any("TSSOP" in e for e in result.errors)
+
+
+def test_validate_accepts_package_family_matching_designator():
+    pin_data = _sixteen_pin_data("TSSOP")
+    result = validate_pin_data_extraction(pin_data, part_number="AB1234PWP")
+    assert result.is_valid
+
+
+def test_validate_single_letter_designators_not_escalated():
+    """Single-letter suffixes (D, N, P) are too generic across vendors to
+    treat as a package claim."""
+    pin_data = _sixteen_pin_data("DIP")
+    result = validate_pin_data_extraction(pin_data, part_number="AB1234D")
+    assert result.is_valid
 
 
 # ===========================================================================
@@ -1925,6 +2118,55 @@ def test_smd_pad_width_respects_extracted_b():
     assert b.pad_spec["shape"] == "rect"
     assert b.pad_spec["width"] == pytest.approx(0.51 + 0.06, abs=0.02)
     assert b.pad_spec["length"] == pytest.approx(0.835 + 0.7, abs=0.05)
+
+
+def test_dual_row_family_refuses_quad_custom_layout():
+    """A vision misread can hand a four-sided pin layout to a dual-row
+    package family; the footprint would look plausible and never fit the
+    part. The builder must refuse instead of shipping it."""
+    from src.exceptions import SchematicGenerationError
+
+    quad_layout = {
+        "left_side": [1, 2, 3, 4],
+        "bottom_edge": [5, 6, 7, 8],
+        "right_side": [9, 10, 11, 12],
+        "top_edge": [13, 14, 15, 16],
+    }
+    with pytest.raises(SchematicGenerationError):
+        PcbFootprintBuilder("TSSOP-16", 16, "X", custom_layout=quad_layout)
+
+
+def test_dual_row_family_accepts_two_sided_custom_layout():
+    """Two opposite sides is the correct topology for a dual-row family;
+    a custom layout that matches it must still build."""
+    layout = {
+        "left_side": [1, 2, 3, 4, 5, 6, 7, 8],
+        "right_side": [9, 10, 11, 12, 13, 14, 15, 16],
+    }
+    b = PcbFootprintBuilder("TSSOP-16", 16, "X", custom_layout=layout)
+    assert b.params.pin_pitch == pytest.approx(0.65)
+
+
+def test_quad_family_accepts_quad_custom_layout():
+    """Quad families keep their four-sided layouts untouched."""
+    quad_layout = {
+        "left_side": [1, 2, 3, 4],
+        "bottom_edge": [5, 6, 7, 8],
+        "right_side": [9, 10, 11, 12],
+        "top_edge": [13, 14, 15, 16],
+    }
+    b = PcbFootprintBuilder("QFN-16", 16, "X", custom_layout=quad_layout)
+    assert b.params.pin_pitch == pytest.approx(0.5)
+
+
+def test_umax_normalizes_to_msop():
+    """Maxim's µMAX is a published MO-187 (MSOP-class) package: it must map
+    to the MSOP 0.65 mm grid, never degrade toward SOIC's 1.27 mm."""
+    detector = PackageDetector()
+    assert detector.normalize_package_name("8-Pin µMAX") == "MSOP"
+    assert detector.normalize_package_name("uMAX-8") == "MSOP"
+    from src.package_types.footprint_defaults import get_footprint_defaults
+    assert get_footprint_defaults("MSOP", 8)["e"] == pytest.approx(0.65)
 
 
 def test_footprint_glb_records_dims_provenance(tmp_path):

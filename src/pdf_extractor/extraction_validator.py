@@ -8,11 +8,15 @@ from typing import Any, Dict, List, Optional
 
 try:
     from ..models.pin_data import PinData
+    from ..package_types.footprint_defaults import get_footprint_defaults
     from ..utils.package_detector import PackageDetector
+    from .part_number_hint import TI_DESIGNATOR_FAMILIES, package_designator_from_part_number
     from .variant_selection import expected_pin_count_from_part_number
 except ImportError:  # pragma: no cover - compatibility for top-level imports in legacy scripts
     from src.models.pin_data import PinData
+    from src.package_types.footprint_defaults import get_footprint_defaults
     from src.utils.package_detector import PackageDetector
+    from src.pdf_extractor.part_number_hint import TI_DESIGNATOR_FAMILIES, package_designator_from_part_number
     from src.pdf_extractor.variant_selection import expected_pin_count_from_part_number
 from .non_pin_features import is_non_pin_feature_name
 
@@ -54,6 +58,38 @@ def _identifier_matches(left: str, right: str) -> bool:
         return False
 
     return left_norm in right_norm or right_norm in left_norm
+
+
+def _is_sibling_identifier(left: str, right: str) -> bool:
+    """
+    True when two identifiers name sibling devices from one family.
+
+    Multi-device datasheets (AB1233/AB1234 sharing a pin-table page) are the
+    main wrong-column extraction hazard. Siblings share a long prefix and
+    diverge inside the numeric device id (AB123|3 vs AB123|4). Divergence at
+    a letter (STM32F103|xB vs STM32F103|RB) is wildcard/suffix variation of
+    the same device, not a sibling.
+    """
+    left_norm = _normalize_identifier(left)
+    right_norm = _normalize_identifier(right)
+
+    if not left_norm or not right_norm:
+        return False
+    if left_norm in right_norm or right_norm in left_norm:
+        return False
+    if not (any(ch.isdigit() for ch in left_norm) and any(ch.isdigit() for ch in right_norm)):
+        return False
+
+    prefix_len = 0
+    for left_ch, right_ch in zip(left_norm, right_norm):
+        if left_ch != right_ch:
+            break
+        prefix_len += 1
+
+    if prefix_len < 5:
+        return False
+
+    return left_norm[prefix_len].isdigit() and right_norm[prefix_len].isdigit()
 
 
 def _coerce_pin_number(pin: Any) -> Optional[int]:
@@ -187,16 +223,106 @@ def _validate_package(
             )
 
 
+def _designator_family_conflict(
+    part_number: Optional[str],
+    packages: List[Dict[str, Any]],
+) -> Optional[str]:
+    """
+    Error message when no extracted package can be the designator's family.
+
+    An order-code package designator is ground truth (AB1234PWP is a
+    PowerPAD TSSOP). A variant counts as compatible when its family's
+    default grid pitch matches the designator family's — comparing grids
+    rather than labels keeps physically-equivalent families (WSON vs SON)
+    from false-failing. Single-letter designators (D, N, P) are too generic
+    across vendors to treat as a package claim.
+    """
+    designator = package_designator_from_part_number(part_number)
+    if not designator or len(designator) < 2:
+        return None
+    expected_family = TI_DESIGNATOR_FAMILIES.get(designator)
+    if not expected_family:
+        return None
+
+    conflicts: List[str] = []
+    for package in packages:
+        package_type = str(package.get("type", "") or "")
+        try:
+            pin_count = int(package.get("pin_count") or 0)
+        except (TypeError, ValueError):
+            pin_count = 0
+
+        expected_defaults = get_footprint_defaults(expected_family, pin_count)
+        extracted_defaults = get_footprint_defaults(package_type, pin_count)
+
+        if expected_defaults is None:
+            return None  # designator family has no reference grid; can't judge
+        if extracted_defaults is None:
+            conflicts.append(package_type)  # unknown/garbage package string
+            continue
+        if extracted_defaults.get("e") == expected_defaults.get("e"):
+            return None  # grid-compatible variant exists
+        conflicts.append(package_type)
+
+    if not conflicts:
+        return None
+    return (
+        f"part number {part_number!r} carries the package designator "
+        f"{designator!r} ({expected_family}), but the extracted package "
+        f"types {conflicts!r} are a different package family. Extract the "
+        f"{expected_family} variant's pin table."
+    )
+
+
+def _ungrounded_pin_names(packages: List[Dict[str, Any]], source_text: str) -> List[str]:
+    """
+    Pin names that appear nowhere in the source text.
+
+    Extracted names must come from the datasheet, so a name absent from the
+    text is hallucinated or garbled. Both sides are compared with separators
+    stripped, which tolerates line wraps and punctuation differences. A name
+    the extractor joined itself (e.g. "GND/PAD") stays grounded when every
+    segment is found. Names that normalize to fewer than two characters
+    ("+", "-", "K") carry too little signal to check.
+    """
+    normalized_source = _normalize_identifier(source_text)
+    if not normalized_source:
+        return []
+
+    ungrounded: List[str] = []
+    for package in packages:
+        for pin in package.get("pins") or []:
+            name = _coerce_pin_name(pin)
+            normalized_name = _normalize_identifier(name)
+            if len(normalized_name) < 2:
+                continue
+            if normalized_name in normalized_source:
+                continue
+            segments = [
+                _normalize_identifier(segment)
+                for segment in re.split(r"[^A-Za-z0-9]+", name)
+            ]
+            segments = [segment for segment in segments if len(segment) >= 2]
+            if segments and all(segment in normalized_source for segment in segments):
+                continue
+            if name not in ungrounded:
+                ungrounded.append(name)
+
+    return ungrounded
+
+
 def validate_pin_data_extraction(
     pin_data: PinData,
     part_number: Optional[str] = None,
+    source_text: Optional[str] = None,
 ) -> ExtractionValidationResult:
     """
     Validate structural correctness of extracted pin data.
 
     This is intentionally strict about pin numbering and package consistency,
     because that is the main failure mode we want to catch before generating
-    geometry.
+    geometry. When ``source_text`` (the datasheet text the extraction was
+    based on) is provided, every pin name must also be grounded in it.
     """
     errors: List[str] = []
     warnings: List[str] = []
@@ -215,9 +341,17 @@ def validate_pin_data_extraction(
         pin_data.component_name,
         part_number,
     ):
-        warnings.append(
-            f"component_name {pin_data.component_name!r} does not closely match target part number {part_number!r}"
-        )
+        if _is_sibling_identifier(pin_data.component_name, part_number):
+            errors.append(
+                f"extracted data is for sibling device {pin_data.component_name!r}, "
+                f"but the target part is {part_number!r}. Multi-device datasheets list "
+                f"several devices on one page; extract the pin column/table for "
+                f"{part_number!r} specifically."
+            )
+        else:
+            warnings.append(
+                f"component_name {pin_data.component_name!r} does not closely match target part number {part_number!r}"
+            )
 
     packages = _iter_packages(pin_data)
     if not packages:
@@ -255,6 +389,21 @@ def validate_pin_data_extraction(
                 errors.append(
                     "selected_package_index %r is out of range for %d extracted package variants"
                     % (pin_data.selected_package_index, len(packages))
+                )
+
+        designator_conflict = _designator_family_conflict(part_number, packages)
+        if designator_conflict:
+            errors.append(designator_conflict)
+
+        if source_text:
+            ungrounded = _ungrounded_pin_names(packages, source_text)
+            if ungrounded:
+                shown = ", ".join(repr(name) for name in ungrounded[:8])
+                if len(ungrounded) > 8:
+                    shown += f", and {len(ungrounded) - 8} more"
+                errors.append(
+                    f"pin names not found in the datasheet text: {shown}. "
+                    "Use pin names exactly as printed in the pin-function table."
                 )
 
         if pin_data.selected_package_type:

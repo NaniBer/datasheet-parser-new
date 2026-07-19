@@ -163,6 +163,22 @@ def extract_content(input_path: str, candidates: list, verbose: bool = False):
     return content
 
 
+def _grounding_source_text(content) -> str:
+    """
+    Text the extraction must be grounded in: page text plus table cells.
+
+    Table cells are included separately because in tables-only mode the pin
+    names may exist only inside extracted tables, not in text_content.
+    """
+    parts = [content.text_content or ""]
+    for _page_num, table_data in content.tables or []:
+        for row in table_data or []:
+            for cell in row or []:
+                if cell:
+                    parts.append(str(cell))
+    return "\n".join(parts)
+
+
 def extract_pin_data(
     content,
     model: str,
@@ -210,12 +226,15 @@ def extract_pin_data(
         else:
             print(f"Using mixed mode (tables + diagrams)")
 
+    grounding_text = _grounding_source_text(content)
+
     deterministic_pin_data = parse_pin_data_from_tables(content, part_number=part_number)
     if deterministic_pin_data is not None:
         deterministic_pin_data = normalize_package(deterministic_pin_data, verbose=False)
         deterministic_validation = validate_pin_data_extraction(
             deterministic_pin_data,
             part_number=part_number,
+            source_text=grounding_text,
         )
 
         if deterministic_validation.is_valid:
@@ -277,7 +296,11 @@ def extract_pin_data(
         pin_data = normalize_package(pin_data, verbose=False)
         last_pin_data = pin_data
 
-        validation = validate_pin_data_extraction(pin_data, part_number=part_number)
+        validation = validate_pin_data_extraction(
+            pin_data,
+            part_number=part_number,
+            source_text=grounding_text,
+        )
         last_validation = validation
 
         if validation.is_valid:
