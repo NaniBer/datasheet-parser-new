@@ -154,10 +154,35 @@ Every verdict verified against the sheet's own ordering/package pages
 
 ---
 
-## Overall standing (50 parts tested, 2026-07-21)
+## Batch: stems 51–55 (new parts) — run 2026-07-21, tests only (no code changes)
 
-- **26/50 correct** (16 correct outputs + 10 correct refusals/by-design outcomes),
-  3 partial, 21 not.
+**Score: 4/5 correct** (all four are justified refusals), 1 not (silent).
+
+| Part | Verdict | Pins | Pitch (mm) | Notes |
+|---|---|---|---|---|
+| 51_AMC6821SDBQR | ❌ WRONG (silent) | 16 | 1.27 | 16 pins correct, but DBQ = QSOP-16 at **0.635 mm**; footprint is on the 1.27 SOIC grid — pads hit every other lead. Exit 0, identical failure to #49 |
+| 52_PIC16F1512-I-SS | ✅ CORRECT (refusal) | — | — | **the file is not the datasheet** — it is Microchip's "LCD Clock Demo User's Guide" (DS41448A). Grounding gate blocked the LLM's from-memory PIC pins ('RA2', 'RB1', …16 names not in the document) and failed closed. Corpus intake: mislabeled file |
+| 53_MBR1535CTG | ✅ CORRECT (refusal) | — | — | TO-220 Schottky pair, no pin-function table; blocked hallucinated 'Anode'/'Cathode' labels — same class as the bridge rectifiers (25–28) |
+| 54_STPS30M60ST | ✅ CORRECT (refusal) | — | — | TO-220AB rectifier; same refusal as 53 |
+| 55_STTH8R06DIRG | ✅ CORRECT (refusal) | — | — | order code = TO-220AC Ins. (2-lead); refused honestly: "Unknown package type 'TO-220AC'" with a `--force-best-effort` escape hatch |
+
+### Findings from this batch (recorded only — no code changed)
+1. **QSOP grid failure reproduced (#51):** third QSOP-16 part (after 49, 50)
+   and again a wrong grid at exit 0. QSOP (TI designator `DBQ`, ADI `RQ`)
+   needs a geometry mapping at 0.635 mm; until then every QSOP part is a
+   coin-flip between 1.27 and 0.65.
+2. **The grounding gate handled a mislabeled corpus file perfectly (#52):**
+   fed a document that isn't a datasheet, the LLM recited the part's pinout
+   from memory and every name was blocked as absent from the text.
+3. **Corpus intake:** #52 is a demo-board user's guide, not the PIC16F1512
+   datasheet — third intake defect (after duplicate pairs 31/32 and 47/48).
+
+---
+
+## Overall standing (55 parts tested, 2026-07-21)
+
+- **30/55 correct** (16 correct outputs + 14 correct refusals/by-design outcomes),
+  3 partial, 22 not.
 - Stems 1–20 (chip-scale corpus): 16/20 correct, zero silent errors.
 - Stems 21–40 (new, heavier corpus: big MCUs, BGAs, modules): 7/20 correct —
   dominated by three systematic gaps: vendor order-code decoding (TI-only
@@ -168,3 +193,6 @@ Every verdict verified against the sheet's own ordering/package pages
   (DGQ, DGS, QSOP/RQ) and the retry loop resolving package-vs-pin-count
   conflicts toward the ungrounded package claim. 47/48 are byte-identical
   duplicates (like 31/32).
+- Stems 51–55: 4/5 correct — all four justified refusals (TO-220 diodes and a
+  mislabeled corpus file the grounding gate caught); the one miss is a third
+  QSOP wrong-grid at exit 0 (#51, same as #49).
