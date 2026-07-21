@@ -111,12 +111,60 @@ verified manually against the datasheet's own ordering/package pages.
 
 ---
 
-## Overall standing (40 parts tested, 2026-07-19)
+## Batch: stems 41–50 (new parts) — run 2026-07-21, tests only (no code changes)
 
-- **23/40 correct** (13 correct outputs + 10 correct refusals/by-design outcomes),
-  1 partial, 16 not.
+**Score: 3/10 correct**, 2 partial, 5 not (3 silently wrong, 2 fail-closed refusals).
+Every verdict verified against the sheet's own ordering/package pages
+(pin counts read from the GLB node tree, pitch measured from pad centers).
+
+| Part | Verdict | Pins | Pitch (mm) | Notes |
+|---|---|---|---|---|
+| 41_SN6507DGQR | ⚠️ PARTIAL | 10 | 0.65 | 10 pins correct, but DGQ = HVSSOP-10 at **0.5 mm** pitch; HVSSOP normalized to SSOP, which "has no dedicated geometry; approximating with SOIC" landed on the 0.65 grid. DGQ missing from TI designator tables |
+| 42_INA228AIDGSR | ✅ CORRECT | 10 | 0.5 | VSSOP (DGS) 10-pin, 0.5 mm — matches the sheet exactly |
+| 43_INA238AIDGSR | ✅ CORRECT | 10 | 0.5 | same as 42 — matches |
+| 44_TPS51100DGQ | ❌ WRONG (silent) | 20 | 0.5 | **20-pin footprint+schematic for a 10-pin part**, exit 0, no warnings. Deterministic parser bailed; LLM emitted a self-consistent 20-pin package so no gate fired (DGQ not in designator tables). A repeat run of the same extraction failed closed — the outcome is nondeterministic |
+| 45_NCP5623BMUTBG | ❌ WRONG (silent) | 16 | 1.27 | true package is **LLGA-12** (12 pins, leadless). LLM claimed 'SOIC-16'; validator feedback said "re-extract ensuring all 16 pins are present" and the retry **invented 4 pins to satisfy the wrong package claim**. Exit 0, SOIC-16 footprint for a leadless 12-pad part |
+| 46_LSM6DSO32TR | ✅ CORRECT (by design) | 14 | — | 14-pin schematic matches LGA-14; footprint deliberately refused (grid-array policy) |
+| 47_NRF9160-SICA | ❌ FAIL (no output) | — | — | 400-page LGA-127 SiP module; no pins extracted after retries, failed closed. Pin assignments live on p385 of a 400-page doc — page detection never surfaces them |
+| 48_NRF9160-SICA | ❌ FAIL (no output) | — | — | **byte-identical file to #47** — yet took a different path: LLM claimed package type 'B13' (a ball designator), refused as unknown package. Same input, different refusal = extraction nondeterminism, but both fail closed |
+| 49_ADT7516ARQZ-REEL7 | ❌ WRONG (silent) | 16 | 1.27 | 16 pins correct, but QSOP-16 is **0.635 mm** pitch; output is on the 1.27 SOIC grid — pads align with every other lead. Exit 0 |
+| 50_ADT7470ARQZ-REEL7 | ⚠️ PARTIAL | 16 | 0.65 | same QSOP-16 as 49 but landed on the 0.65 SSOP grid — 15 µm/pin off the true 0.635; near-usable but not the datasheet grid. The 49-vs-50 split shows the grid depends on which alias the LLM happens to utter |
+
+### Findings from this batch (recorded only — no code changed)
+1. **The retry-with-feedback loop can coerce hallucination (#45).** When the
+   package claim (SOIC-16) disagreed with the extracted pins (12), the feedback
+   told the LLM to produce more pins instead of questioning the package. The
+   grounded quantity (pins found in the sheet) should win over the ungrounded
+   package string; today the loop resolves the conflict in the wrong direction.
+2. **Three new silent-wrong outputs (44, 45, 49)** — the class round-2 had
+   eliminated for stems 1–20. Common thread: the failing gates are all
+   order-code/package-shape gates that only cover a few TI designators. `DGQ`
+   (HVSSOP-10) and `DGS` (VSSOP-10) are ordinary TI designators still missing
+   from TI_DESIGNATOR_FAMILIES; QSOP/`RQ` (0.635 mm) has no geometry mapping at
+   all and gets whichever of SOIC/SSOP the LLM names.
+3. **SSOP/QSOP geometry gap:** "Package type 'SSOP' has no dedicated geometry;
+   approximating with SOIC" quietly substitutes wrong grids (0.65 for HVSSOP's
+   0.5; 1.27 or 0.65 for QSOP's 0.635). Identical parts 49/50 got different
+   grids depending on the LLM's package wording.
+4. **Extraction nondeterminism:** byte-identical 47/48 took different failure
+   paths; a rerun of 44 refused where the batch run silently emitted 20 pins.
+   Verdicts for LLM-path parts are not stable run-to-run.
+5. **Corpus intake:** #47/#48 are byte-identical files (same MD5) — second
+   duplicate pair after #31/#32.
+
+---
+
+## Overall standing (50 parts tested, 2026-07-21)
+
+- **26/50 correct** (16 correct outputs + 10 correct refusals/by-design outcomes),
+  3 partial, 21 not.
 - Stems 1–20 (chip-scale corpus): 16/20 correct, zero silent errors.
 - Stems 21–40 (new, heavier corpus: big MCUs, BGAs, modules): 7/20 correct —
   dominated by three systematic gaps: vendor order-code decoding (TI-only
   today), diagram-only pinouts on large MCUs, and no module/out-of-scope
   detector. One silent wrong output (#38, module-as-QFN).
+- Stems 41–50 (small-package mix): 3/10 correct, 2 partial. Three silent-wrong
+  outputs (44, 45, 49), all traceable to two gaps: designator/geometry coverage
+  (DGQ, DGS, QSOP/RQ) and the retry loop resolving package-vs-pin-count
+  conflicts toward the ungrounded package claim. 47/48 are byte-identical
+  duplicates (like 31/32).
