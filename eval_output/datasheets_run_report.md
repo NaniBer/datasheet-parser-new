@@ -179,9 +179,25 @@ Every verdict verified against the sheet's own ordering/package pages
 
 ---
 
-## Overall standing (55 parts tested, 2026-07-21)
+## Batch: stems 56–60 (new parts) — run 2026-07-21, tests only (no code changes)
 
-- **30/55 correct** (16 correct outputs + 14 correct refusals/by-design outcomes),
+**Score: 5/5 correct** — all justified refusals; every part is an out-of-scope
+discrete (triac, axial diodes, SMA diodes), and each failed closed with a clear
+reason and a `--force-best-effort` escape hatch. Zero silent errors.
+
+| Part | Verdict | Notes |
+|---|---|---|
+| 56_BT136-600E-127 | ✅ CORRECT (refusal) | TO220AB triac; the sheet has a real 3-pin PINNING table, but the package family is unsupported — refused honestly: "Unknown package type 'TO220AB'" |
+| 57_1N4001RLG | ✅ CORRECT (refusal) | axial-lead rectifier (CASE 59-10); no relevant pages found — nothing to extract |
+| 58_1N5408-E3-54 | ✅ CORRECT (refusal) | DO-201AD axial rectifier; refused as unknown package type |
+| 59_MBRA140T3G | ✅ CORRECT (refusal) | SMA (CASE 403D) Schottky; grounding gate blocked a hallucinated 'Anode' pin name |
+| 60_SS14 | ✅ CORRECT (refusal) | SMA (DO-214AC) Schottky; refused as unknown package type |
+
+---
+
+## Overall standing (60 parts tested, 2026-07-21)
+
+- **35/60 correct** (16 correct outputs + 19 correct refusals/by-design outcomes),
   3 partial, 22 not.
 - Stems 1–20 (chip-scale corpus): 16/20 correct, zero silent errors.
 - Stems 21–40 (new, heavier corpus: big MCUs, BGAs, modules): 7/20 correct —
@@ -196,3 +212,5 @@ Every verdict verified against the sheet's own ordering/package pages
 - Stems 51–55: 4/5 correct — all four justified refusals (TO-220 diodes and a
   mislabeled corpus file the grounding gate caught); the one miss is a third
   QSOP wrong-grid at exit 0 (#51, same as #49).
+- Stems 56–60: 5/5 correct — all out-of-scope discretes refused cleanly,
+  zero silent errors.
