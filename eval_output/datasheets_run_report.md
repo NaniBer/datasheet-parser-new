@@ -238,10 +238,14 @@ code was not decoded.
 
 ## Batch: stems 76–148 + BQ25570RGRR (74 runs) — run 2026-07-22, tests only (no code changes)
 
-**Score: 55/74 correct** (3 correct outputs + 52 justified refusals), 1 partial,
-18 not — **17 silently wrong (exit 0) and 1 crash**. This range is dominated by
-out-of-scope discretes, where the refusal gates were flawless; but among the 21
-parts that produced output, only 3 were right.
+**Score: 53/74 correct** (3 correct outputs + 50 justified refusals), 1 partial,
+20 not — **17 silently wrong (exit 0), 2 fail-closed misses on an in-scope part
+(139/140), and 1 crash**. This range is dominated by out-of-scope discretes,
+where the refusal gates were flawless; but among the 21 parts that produced
+output, only 3 were right.
+*(Corrected 2026-07-22: an earlier revision scored 139/140 as correct refusals
+of "mislabeled" files based on a mispaired checksum table; the files are
+correctly labeled TPS2378 sheets — see findings 3–4.)*
 
 ### Correct outputs (3)
 | Part | Pins | Pitch | Notes |
@@ -258,7 +262,7 @@ parts that produced output, only 3 were right.
 |---|---|---|
 | 85_IS82C59AZX96 | PDIP-28 (2.54) | ordered `S` = **PLCC-28** |
 | 86_PIC16F871-I-L | 28-pin PDIP (2.54) | **PIC16F871 is the 40/44-pin device; -I/L = PLCC-44** — extracted the sibling PIC16F870's 28-pin column |
-| 89/91_ACS758LCB-050B | SOIC-8 | **CB = 5-lead power SIP**; (90, byte-identical, refused — nondeterministic) |
+| 89/91_ACS758LCB-050B | SOIC-8 | **CB = 5-lead power SIP**; (90, byte-identical but named -050U, refused — the different filename hint changed the outcome) |
 | 92_ACS773LCB-100B | SOIC-8 | CB-PFF 5-lead power SIP |
 | 95_CAT811MTBI-GT3 | 16-pin SOIC | **CAT811 is a 4-pin SOT-143 supervisor** |
 | 96_CAT811STBI-GT3 | 20-pin SOIC | same 4-pin part — byte-identical file to 95 produced a *different* wrong answer |
@@ -278,7 +282,12 @@ parts that produced output, only 3 were right.
 |---|---|
 | 134_XC6218P332HR-G | exit 2, unhandled `ValueError: invalid literal for int(): '①②'` — the sheet numbers pins with circled digits; first hard crash in 149 runs |
 
-### Justified refusals (52) — grouped
+### Fail-closed misses on an in-scope part (2)
+| Part | Notes |
+|---|---|
+| 139/140_TPS2378DDA(R) | TPS2378 in `DDA` = **SOIC-8 PowerPAD** — a supported family. The LLM emitted the raw designator 'DDA-8' as the package type and enforcement refused it as unknown. No output (safe), but this part should have worked |
+
+### Justified refusals (50) — grouped
 - **Unsupported package families, honestly refused** (TO-92, TO-225, TO-247-3,
   TO-264, SOT-89, SOT-143, SOT-363, SOT1289, PowerDI123, LCC-48, DO-201AD,
   Flexiwatt-adjacent, SMD crystals/fuses/inductors): 77–80, 84, 87, 88, 90,
@@ -287,11 +296,9 @@ parts that produced output, only 3 were right.
   outcome, not a miss).
 - **Grounding gate blocked invented pin names** (bridges/diodes with no pin
   table, and the mystery module 141): 76, 81–83, 105–108, 141, 145, 147.
-- **Non-datasheet or mislabeled documents correctly yielding no output:**
-  142 (an Adafruit tutorial PDF), 143 (contains the NOIP1 image-sensor sheet),
-  139/140 (named TPS2378 but contain the ADXRS645 sheet — the filename hint
-  drove a 'DDA-8' package claim that was refused), 144 (MAXREFDES117
-  reference design).
+- **Non-datasheet documents correctly yielding no output:** 142/143 (two
+  byte-identical copies of an Adafruit MPR121 tutorial PDF), 144
+  (MAXREFDES117 reference design).
 
 ### Findings from this batch (recorded only — no code changed)
 1. **When this corpus range produces output, it is usually wrong (17 of 21).**
@@ -301,26 +308,58 @@ parts that produced output, only 3 were right.
    124, 136 — pin counts that exist nowhere in the sheet passed validation).
 2. **First crash:** circled-digit pin numbering (①②) needs defensive parsing
    (134).
-3. **Byte-identical inputs give different outcomes** (89/90/91 → 0/1/0 exits;
-   95/96 → 16 vs 20 pins) — run-to-run nondeterminism is now demonstrated at
-   scale.
-4. **Corpus intake is unreliable in this range:** byte-duplicate groups
-   {89,90,91}, {92,94}, {95,96}, {125,126}, {127,139,140}, {87,88≡143};
-   mislabeled files 94 (ACS773 content), 139/140 (ADXRS645 content),
-   142 (tutorial), 143 (image sensor); 144 is a reference design, not a part.
-5. **The refusal/grounding layer scaled cleanly:** 52 refusals, all with
-   correct reasons, zero false refusals of in-scope parts in this range.
+3. **Outcome depends on the filename hint, and reruns are not stable.**
+   Byte-identical inputs under different names diverge because the hint
+   differs (89/91 emitted SOIC-8 while 90 refused; 94 refused while 96
+   emitted 20 pins). True nondeterminism is shown by 47/48 (same content and
+   equivalent hints, two different refusal paths) and by the 44 rerun that
+   refused where the batch run silently emitted 20 pins.
+4. **Corpus intake:** the full corpus has 18 byte-duplicate groups —
+   {14,16}, {25,26}, {27,28}, {31,32}, {47,48}, {62,63,64}, {71,72}, {78,79},
+   {87,88}, {89,90,91}, {94,96}, {106,107}, {115,116}, {125,126,127},
+   {130,131}, {139,140}, {142,143}, {145,147}. Most are legitimately shared
+   family datasheets; the true intake defects are 52 (a demo-board user's
+   guide, not the part's datasheet), 142/143 (a tutorial PDF, twice), and
+   144 (a reference design, not a component).
+   *(This corrects an earlier revision that reported cross-family mislabels
+   {92,94}, {127,139,140}, {88,143} — those pairings came from a misaligned
+   checksum listing and are wrong.)*
+5. **The refusal/grounding layer scaled cleanly:** 50 of 52 refusals had
+   correct reasons; the two exceptions (139/140) refused an in-scope SOIC-8
+   PowerPAD part because the LLM offered the raw TI designator 'DDA-8' as a
+   package type — a designator-normalization gap, not a gate malfunction.
+
+---
+
+## Appendix: which PDFs have no pin-function table (scan 2026-07-22)
+
+A heading/column-header scan ("Pin Description/Functions/Assignment/…",
+PIN+NAME column pairs) across all 149 PDFs: **86 have pin-table indicators,
+63 do not.** The 63 without:
+
+- **Table-less discretes (refusal is the right outcome):** 2, 4, 18, 19, 20,
+  25–28, 53–55, 57–61, 65–67, 73–76, 78–84, 93, 97–100, 105–108, 114,
+  117–120, 122, 128, 129, 132, 133, 137, 138, 141, 145, 147.
+- **Non-datasheet documents:** 52 (demo-board guide), 142/143 (tutorial),
+  144 (reference design).
+- **False negatives — pin info present in a nonstandard form** (all four were
+  extracted correctly in batch 1): 1_LS7641, 3_MB10S, 8_MMBD3004, 17_DF10S.
+
+Caveat: this is a text-heading heuristic. Sheets whose pinout exists only as
+a *figure* (the big MCUs 29–32) still scan as "YES" via their TOC/heading
+text even though no machine-readable table exists.
 
 ---
 
 ## Overall standing (149 runs: stems 1–148 + 1 unnumbered, 2026-07-22)
 
-- **103/149 correct (69%)** — 19 correct outputs + 84 correct refusals/by-design
-  outcomes; 4 partial, 42 not (of which ~24 silent and 1 crash).
+- **101/149 correct (68%)** — 19 correct outputs + 82 correct refusals/by-design
+  outcomes; 4 partial, 44 not (of which ~24 silent and 1 crash).
 - Stems 1–75 recap: 48/75 correct, 3 partial, 24 not.
-- Stems 76–148 (+BQ25570RGRR): 55/74 correct, 1 partial, 18 not — refusal
-  gates flawless on out-of-scope discretes (52/52), but 17 of 21 generated
-  outputs were silently wrong; one parser crash (circled-digit pin numbers).
+- Stems 76–148 (+BQ25570RGRR): 53/74 correct, 1 partial, 20 not — refusal
+  gates flawless on out-of-scope discretes (50/50 justified), but 17 of 21
+  generated outputs were silently wrong, 2 in-scope parts failed closed
+  (139/140), and one parser crash (circled-digit pin numbers).
 - Stems 1–20 (chip-scale corpus): 16/20 correct, zero silent errors.
 - Stems 21–40 (new, heavier corpus: big MCUs, BGAs, modules): 7/20 correct —
   dominated by three systematic gaps: vendor order-code decoding (TI-only
