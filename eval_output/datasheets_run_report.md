@@ -236,10 +236,91 @@ code was not decoded.
 
 ---
 
-## Overall standing (75 parts tested, 2026-07-22)
+## Batch: stems 76–148 + BQ25570RGRR (74 runs) — run 2026-07-22, tests only (no code changes)
 
-- **48/75 correct** (16 correct outputs + 32 correct refusals/by-design outcomes),
-  3 partial, 24 not.
+**Score: 55/74 correct** (3 correct outputs + 52 justified refusals), 1 partial,
+18 not — **17 silently wrong (exit 0) and 1 crash**. This range is dominated by
+out-of-scope discretes, where the refusal gates were flawless; but among the 21
+parts that produced output, only 3 were right.
+
+### Correct outputs (3)
+| Part | Pins | Pitch | Notes |
+|---|---|---|---|
+| 125/126/127_ADXRS645HDYZ | 14 | 1.27 | matches the 14-terminal 1.27 mm ceramic vertical-mount package (three copies of the sheet in the corpus; two byte-identical groups) |
+
+### Partial (1)
+| Part | Notes |
+|---|---|
+| 114_SQJ974EP-T1_GE3 | PowerPAK SO-8L dual MOSFET: 8 pins at 1.27 correct, but the standard SOIC-8 land pattern lacks the leadless drain-pad geometry |
+
+### Silently wrong outputs (17) — all exit 0, no warnings
+| Part | Got | Should be |
+|---|---|---|
+| 85_IS82C59AZX96 | PDIP-28 (2.54) | ordered `S` = **PLCC-28** |
+| 86_PIC16F871-I-L | 28-pin PDIP (2.54) | **PIC16F871 is the 40/44-pin device; -I/L = PLCC-44** — extracted the sibling PIC16F870's 28-pin column |
+| 89/91_ACS758LCB-050B | SOIC-8 | **CB = 5-lead power SIP**; (90, byte-identical, refused — nondeterministic) |
+| 92_ACS773LCB-100B | SOIC-8 | CB-PFF 5-lead power SIP |
+| 95_CAT811MTBI-GT3 | 16-pin SOIC | **CAT811 is a 4-pin SOT-143 supervisor** |
+| 96_CAT811STBI-GT3 | 20-pin SOIC | same 4-pin part — byte-identical file to 95 produced a *different* wrong answer |
+| 102_MCP1700T-3002E-MB | DFN-6 (0.65) | ordered `MB` = **SOT-89-3** |
+| 113_IKCM30F60GDXKMA1 | 24-pin 0.5 mm QFN-style | **30 A IPM power module** (large SIP) — module gap again |
+| 123_L4984D | 16-pin SOIC (1.27) | **SSOP-10** |
+| 124_L6564TDTR | 16-pin SOIC (1.27) | **SSOP-10** |
+| 130_BD9778HFP-TR | SOP-8 (1.27) | ordered `HFP` = **HRP7 power package** (sheet covers both) |
+| 131_BD9781HFP-TR | SOP-8 (1.27) | same — HRP7 ordered |
+| 136_TDA7850 | 20-pin DIP (2.54) | **Flexiwatt-25** power amp |
+| 146_W25Q128JVSIM_TR | 16-pin, 0.5 mm | ordered `SIM` = **SOIC-8 208-mil**; 16@0.5 matches nothing in the sheet |
+| 148_STM32L031E4Yx | UFQFPN28 footprint (0.5) | ordered `Y` = **WLCSP-25** — should be schematic + refused footprint; the STM32 order-code anchor did not fire on the `E4Yx` form |
+| BQ25570RGRR (unnumbered) | 16-pin, 0.5 | **VQFN-20** — note stem 9 (same part family) extracted 20 pins correctly on an earlier run; nondeterministic |
+
+### Crash (1)
+| Part | Notes |
+|---|---|
+| 134_XC6218P332HR-G | exit 2, unhandled `ValueError: invalid literal for int(): '①②'` — the sheet numbers pins with circled digits; first hard crash in 149 runs |
+
+### Justified refusals (52) — grouped
+- **Unsupported package families, honestly refused** (TO-92, TO-225, TO-247-3,
+  TO-264, SOT-89, SOT-143, SOT-363, SOT1289, PowerDI123, LCC-48, DO-201AD,
+  Flexiwatt-adjacent, SMD crystals/fuses/inductors): 77–80, 84, 87, 88, 90,
+  93, 94, 97–101, 109–112, 115–122, 128, 129, 132, 133, 135, 137, 138.
+  Includes 101/103/104 (L78L `U` order codes = SOT-89 — refusal is the right
+  outcome, not a miss).
+- **Grounding gate blocked invented pin names** (bridges/diodes with no pin
+  table, and the mystery module 141): 76, 81–83, 105–108, 141, 145, 147.
+- **Non-datasheet or mislabeled documents correctly yielding no output:**
+  142 (an Adafruit tutorial PDF), 143 (contains the NOIP1 image-sensor sheet),
+  139/140 (named TPS2378 but contain the ADXRS645 sheet — the filename hint
+  drove a 'DDA-8' package claim that was refused), 144 (MAXREFDES117
+  reference design).
+
+### Findings from this batch (recorded only — no code changed)
+1. **When this corpus range produces output, it is usually wrong (17 of 21).**
+   The dominant causes are the two known gaps at larger scale: order-code
+   decoding (85, 86, 102, 130, 131, 146, 148 picked a sibling variant) and
+   package-shape validation for claims the LLM invents outright (89–96, 123,
+   124, 136 — pin counts that exist nowhere in the sheet passed validation).
+2. **First crash:** circled-digit pin numbering (①②) needs defensive parsing
+   (134).
+3. **Byte-identical inputs give different outcomes** (89/90/91 → 0/1/0 exits;
+   95/96 → 16 vs 20 pins) — run-to-run nondeterminism is now demonstrated at
+   scale.
+4. **Corpus intake is unreliable in this range:** byte-duplicate groups
+   {89,90,91}, {92,94}, {95,96}, {125,126}, {127,139,140}, {87,88≡143};
+   mislabeled files 94 (ACS773 content), 139/140 (ADXRS645 content),
+   142 (tutorial), 143 (image sensor); 144 is a reference design, not a part.
+5. **The refusal/grounding layer scaled cleanly:** 52 refusals, all with
+   correct reasons, zero false refusals of in-scope parts in this range.
+
+---
+
+## Overall standing (149 runs: stems 1–148 + 1 unnumbered, 2026-07-22)
+
+- **103/149 correct (69%)** — 19 correct outputs + 84 correct refusals/by-design
+  outcomes; 4 partial, 42 not (of which ~24 silent and 1 crash).
+- Stems 1–75 recap: 48/75 correct, 3 partial, 24 not.
+- Stems 76–148 (+BQ25570RGRR): 55/74 correct, 1 partial, 18 not — refusal
+  gates flawless on out-of-scope discretes (52/52), but 17 of 21 generated
+  outputs were silently wrong; one parser crash (circled-digit pin numbers).
 - Stems 1–20 (chip-scale corpus): 16/20 correct, zero silent errors.
 - Stems 21–40 (new, heavier corpus: big MCUs, BGAs, modules): 7/20 correct —
   dominated by three systematic gaps: vendor order-code decoding (TI-only
