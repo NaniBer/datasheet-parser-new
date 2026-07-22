@@ -195,10 +195,51 @@ reason and a `--force-best-effort` escape hatch. Zero silent errors.
 
 ---
 
-## Overall standing (60 parts tested, 2026-07-21)
+## Batch: stems 61–75 (new parts) — run 2026-07-22, tests only (no code changes)
 
-- **35/60 correct** (16 correct outputs + 19 correct refusals/by-design outcomes),
-  3 partial, 22 not.
+**Score: 13/15 correct** (all justified refusals), 2 not (both silent wrong
+variants). The batch is dominated by out-of-scope discretes, which the gates
+handled cleanly; the two misses are both multi-variant sheets where the order
+code was not decoded.
+
+| Part | Verdict | Notes |
+|---|---|---|
+| 61_X0202NN-5BA4 | ✅ CORRECT (refusal) | SOT-223 triac; the LLM proposed **'Base'/'Collector'/'Emitter' — BJT pins for a triac** — and the grounding gate blocked all three |
+| 62_Z0103NN5AA4 | ✅ CORRECT (refusal) | refused honestly: "Unknown package type 'SOT223'" (real pinning table exists; SOT-223 geometry is a coverage gap) |
+| 63_Z0107MN-5AA4 | ✅ CORRECT (refusal) | **byte-identical file to 62** (shared family sheet); same refusal |
+| 64_Z0109MN-6AA4 | ✅ CORRECT (refusal) | **byte-identical file to 62/63**; same refusal |
+| 65_STPS20L60CG-TR | ✅ CORRECT (refusal) | D2PAK diode; grounding gate blocked a hallucinated 'C3' pin |
+| 66_STTH2003CG-TR | ✅ CORRECT (refusal) | blocked hallucinated 'Anode'/'Cathode' |
+| 67_MBRB60H100CTT4G | ✅ CORRECT (refusal) | refused honestly: unknown package 'D2PAK' |
+| 68_LM2673S-5.0-NOPB | ❌ WRONG VARIANT (silent) | built the sheet's **VSON-14** (14 pads, 0.5 mm) but the `S` order code = **TO-263 7-lead**. Exit 0, no warnings — order code not decoded |
+| 69_AD536AKH | ✅ CORRECT (refusal) | picked the right variant from the order code (`H` = TO-100 can) and refused it honestly as unsupported |
+| 70_AD636JHZ | ❌ WRONG VARIANT (silent) | built the sheet's **SBDIP-14** (2.54 mm) but `JHZ` = **TO-100 10-lead metal can**. Exit 0 |
+| 71_AD537JH | ✅ CORRECT (refusal) | refused unknown package 'D-14' — fail-closed; note the LLM had picked the DIP variant over the ordered TO-100 can |
+| 72_AD537KH | ✅ CORRECT (refusal) | **byte-identical file to 71**; same refusal |
+| 73_GBU6K-E3-45 | ✅ CORRECT (refusal) | GBU bridge; blocked hallucinated terminal names (same class as 25–28) |
+| 74_GBJ2506-F | ✅ CORRECT (refusal) | GBJ bridge; blocked 'A1'/'K1'/'K2' |
+| 75_GBU4M-E3-51 | ✅ CORRECT (refusal) | GBU bridge; blocked hallucinated terminal names |
+
+### Findings from this batch (recorded only — no code changed)
+1. **Both misses are the order-code gap again (68, 70):** multi-variant sheets
+   where the pipeline extracted a *different real variant* than the one
+   ordered (VSON-14 vs TO-263-7; SBDIP-14 vs TO-100). Same root cause as
+   21/24/34–36; NSC/TI `S` and ADI `H`/`JHZ` suffixes are not decoded.
+2. **The refusal gates are now the strongest part of the pipeline:** 13
+   out-of-scope discretes refused with correct reasons, including catching
+   BJT pin names proposed for a triac (61) — zero false outputs among them.
+3. **SOT-223 is a plausible support gap** (62–64 have clean 3-pin+tab pinning
+   tables) if surface-mount triacs/regulators matter for the product.
+4. **Corpus intake:** 62/63/64 are a byte-identical *triple*, 71/72 a
+   byte-identical pair — duplicate count is now 4 groups (31/32, 47/48,
+   62/63/64, 71/72).
+
+---
+
+## Overall standing (75 parts tested, 2026-07-22)
+
+- **48/75 correct** (16 correct outputs + 32 correct refusals/by-design outcomes),
+  3 partial, 24 not.
 - Stems 1–20 (chip-scale corpus): 16/20 correct, zero silent errors.
 - Stems 21–40 (new, heavier corpus: big MCUs, BGAs, modules): 7/20 correct —
   dominated by three systematic gaps: vendor order-code decoding (TI-only
@@ -214,3 +255,7 @@ reason and a `--force-best-effort` escape hatch. Zero silent errors.
   QSOP wrong-grid at exit 0 (#51, same as #49).
 - Stems 56–60: 5/5 correct — all out-of-scope discretes refused cleanly,
   zero silent errors.
+- Stems 61–75: 13/15 correct — every refusal justified (incl. blocking BJT
+  pin names proposed for a triac); both misses are silent wrong-variant
+  outputs on multi-variant sheets (68 VSON-14 vs TO-263-7, 70 SBDIP-14 vs
+  TO-100 can) — the order-code decoding gap again.
