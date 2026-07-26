@@ -3166,3 +3166,72 @@ def test_client_fails_closed_on_package_pin_conflict(monkeypatch):
     with pytest.raises(LLMExtractionError):
         client.extract_pin_data(content="formatted", part_number="X",
                                 max_retries=2, retry_delay=0)
+
+
+# Task #13: the ordering-table grounded pin count fails closed when it matches
+# no extracted variant (the LLM read the wrong single variant), and now applies
+# in both single-output and --both paths.
+def test_ordered_count_conflict_fails_closed():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    from src.exceptions import ValidationError
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+        ordered_pin_count=5,  # ordering table says this order code is 5-pin
+    )
+    with pytest.raises(ValidationError):
+        _enforce_ordered_pin_count(pd, "PART-5PIN", force_best_effort=False)
+
+
+def test_ordered_count_multivariant_no_match_fails_closed():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData
+    from src.exceptions import ValidationError
+    pd = PinData(
+        component_name="X",
+        packages=[{"type": "SOIC-8", "pin_count": 8, "pins": []},
+                  {"type": "SOIC-14", "pin_count": 14, "pins": []}],
+        ordered_pin_count=20,  # no extracted variant has 20 pins
+    )
+    with pytest.raises(ValidationError):
+        _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)
+
+
+def test_ordered_count_match_passes():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData
+    # A variant matches the grounded count -> OK.
+    pd = PinData(
+        component_name="X",
+        packages=[{"type": "SOIC-8", "pin_count": 8, "pins": []},
+                  {"type": "QFN-20", "pin_count": 20, "pins": []}],
+        ordered_pin_count=20,
+    )
+    _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)  # no raise
+
+
+def test_ordered_count_absent_is_additive_noop():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+    )  # no ordered_pin_count
+    _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)  # no raise
+
+
+def test_ordered_count_force_best_effort_records_instead_of_refusing():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+        ordered_pin_count=12,
+    )
+    _enforce_ordered_pin_count(pd, "PART", force_best_effort=True)  # no raise
+    assert pd.validation_errors
+    assert any("wrong variant" in e.lower() for e in pd.validation_errors)
