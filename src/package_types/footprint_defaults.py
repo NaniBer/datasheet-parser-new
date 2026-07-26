@@ -32,6 +32,7 @@ _SOIC_NARROW_D = {8: 4.9, 14: 8.65, 16: 9.9}
 _SOIC_WIDE_D = {16: 10.3, 18: 11.5, 20: 12.8, 24: 15.4, 28: 17.9}
 _TSSOP_D = {8: 3.0, 14: 5.0, 16: 5.0, 20: 6.5, 24: 7.8, 28: 9.7}
 _SSOP_D = {16: 6.2, 20: 7.2, 24: 8.2, 28: 10.2}
+_QSOP_D = {8: 3.0, 16: 4.9, 20: 5.2, 24: 6.15, 28: 7.06}  # JEDEC MO-137
 _QFN_BODY = {12: 3.0, 16: 3.0, 20: 4.0, 24: 4.0, 28: 5.0, 32: 5.0, 40: 6.0, 48: 7.0, 64: 9.0}
 _QFP_PITCH = {32: 0.8, 44: 0.8, 48: 0.5, 52: 0.65, 64: 0.5, 80: 0.5, 100: 0.5, 144: 0.5}
 _DFN_PITCH = {6: 0.65, 8: 0.65, 10: 0.5, 12: 0.5}
@@ -133,6 +134,30 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
             "D": 3.0,
             "b": 0.33,
             "L": 0.53,
+        }
+
+    if family == "QSOP":
+        # JEDEC MO-137: 0.635mm pitch, 3.9mm body, ~6.0mm lead span. Without
+        # this it fell to SOIC's 1.27mm or SSOP's 0.65mm grid.
+        return {
+            "e": 0.635,
+            "E": 6.0,
+            "E1": 3.9,
+            "D": _QSOP_D.get(pin_count, _dual_row_body_length(pin_count, 0.635, margin=0.6)),
+            "b": 0.3,
+            "L": 0.65,
+        }
+
+    if family in ("HVSSOP", "VSSOP"):
+        # 0.5mm pitch, 3x3mm body class. HVSSOP used to normalize to SSOP and
+        # land on 0.65mm; VSSOP/HVSSOP are 0.5mm.
+        return {
+            "e": 0.5,
+            "E": 4.9,
+            "E1": 3.0,
+            "D": _dual_row_body_length(pin_count, 0.5, margin=0.65),
+            "b": 0.25,
+            "L": 0.5,
         }
 
     if family == "QFN":

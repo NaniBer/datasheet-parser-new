@@ -2904,9 +2904,179 @@ def test_footprint_defaults_unknown_family_returns_none():
     assert get_footprint_defaults("LCCC-20", 20) is None
 
 
+# Fix 2: QSOP / HVSSOP / VSSOP get their own real pad grids instead of being
+# refused or approximated onto SOIC's 1.27mm or SSOP's 0.65mm pitch.
+def test_footprint_defaults_qsop_hvssop_grids():
+    assert get_footprint_defaults("QSOP-16", 16)["e"] == 0.635
+    assert get_footprint_defaults("HVSSOP-10", 10)["e"] == 0.5
+    assert get_footprint_defaults("VSSOP-10", 10)["e"] == 0.5
+    # QSOP body length comes from the JEDEC table, not a SOIC fallback.
+    assert get_footprint_defaults("QSOP-16", 16)["E1"] == 3.9
+
+
+def test_parse_package_type_qsop_hvssop_not_unknown():
+    from src.package_types.package_geometry import parse_package_type
+    # Previously raised PACKAGE_UNKNOWN and got refused / force-substituted.
+    assert parse_package_type("QSOP-16") is not None
+    assert parse_package_type("HVSSOP-10") is not None
+    assert parse_package_type("VSSOP-10") is not None
+
+
 def test_footprint_defaults_are_plausible():
     for pkg, pins in [("DIP-8", 8), ("SOIC-16", 16), ("TSSOP-16", 16),
                       ("SSOP-28", 28), ("QFN-32", 32), ("DFN-8", 8)]:
         dims = get_footprint_defaults(pkg, pins)
         assert dims is not None, pkg
         assert plausible_dims(dims), (pkg, dims)
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: ground the ordered variant in the datasheet's own ordering table.
+# The order-code -> package mapping is read from the document, not memorized,
+# so these tests assert the *mechanism* (right row -> right package/pins),
+# never a hardcoded per-part answer.
+# ---------------------------------------------------------------------------
+from src.pdf_extractor.ordering_table import find_ordering_match
+
+
+def test_ordering_table_ti_addendum_row():
+    # TI "PACKAGE OPTION ADDENDUM" row: PN, status, package, drawing code, pins.
+    text = (
+        "PACKAGE OPTION ADDENDUM\n"
+        "Orderable Device   Status   Package Type   Package Drawing   Pins\n"
+        "UCC24610DRBT       ACTIVE   SON            DRB               8\n"
+        "UCC24610D          ACTIVE   SOIC           D                 8\n"
+    )
+    m = find_ordering_match(text, "UCC24610DRBT")
+    assert m is not None
+    assert m.exact is True
+    assert m.package == "SON"
+    # The sibling SOIC row must not win.
+    assert "SON" in m.reason
+
+
+def test_ordering_table_lead_count_form():
+    # Microchip-style "44-Lead PLCC" row, separators differ from the filename.
+    text = (
+        "Ordering Information\n"
+        "PIC16F871-I/L    Industrial   44-Lead PLCC\n"
+    )
+    m = find_ordering_match(text, "PIC16F871-I-L")
+    assert m is not None
+    assert m.package == "PLCC"
+    assert m.pin_count == 44
+
+
+def test_ordering_table_numbered_package_form():
+    text = "ORDERING GUIDE\nAD536AKH   0C to 70C   TO-100 (10)\n"
+    m = find_ordering_match(text, "AD536AKH")
+    assert m is not None
+    assert m.package.startswith("TO")
+    assert m.pin_count == 10
+
+
+def test_ordering_table_no_match_is_none():
+    # No ordering section / no matching row -> None (caller keeps prior path).
+    assert find_ordering_match("Just a pinout page with SOIC pins", "SN6501QDBVR") is None
+    assert find_ordering_match("", "SN6501QDBVR") is None
+    assert find_ordering_match("ORDERING INFORMATION\nSOIC 8\n", None) is None
+
+
+def test_ordering_table_pin_count_grounds_variant_selection():
+    # Ordering-table pin count outranks the LLM's wrong variant choice.
+    pd = PinData(
+        component_name="TPS23751",
+        packages=[
+            {"type": "TSSOP-20", "pin_count": 20, "pins": []},
+            {"type": "HTSSOP-16", "pin_count": 16, "pins": []},
+        ],
+        selected_package_index=0,  # LLM picked the 20-pin column
+        ordered_pin_count=16,      # read from the ordering table
+    )
+    sel = select_package_variant(pd, part_number="TPS23751PWP")
+    assert sel.package["pin_count"] == 16
+    assert "ordering table" in sel.reason
+
+
+def test_ordering_table_family_grounds_variant_selection():
+    # Package family alone disambiguates shape-different variants (no pins).
+    pd = PinData(
+        component_name="UCC24610",
+        packages=[
+            {"type": "SOIC-8", "pin_count": 8, "pins": []},
+            {"type": "SON-8", "pin_count": 8, "pins": []},
+        ],
+        selected_package_index=0,       # LLM picked SOIC
+        ordered_package_type="SON",     # ordering table says SON (DRB)
+    )
+    sel = select_package_variant(pd, part_number="UCC24610DRBT")
+    assert sel.package["type"] == "SON-8"
+    assert "SON" in sel.reason
+
+
+def test_ordering_grounding_is_additive_when_absent():
+    # With no ordering info, selection falls back to the LLM's choice.
+    pd = PinData(
+        component_name="X",
+        packages=[
+            {"type": "SOIC-8", "pin_count": 8, "pins": []},
+            {"type": "SON-8", "pin_count": 8, "pins": []},
+        ],
+        selected_package_index=1,
+    )
+    sel = select_package_variant(pd, part_number="Xyz")
+    assert sel.package["type"] == "SON-8"
+
+
+# Fix 1 (fallback): when the deterministic parser can't read a vendor's
+# ordering-table layout, the LLM reads it -- but its answer is trusted only
+# after grounding against the document text.
+from src.pdf_extractor.ordering_table import find_ordering_match_llm
+
+# A layout the deterministic parser does not handle (multi-line, no TI cell).
+_ST_ORDERING = (
+    "ORDERING INFORMATION\n"
+    "Order codes and package options for the L293DD family:\n"
+    "L293DD  Powerdip  Tube\n"
+    "L293DD  SOIC  20  Tape and reel\n"
+)
+
+
+def test_ordering_deterministic_handles_inline_row():
+    # When a row carries the part number and package on one line, the
+    # deterministic parser resolves it directly (no LLM fallback needed).
+    from src.pdf_extractor.ordering_table import find_ordering_match
+    m = find_ordering_match(_ST_ORDERING, "L293DD")
+    assert m is not None and m.package == "SOIC"
+
+
+def test_ordering_llm_fallback_grounded(monkeypatch):
+    reply = '{"found": true, "package": "SOIC", "pin_count": 20}'
+    monkeypatch.setattr("src.chat_bot.get_completion_from_messages",
+                        lambda *a, **k: reply)
+    m = find_ordering_match_llm(_ST_ORDERING, "L293DD")
+    assert m is not None
+    assert m.package == "SOIC"
+    assert m.pin_count == 20
+
+
+def test_ordering_llm_rejects_ungrounded_package(monkeypatch):
+    # The model names a package that is NOT in the document -> reject it.
+    reply = '{"found": true, "package": "QFN", "pin_count": 32}'
+    monkeypatch.setattr("src.chat_bot.get_completion_from_messages",
+                        lambda *a, **k: reply)
+    assert find_ordering_match_llm(_ST_ORDERING, "L293DD") is None
+
+
+def test_ordering_llm_not_found_returns_none(monkeypatch):
+    reply = '{"found": false, "package": "", "pin_count": null}'
+    monkeypatch.setattr("src.chat_bot.get_completion_from_messages",
+                        lambda *a, **k: reply)
+    assert find_ordering_match_llm(_ST_ORDERING, "L293DD") is None
+
+
+def test_ordering_llm_api_failure_returns_none(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("no API key")
+    monkeypatch.setattr("src.chat_bot.get_completion_from_messages", boom)
+    assert find_ordering_match_llm(_ST_ORDERING, "L293DD") is None

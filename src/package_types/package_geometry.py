@@ -679,6 +679,13 @@ PACKAGE_TYPE_ALIASES = {
     "SSOP": PackageType.SOIC,
     "MSOP": PackageType.SOIC,
     "SOP": PackageType.SOIC,
+    # QSOP (0.635mm) and HVSSOP/VSSOP (0.5mm) share the SOIC schematic display
+    # class but have their own real pad grids in footprint_defaults, so they are
+    # NOT lossy — listing them here stops them being refused as unknown and
+    # keeps HVSSOP off SSOP's 0.65mm grid.
+    "QSOP": PackageType.SOIC,
+    "HVSSOP": PackageType.SOIC,
+    "VSSOP": PackageType.SOIC,
     "DFN": PackageType.DFN,
     "WSON": PackageType.WSON,
     "SON": PackageType.SON,

@@ -136,20 +136,44 @@ def select_package_variant(
             f"Requested package_index {package_index} is out of range for {len(packages)} package variants"
         )
 
-    # A pin count decoded from the order code is ground truth: it outranks
-    # the LLM's own selection (STM32F103RBT7 is a 64-pin part regardless of
-    # which variant the model preferred).
-    implied_pins = expected_pin_count_from_part_number(part_number)
+    # A pin count / package family read from the datasheet's own ordering
+    # table is ground truth: it outranks the LLM's own selection. The value
+    # grounded in the document (pin_data.ordered_*) is preferred; the order-code
+    # decoder is a fallback (STM32F103RBT7 is a 64-pin part regardless of which
+    # variant the model preferred).
+    implied_pins = pin_data.ordered_pin_count or expected_pin_count_from_part_number(part_number)
     if implied_pins:
         matches = [
             index for index, package in enumerate(packages)
             if _coerce_count(package.get("pin_count")) == implied_pins
         ]
         if len(matches) == 1:
+            source = (
+                "ordering table" if pin_data.ordered_pin_count
+                else f"part number {part_number!r}"
+            )
             return _result(
                 matches[0],
-                f"Part number {part_number!r} implies {implied_pins} pins; "
+                f"{source} implies {implied_pins} pins; "
                 f"selected matching variant {packages[matches[0]].get('type')!r}",
+            )
+
+    # Package family printed on the ordered part's row disambiguates variants
+    # that differ by shape (SOIC vs QFN vs DIP) even without a pin count.
+    if pin_data.ordered_package_type:
+        family_matches = [
+            index for index, package in enumerate(packages)
+            if _matches_package_type(
+                str(package.get("type", "") or ""),
+                pin_data.ordered_package_type,
+                detector,
+            )
+        ]
+        if len(family_matches) == 1:
+            return _result(
+                family_matches[0],
+                f"Ordering table indicates package {pin_data.ordered_package_type!r}; "
+                f"selected matching variant {packages[family_matches[0]].get('type')!r}",
             )
 
     if pin_data.selected_package_index is not None:

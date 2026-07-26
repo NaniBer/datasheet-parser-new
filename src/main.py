@@ -755,6 +755,44 @@ def process_datasheet(
             force_best_effort=force_best_effort,
         )
 
+        # Ground the ordered variant in the datasheet's own ordering table.
+        # The order-code -> package mapping is printed in the sheet, so reading
+        # it is vendor-agnostic and outranks the LLM's variant choice. Failing
+        # to find a row is safe: selection falls back to its prior behaviour.
+        try:
+            from .pdf_extractor.ordering_table import (
+                find_ordering_match,
+                find_ordering_match_llm,
+                full_pdf_text,
+            )
+
+            doc_text = full_pdf_text(str(input_path))
+            ordering_match = find_ordering_match(doc_text, resolved_part_number)
+            # Deterministic parsing only covers layouts we hand-coded. When it
+            # misses and there is a genuine multi-variant choice to make, fall
+            # back to the LLM reading the ordering table (grounded against the
+            # document), so the lookup works across vendors, not just TI.
+            if (
+                ordering_match is None
+                and resolved_part_number
+                and pin_data.packages
+                and len(pin_data.packages) > 1
+            ):
+                ordering_match = find_ordering_match_llm(
+                    doc_text, resolved_part_number, model=model, verbose=verbose
+                )
+        except Exception as exc:  # never let table parsing break the pipeline
+            ordering_match = None
+            if verbose:
+                print(f"  Ordering-table lookup skipped: {exc}")
+        if ordering_match:
+            if ordering_match.pin_count:
+                pin_data.ordered_pin_count = ordering_match.pin_count
+            if ordering_match.package:
+                pin_data.ordered_package_type = ordering_match.package
+            if verbose:
+                print(f"  Ordering table: {ordering_match.reason}")
+
         # Step 4: Extract layout with Vision API (if enabled)
         layout_data = None
         if layout_mode:
