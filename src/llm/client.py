@@ -228,14 +228,23 @@ class LLMClient:
                 "Please re-extract all pins."
             )
 
-        # Rule 1: package type string implies a specific pin count
+        # Rule 1: the package label implies a pin count that disagrees with the
+        # pins actually extracted. The pins printed in the datasheet are the
+        # ground truth — do NOT coerce the model into inventing pins to match an
+        # (possibly wrong) package label. Steer it to correct the package
+        # instead. If it cannot reconcile the two, this keeps returning an issue
+        # and the caller fails closed rather than shipping fabricated pins.
         if pkg_type:
             expected = _parse_pin_count_from_package_type(pkg_type)
             if expected and abs(len(pins) - expected) > 2:
                 return (
-                    f"You stated the package is '{pkg_type}' which implies {expected} pins, "
-                    f"but only {len(pins)} pins were extracted. "
-                    f"Please re-extract ensuring all {expected} pins are present and numbered correctly."
+                    f"Mismatch: you labeled the package '{pkg_type}' (which implies "
+                    f"{expected} pins), but {len(pins)} pins were extracted from the "
+                    f"pin-function table. Do NOT invent or drop pins to reach "
+                    f"{expected}. The pins printed in the datasheet are the ground "
+                    f"truth: if the table really has {len(pins)} pins, correct the "
+                    f"package type to the variant that has {len(pins)} pins. Only "
+                    f"include pins that actually appear in the datasheet's pin table."
                 )
 
         # Rule 2: no duplicate pin numbers

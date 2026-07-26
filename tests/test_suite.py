@@ -3122,3 +3122,47 @@ def test_extract_pin_numbers_rejects_non_pin_tokens():
     assert _extract_pin_numbers("GND") == []
     assert _extract_pin_numbers("3.3") == []           # not a pin number
     assert _extract_pin_numbers("") == []
+
+
+# Fix 3: grounded pins win over the LLM's package claim. The self-consistency
+# feedback must NOT coerce the model into inventing pins to match a wrong
+# package label, and an unreconcilable conflict must fail closed.
+def test_validate_pin_data_does_not_coerce_pin_invention():
+    from src.llm.client import LLMClient
+    from src.models.pin_data import PinData, PackageInfo, Pin
+
+    # Claims SOIC-16 (implies 16 pins) but only 12 pins were extracted.
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 13)],
+    )
+    msg = LLMClient(model="m")._validate_pin_data(pd)
+    assert msg is not None
+    low = msg.lower()
+    # Must NOT tell the model to pad up to the claimed count...
+    assert "ensure all 16 pins are present" not in low
+    assert "do not invent" in low
+    # ...and must steer it to fix the package instead.
+    assert "correct the package" in low
+
+
+def test_client_fails_closed_on_package_pin_conflict(monkeypatch):
+    from src.llm import client as client_mod
+    from src.llm.client import LLMClient
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    from src.exceptions import LLMExtractionError
+
+    conflicting = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 13)],  # only 12
+    )
+    monkeypatch.setattr(client_mod, "get_completion_from_messages", lambda *a, **k: "{}")
+    client = LLMClient(model="m")
+    monkeypatch.setattr(client, "_parse_llm_response", lambda resp: conflicting)
+
+    # Every attempt sees the same conflict -> fail closed, never return padded data.
+    with pytest.raises(LLMExtractionError):
+        client.extract_pin_data(content="formatted", part_number="X",
+                                max_retries=2, retry_delay=0)
