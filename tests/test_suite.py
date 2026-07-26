@@ -2637,6 +2637,23 @@ def test_cli_exit_code_contract(monkeypatch, tmp_path):
     assert exc.value.code == main_mod.EXIT_INTERNAL_ERROR
 
 
+def test_exit_degraded_on_unvalidated_output():
+    # Fix 5: output produced from unvalidated data (--force-best-effort) exits
+    # 3, not 0, so callers can tell a best-effort result from a trusted one.
+    import src.main as main_mod
+    from src.models.pin_data import PinData
+
+    degraded = PinData(component_name="X",
+                       validation_errors=["Unknown package type 'DDA-8'; substituted DIP-8"])
+    with pytest.raises(SystemExit) as exc:
+        main_mod._exit_if_degraded(degraded)
+    assert exc.value.code == main_mod.EXIT_DEGRADED
+
+    # Clean output (no validation errors) does not exit — stays on the 0 path.
+    main_mod._exit_if_degraded(PinData(component_name="X"))
+    main_mod._exit_if_degraded(None)
+
+
 @pytest.mark.integration
 def test_cli_exit_zero_on_success(tmp_path):
     # Deterministic-path part (DFN.pdf needs no LLM): full run -> exit 0.
@@ -3080,3 +3097,72 @@ def test_ordering_llm_api_failure_returns_none(monkeypatch):
         raise RuntimeError("no API key")
     monkeypatch.setattr("src.chat_bot.get_completion_from_messages", boom)
     assert find_ordering_match_llm(_ST_ORDERING, "L293DD") is None
+
+
+# Fix 6: pin-number cells that use enclosed/decorated numerals must parse,
+# not crash. XC6218P332HR-G numbers its pins with circled digits and hit an
+# unhandled ValueError: int('①②').
+def test_extract_pin_numbers_circled_digits_no_crash():
+    from src.pdf_extractor.deterministic_table_parser import _extract_pin_numbers
+    # Circled digits: each character is a whole pin number.
+    assert _extract_pin_numbers("①②③") == [1, 2, 3]
+    assert _extract_pin_numbers("⑩") == [10]          # single char = 10
+    assert _extract_pin_numbers("① ② ③") == [1, 2, 3]
+
+
+def test_extract_pin_numbers_plain_and_fullwidth():
+    from src.pdf_extractor.deterministic_table_parser import _extract_pin_numbers
+    assert _extract_pin_numbers("1, 2, 3") == [1, 2, 3]
+    assert _extract_pin_numbers("1-4") == [1, 2, 3, 4]
+    assert _extract_pin_numbers("１２") == [12]        # full-width decimal
+
+
+def test_extract_pin_numbers_rejects_non_pin_tokens():
+    from src.pdf_extractor.deterministic_table_parser import _extract_pin_numbers
+    assert _extract_pin_numbers("GND") == []
+    assert _extract_pin_numbers("3.3") == []           # not a pin number
+    assert _extract_pin_numbers("") == []
+
+
+# Fix 3: grounded pins win over the LLM's package claim. The self-consistency
+# feedback must NOT coerce the model into inventing pins to match a wrong
+# package label, and an unreconcilable conflict must fail closed.
+def test_validate_pin_data_does_not_coerce_pin_invention():
+    from src.llm.client import LLMClient
+    from src.models.pin_data import PinData, PackageInfo, Pin
+
+    # Claims SOIC-16 (implies 16 pins) but only 12 pins were extracted.
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 13)],
+    )
+    msg = LLMClient(model="m")._validate_pin_data(pd)
+    assert msg is not None
+    low = msg.lower()
+    # Must NOT tell the model to pad up to the claimed count...
+    assert "ensure all 16 pins are present" not in low
+    assert "do not invent" in low
+    # ...and must steer it to fix the package instead.
+    assert "correct the package" in low
+
+
+def test_client_fails_closed_on_package_pin_conflict(monkeypatch):
+    from src.llm import client as client_mod
+    from src.llm.client import LLMClient
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    from src.exceptions import LLMExtractionError
+
+    conflicting = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 13)],  # only 12
+    )
+    monkeypatch.setattr(client_mod, "get_completion_from_messages", lambda *a, **k: "{}")
+    client = LLMClient(model="m")
+    monkeypatch.setattr(client, "_parse_llm_response", lambda resp: conflicting)
+
+    # Every attempt sees the same conflict -> fail closed, never return padded data.
+    with pytest.raises(LLMExtractionError):
+        client.extract_pin_data(content="formatted", part_number="X",
+                                max_retries=2, retry_delay=0)

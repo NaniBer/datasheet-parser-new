@@ -8,6 +8,7 @@ remains a fallback for ambiguous diagrams or messy mixed-content pages.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -153,10 +154,36 @@ def _extract_pin_numbers(text: str) -> List[int]:
                 numbers.extend(range(end, start + 1))
             continue
 
-        if chunk.isdigit():
+        # Plain decimal digits (ASCII or full-width) that int() accepts.
+        if chunk.isdecimal():
             numbers.append(int(chunk))
+            continue
+
+        # Enclosed / decorated numerals where each character is a whole pin
+        # number: circled digits number pins as "①②" = pins 1 and 2
+        # (not the number 12), and "⑩" = 10. Guard against non-decimal
+        # strings like "3.3" by requiring EVERY character to be an integer
+        # numeral. This is the case that used to crash int() (ValueError on
+        # '①②') because those characters are isdigit() but not
+        # isdecimal().
+        enclosed = _enclosed_numerals(chunk)
+        if enclosed:
+            numbers.extend(enclosed)
 
     return numbers
+
+
+def _enclosed_numerals(chunk: str) -> List[int]:
+    """Return the pin numbers for a chunk of enclosed/decorated numerals
+    (e.g. circled "①②" -> [1, 2]), or [] when any character is not a
+    plausible integer numeral."""
+    values: List[int] = []
+    for ch in chunk:
+        value = unicodedata.numeric(ch, None)
+        if value is None or value != int(value) or not (1 <= int(value) <= 300):
+            return []
+        values.append(int(value))
+    return values
 
 
 def _looks_like_pin_label(text: str) -> bool:
