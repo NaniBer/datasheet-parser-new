@@ -132,8 +132,11 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
     width = 20.0
 
     # Height = (pins_per_side - 1) * pitch + margins
-    pins_per_side = pin_count // 2
-    height = (pins_per_side - 1) * pitch + 20.0  # 20mm for margins
+    # Odd counts put the extra pin on the left (SOT-23-5 style 3+2 rows);
+    # a symmetric n//2 split would silently drop the last pin.
+    left_pins = (pin_count + 1) // 2
+    right_pins = pin_count // 2
+    height = (left_pins - 1) * pitch + 20.0  # 20mm for margins
 
     return SchematicParameters(
         package_type=PackageType.DIP,
@@ -174,7 +177,7 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
             value_height=0.5,
             top_margin=5.0
         ),
-        pins_per_side=[pins_per_side, pins_per_side, 0, 0],
+        pins_per_side=[left_pins, right_pins, 0, 0],
         counter_clockwise=True  # Counter-clockwise numbering for DIP
     )
 
@@ -188,8 +191,10 @@ def get_soic_parameters(pin_count: int) -> SchematicParameters:
     """
     pitch = 1.27
     width = 5.0
-    pins_per_side = pin_count // 2
-    height = (pins_per_side - 1) * pitch + 8.0
+    # Odd counts (SOT-23-5 resolves to SOIC geometry) split 3+2.
+    left_pins = (pin_count + 1) // 2
+    right_pins = pin_count // 2
+    height = (left_pins - 1) * pitch + 8.0
 
     return SchematicParameters(
         package_type=PackageType.SOIC,
@@ -215,7 +220,7 @@ def get_soic_parameters(pin_count: int) -> SchematicParameters:
             extra_top_num_offset=0.0
         ),
         body_geometry=BodyGeometry(top_margin=5.0),
-        pins_per_side=[pins_per_side, pins_per_side, 0, 0],
+        pins_per_side=[left_pins, right_pins, 0, 0],
         counter_clockwise=True
     )
 
@@ -235,8 +240,11 @@ def _build_dual_row_parameters(
     This is used for packages like TSSOP, DFN, WSON, and SON where the
     footprint is dual-row rather than four-side quad-row.
     """
-    pins_per_side = pin_count // 2
-    body_height = (pins_per_side - 1) * pitch + body_height_margin
+    # Odd counts put the extra pin on the left; a symmetric n//2 split
+    # would silently drop the last pin.
+    left_pins = (pin_count + 1) // 2
+    right_pins = pin_count // 2
+    body_height = (left_pins - 1) * pitch + body_height_margin
 
     return SchematicParameters(
         package_type=package_type,
@@ -246,7 +254,7 @@ def _build_dual_row_parameters(
         body_height=body_height,
         pin_geometry=pin_geometry,
         body_geometry=body_geometry,
-        pins_per_side=[pins_per_side, pins_per_side, 0, 0],
+        pins_per_side=[left_pins, right_pins, 0, 0],
         counter_clockwise=True,
     )
 
@@ -621,8 +629,10 @@ def get_cdip_parameters(pin_count: int) -> SchematicParameters:
     pitch = 2.54  # Same as DIP
     width = 20.0  # Slightly narrower than DIP
 
-    pins_per_side = pin_count // 2
-    height = (pins_per_side - 1) * pitch + 20.0
+    # Odd counts put the extra pin on the left (see get_dip_parameters).
+    left_pins = (pin_count + 1) // 2
+    right_pins = pin_count // 2
+    height = (left_pins - 1) * pitch + 20.0
 
     return SchematicParameters(
         package_type=PackageType.CDIP,
@@ -648,7 +658,7 @@ def get_cdip_parameters(pin_count: int) -> SchematicParameters:
             extra_top_num_offset=0.0
         ),
         body_geometry=BodyGeometry(top_margin=5.0),
-        pins_per_side=[pins_per_side, pins_per_side, 0, 0],
+        pins_per_side=[left_pins, right_pins, 0, 0],
         counter_clockwise=True
     )
 
@@ -669,6 +679,13 @@ PACKAGE_TYPE_ALIASES = {
     "SSOP": PackageType.SOIC,
     "MSOP": PackageType.SOIC,
     "SOP": PackageType.SOIC,
+    # QSOP (0.635mm) and HVSSOP/VSSOP (0.5mm) share the SOIC schematic display
+    # class but have their own real pad grids in footprint_defaults, so they are
+    # NOT lossy — listing them here stops them being refused as unknown and
+    # keeps HVSSOP off SSOP's 0.65mm grid.
+    "QSOP": PackageType.SOIC,
+    "HVSSOP": PackageType.SOIC,
+    "VSSOP": PackageType.SOIC,
     "DFN": PackageType.DFN,
     "WSON": PackageType.WSON,
     "SON": PackageType.SON,

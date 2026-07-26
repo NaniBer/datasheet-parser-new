@@ -629,3 +629,62 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] Error/exit-code contract in main.py; print→logging
 - [ ] LLM/vision layer mock tests; CI hardening; nightly eval smoke
 - [ ] Python 3.11/3.12 migration; Dockerfile
+
+## 2026-07-19
+
+### What We Did
+- ✅ Reran the 3 repaired corpus files: DF10S now correct (4/4, both GLBs),
+  BQ25570RGRT correct (20/20), MB6S correctly fails closed (no pin table).
+- ✅ Round-2 fixes implemented via TDD in worktree `fixes-round2`
+  (branch `worktree-fixes-round2`, draft PR #1, 2 commits):
+  1. filename hint survives underscores (4_MB6S-E3-80 → whole token, not "E3-80")
+  2. F1 pin-name grounding: extracted names must exist in source text/tables;
+     fabrications become retryable validation errors
+  3. F2 sibling-device gate: extracting AB1233 when target is AB1234 = error
+  4. F3 family/grid: designators are ground truth (PWP/RGR/RGZ/RHA/RHB/RHL/RTE
+     added); MSOP/SSOP labels survive normalization (0.65mm grids); µMAX→MSOP;
+     dual-row families refuse 4-sided vision layouts
+  5. F4 page detector: whole-page heading scan, TOC de-scored via dot-leaders,
+     position bonus excludes only cover/tail; fixed wrong benchmark ground
+     truth (sn74hc595 expected page was the TOC)
+  6. F7 root cause: odd pin counts split ceil/floor (SOT-23-5 = 3+2);
+     symmetric n//2 was silently dropping the last pin
+  7. F8: footprint GLBs validated at temp path, promoted only on success
+  8. eval: 20 corpus stems in EXPECTED_PINS + expected-refusal set
+- ✅ Suite: 172 passed, 1 skipped (25 new tests, all watched RED first)
+- ✅ Corpus 1–20 rerun twice: 9→11 PASS + 5 correct refusals = 16/20;
+  zero silently-wrong outputs (was ~4). New passes: SN6501 (5-pin),
+  TPS2514 (6-pin SOT-23), MMBD3004CA (3-pin); MAX845 grid 1.27→0.65.
+- ✅ Boss directive mid-session: NO code changes, tests only. Ran the 20 new
+  PDFs (stems 21–40) added to datasheets/: 21–30 = 5/10 correct;
+  31–40 = 2/10 correct. All verdicts document-verified.
+  Full report: eval_output/datasheets_run_report.md (committed on the branch).
+
+### Issues Encountered
+- TPS23751×2 + SN65LVDS104: correct family/grid now but read the 20-pin
+  column instead of 16 (TI multi-package column anchoring gap).
+- SN6505A: page detection still feeds wrong pages; grounding blocks the
+  resulting hallucination → fails closed.
+- 21–40 exposed three systematic gaps: (a) order-code decoding is TI/STM32
+  only (Atmel MMU, ON DMTT, NXP CAL/VMP/VMC, even TI's DRB missing);
+  (b) big-MCU pinouts are figures → LLM recites from memory, grounding
+  provably catches it (blocked pins don't exist on the devices) but no
+  output; (c) NO module detector: ESP32-C3-WROOM shipped a 20-pin QFN-style
+  footprint for an 18-pin castellated module with exit 0 — the only silent
+  error of the day.
+- Corpus intake: 31 and 32 are byte-identical files.
+- Flagged tech debt: hardcoded "6050" branch in
+  deterministic_table_parser.py:506 violates the general-parser rule.
+
+### What We Learned
+- The grounding gate catches real hallucinations verifiably: every blocked
+  pin name on 29–32 was provably absent from the device (e.g. 'VCC' on an
+  AVR-Dx, RC5 on MC710A).
+- Wrong ground truth exists in benchmarks too — the old TOC bias had been
+  recorded as an expected pinout page.
+
+### Tomorrow's Plan
+- Round 3 candidates (pending Nani/boss approval): module/out-of-scope
+  detector; vendor order-code decoding (NXP/Microchip/ON + TI DRB);
+  TI multi-package column anchoring; diagram-aware extraction for big MCUs;
+  remove the 6050 hack; SN6505A page detection.

@@ -153,8 +153,11 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
     if source_name:
         source_stem = Path(source_name).stem
         # Uppercase so mixed-case part numbers (e.g. "ATmega328p") are captured
-        # by the uppercase-only TOKEN_PATTERN.
-        for token in _tokenize(source_stem.upper()):
+        # by the uppercase-only TOKEN_PATTERN. Underscores become spaces:
+        # `_` is a \w character, so a stem like "9_BQ25570" has no word
+        # boundary before the part token and it would otherwise never match
+        # (or worse, only a fragment after a later hyphen would).
+        for token in _tokenize(source_stem.upper().replace("_", " ")):
             entry = stats.setdefault(
                 token,
                 {
@@ -206,7 +209,8 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
 _PACKAGE_DESIGNATORS = {
     "D", "DW", "DB", "DBQ", "DBV", "DCK", "DCN", "DCT", "DDC", "DGK",
     "DGV", "DRC", "DRL", "DSC", "DSG",
-    "N", "NE", "NS", "P", "PS", "PW", "RGE", "RGT", "RGY", "RUM",
+    "N", "NE", "NS", "P", "PS", "PW", "PWP",
+    "RGE", "RGR", "RGT", "RGY", "RGZ", "RHA", "RHB", "RHL", "RTE", "RUM",
 }
 
 # Designator -> package family (only families with supported geometry;
@@ -215,11 +219,13 @@ _PACKAGE_DESIGNATORS = {
 TI_DESIGNATOR_FAMILIES = {
     "D": "SOIC", "DW": "SOIC", "NS": "SOIC", "PS": "SOIC",
     "DB": "SSOP", "DBQ": "SSOP",
-    "PW": "TSSOP", "DGV": "TSSOP",
+    # PWP is PowerPAD HTSSOP: TSSOP body/grid with an exposed pad.
+    "PW": "TSSOP", "PWP": "TSSOP", "DGV": "TSSOP",
     "DGK": "MSOP",
     "DBV": "SOT23", "DCN": "SOT23", "DDC": "SOT23",
     "DSC": "WSON", "DSG": "WSON", "DRC": "WSON",
-    "RGE": "QFN", "RGT": "QFN", "RGY": "QFN", "RUM": "QFN",
+    "RGE": "QFN", "RGR": "QFN", "RGT": "QFN", "RGY": "QFN", "RGZ": "QFN",
+    "RHA": "QFN", "RHB": "QFN", "RHL": "QFN", "RTE": "QFN", "RUM": "QFN",
     "N": "PDIP", "NE": "PDIP", "P": "PDIP",
 }
 

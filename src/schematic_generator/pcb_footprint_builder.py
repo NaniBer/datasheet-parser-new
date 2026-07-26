@@ -122,6 +122,29 @@ class PcbFootprintBuilder:
                 details={"package_type": package_type, "pin_count": pin_count},
             )
 
+        # A vision-read layout can put pins on four sides even when the
+        # package string names a dual-row family; the resulting footprint
+        # looks plausible and never fits the part. Refuse the contradiction
+        # instead of trusting either source (fail closed).
+        dual_row_types = {
+            PackageType.DIP, PackageType.CDIP, PackageType.SOIC,
+            PackageType.TSSOP, PackageType.DFN, PackageType.WSON,
+            PackageType.SON,
+        }
+        if custom_layout and self.params.package_type in dual_row_types:
+            sides_used = [s for s, pins in custom_layout.items() if pins]
+            if len(sides_used) > 2:
+                from ..exceptions import ErrorCodes, SchematicGenerationError
+                raise SchematicGenerationError(
+                    f"Package '{package_type}' is a dual-row family but the "
+                    f"extracted layout places pins on {len(sides_used)} sides "
+                    f"({', '.join(sorted(sides_used))}); refusing the "
+                    "contradictory footprint.",
+                    error_code=ErrorCodes.PACKAGE_UNKNOWN,
+                    details={"package_type": package_type,
+                             "layout_sides": sorted(sides_used)},
+                )
+
         # Real plastic body size (E1/D1) when known; the datasheet "E" is the
         # lead span, which drives pad placement but not the drawn body.
         self._body_outline_w: Optional[float] = None
@@ -756,6 +779,11 @@ class PcbFootprintBuilder:
         """
         Build and export PCB footprint to GLB file.
 
+        The GLB is assembled and validated at a temporary path and only
+        promoted to output_path after every check passes: downstream tooling
+        globs for *.glb, so a failed run must not leave a plausible-looking
+        file behind.
+
         Args:
             output_path: Path to save GLB file
             pin_data: List of pin dictionaries
@@ -763,6 +791,9 @@ class PcbFootprintBuilder:
         Returns:
             True if successful, False otherwise
         """
+        # The suffix must stay ".glb": both cadquery and pygltflib pick
+        # their binary format from the file extension.
+        work_path = output_path + ".tmp.glb"
         try:
             logger.info("Building PCB footprint for %s..." % output_path)
 
@@ -771,14 +802,14 @@ class PcbFootprintBuilder:
 
             # Save to GLB
             logger.info("Saving to %s..." % output_path)
-            assembly.save(output_path)
+            assembly.save(work_path)
             try:
-                original_nodes, simplified_nodes = optimize_glb_hierarchy(output_path)
+                original_nodes, simplified_nodes = optimize_glb_hierarchy(work_path)
                 logger.info(
                     "Optimized GLB hierarchy: %d -> %d nodes"
                     % (original_nodes, simplified_nodes)
                 )
-                renamed_nodes = normalize_pcb_footprint_bodyline_names(output_path)
+                renamed_nodes = normalize_pcb_footprint_bodyline_names(work_path)
                 logger.info(
                     "Normalized PCB body line names to reference style: %d nodes"
                     % renamed_nodes
@@ -789,7 +820,7 @@ class PcbFootprintBuilder:
                 }
                 fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh = self._layer_half_dims()
                 extras_nodes = inject_pcb_footprint_extras(
-                    output_path,
+                    work_path,
                     component_name=self.component_name,
                     package_type=self.package_type,
                     pin_position_map=pin_position_map,
@@ -808,7 +839,7 @@ class PcbFootprintBuilder:
 
             try:
                 is_valid, hierarchy_errors = validate_pcb_footprint_glb(
-                    output_path,
+                    work_path,
                     pin_count=self.pin_count,
                     through_hole=self.is_through_hole(),
                 )
@@ -826,7 +857,7 @@ class PcbFootprintBuilder:
             if self.is_through_hole():
                 try:
                     is_similar, similarity_errors = validate_glb_similarity_to_reference(
-                        output_path
+                        work_path
                     )
                 except Exception as exc:
                     logger.warning(
@@ -840,22 +871,24 @@ class PcbFootprintBuilder:
                         )
                         return False
 
-            logger.info("Successfully saved PCB footprint to %s" % output_path)
-
-            # Verify file exists
-            if os.path.exists(output_path):
-                size = os.path.getsize(output_path)
-                logger.info("GLB file size: %d bytes" % size)
-                return True
-            else:
+            if not os.path.exists(work_path):
                 logger.error("GLB file not created: %s" % output_path)
                 return False
+
+            os.replace(work_path, output_path)
+            size = os.path.getsize(output_path)
+            logger.info("Successfully saved PCB footprint to %s" % output_path)
+            logger.info("GLB file size: %d bytes" % size)
+            return True
 
         except Exception as e:
             logger.error("Error saving GLB: %s" % e)
             import traceback
             traceback.print_exc()
             return False
+        finally:
+            if os.path.exists(work_path):
+                os.remove(work_path)
 
 
 def build_pcb_footprint(

@@ -191,8 +191,16 @@ class PageDetector:
 
         return candidate
 
+    # A table of contents lists section titles with dot leaders and page
+    # numbers ("5 Pin Configuration ......... 4"); those lines would collect
+    # the heading bonus meant for the real section page.
+    _TOC_LINE_PATTERN = re.compile(r"\.{4,}\s*\d{1,3}\s*$")
+
     def _check_pinout_heading(self, text: str) -> Tuple[int, str]:
         """Check if page contains a pinout section heading."""
+        if self._looks_like_toc(text):
+            return 0, ""
+
         text_lower = text.lower()
 
         for pattern in self.PINOUT_HEADING_PATTERNS:
@@ -203,11 +211,22 @@ class PageDetector:
 
         return 0, ""
 
+    def _looks_like_toc(self, text: str) -> bool:
+        """Detect table-of-contents / index pages by their dot-leader lines."""
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        leader_lines = sum(1 for line in lines if self._TOC_LINE_PATTERN.search(line))
+        if leader_lines >= 4:
+            return True
+        return any("table of contents" in line.lower() for line in lines[:5])
+
     def _is_likely_heading(self, text: str, pattern: str) -> bool:
-        """Check if matched pattern is likely a heading."""
-        # Look for pattern near start of page or at start of a line
-        lines = text.split("\n")
-        for i, line in enumerate(lines[:10]):  # Check first 10 lines
+        """Check if matched pattern starts a line anywhere on the page.
+
+        Vendor boilerplate (part title, URLs, document ids) routinely pushes
+        the section heading well past the top of the page, so the whole page
+        is scanned rather than only its first lines.
+        """
+        for line in text.split("\n"):
             if re.search(pattern, line.lower(), re.IGNORECASE):
                 return True
         return False
@@ -293,15 +312,23 @@ class PageDetector:
         return 0, ""
 
     def _check_page_position(self, page_num: int) -> Tuple[int, str]:
-        """Check if page is in typical pinout position range."""
+        """Check if page is in a plausible pinout position.
+
+        Long datasheets routinely put the pin table right after the cover
+        (page 3 of 40+ is common), so only the cover page and the legal/
+        ordering tail are treated as unlikely. Position carries no signal
+        at all in very short sheets.
+        """
         if self.total_pages == 0:
             return 0, ""
 
+        if self.total_pages <= 4:
+            return 1, "Short datasheet: any page is a plausible pinout position"
+
         position_pct = page_num / self.total_pages
 
-        # Pinout typically appears 20-70% through datasheet
-        if 0.2 <= position_pct <= 0.7:
-            return 1, f"Page in typical pinout position range (20-70% of datasheet)"
+        if page_num >= 2 and position_pct <= 0.85:
+            return 1, "Page in plausible pinout position (past cover, before tail)"
 
         return 0, ""
 

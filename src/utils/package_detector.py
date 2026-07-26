@@ -51,6 +51,11 @@ class PackageDetector:
             r"msop",
             r"tsop",
         ],
+        # Maxim's µMAX is a published MO-187 (MSOP-class) package.
+        "MSOP": [
+            r"[µμ]max",
+            r"\bumax\b",
+        ],
         "QFN": [
             r"qfn",
             r"quad\s*flat\s*no[-\s]?lead",
@@ -390,8 +395,15 @@ class PackageDetector:
             ("QFN", "QFN"),
             ("SOIC", "SOIC"),
             ("TSOP", "SOIC"),
-            ("SSOP", "SOIC"),
-            ("MSOP", "SOIC"),
+            # SSOP/MSOP keep their own names: the schematic symbol may share
+            # SOIC geometry, but their footprint grids (0.65 mm) differ from
+            # SOIC's 1.27 mm and collapsing the label ships the wrong grid.
+            ("SSOP", "SSOP"),
+            ("MSOP", "MSOP"),
+            # Maxim's µMAX ("µ" uppercases to Greek capital Mu) is MO-187,
+            # an MSOP-class body on the MSOP grid.
+            ("ΜMAX", "MSOP"),
+            ("UMAX", "MSOP"),
             ("SOP", "SOIC"),
             ("LFBGA", "BGA"),
             ("BGA", "BGA"),

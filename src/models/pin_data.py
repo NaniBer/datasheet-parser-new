@@ -36,5 +36,10 @@ class PinData:
     selected_package_index: Optional[int] = None  # Preferred package index when multiple variants exist
     selected_package_type: Optional[str] = None  # Preferred package label/type when available
     selection_reason: Optional[str] = None  # Human-readable explanation for the chosen variant
+    # Ground truth read from the datasheet's own ordering table for the ordered
+    # part number (see pdf_extractor.ordering_table). When set, these outrank
+    # the LLM's variant choice during selection.
+    ordered_pin_count: Optional[int] = None  # Pin count printed on the ordered part's row
+    ordered_package_type: Optional[str] = None  # Package family printed on the ordered part's row
     extraction_method: str = "Table"  # Table, Diagram, Mixed
     validation_errors: Optional[List[str]] = None  # Set only when invalid data was accepted via --force-best-effort
