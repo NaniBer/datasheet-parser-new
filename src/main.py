@@ -38,13 +38,29 @@ from .exceptions import (
 
 # ---------------------------------------------------------------------------
 # Exit-code contract (kept stable for callers and automation):
-#   0 — all requested artifacts were produced
+#   0 — all requested artifacts were produced and validated
 #   1 — domain failure: unsupported/unvalidatable input, fail-closed refusal
 #   2 — internal error: an unexpected exception (a bug), traceback printed
+#   3 — degraded: artifacts were produced but are UNVALIDATED (e.g.
+#       --force-best-effort substitutions). The GLB carries validated=false;
+#       this exit code lets callers that only read the status distinguish a
+#       trusted result from a best-effort one instead of seeing 0.
 # ---------------------------------------------------------------------------
 EXIT_OK = 0
 EXIT_DOMAIN_FAILURE = 1
 EXIT_INTERNAL_ERROR = 2
+EXIT_DEGRADED = 3
+
+
+def _exit_if_degraded(pin_data) -> None:
+    """Exit EXIT_DEGRADED when output was produced from unvalidated data.
+
+    pin_data.validation_errors is set only when invalid data was accepted via
+    --force-best-effort (the same flag that watermarks the GLB). Surfacing it
+    in the exit code keeps degraded output from masquerading as a clean 0.
+    """
+    if pin_data is not None and getattr(pin_data, "validation_errors", None):
+        sys.exit(EXIT_DEGRADED)
 
 
 def validate_input_file(input_path: Path) -> None:
@@ -913,6 +929,8 @@ def process_datasheet(
             file_size = os.path.getsize(str(output_path))
             print(f"File size: {file_size:,} bytes ({file_size / 1024 / 1024:.2f} MB)")
 
+        # Degraded (unvalidated) output exits 3, not 0.
+        _exit_if_degraded(pin_data)
         return True
 
     except DatasheetParserError as e:
@@ -1234,6 +1252,9 @@ def _run_cli():
                 if Path(generated).exists():
                     mark_glb_unvalidated(generated, pin_data.validation_errors)
             print("Warning: Outputs are marked UNVALIDATED (validated=false in GLB extras).")
+
+        # Degraded (unvalidated) output exits 3, not 0.
+        _exit_if_degraded(pin_data)
     else:
         # Single output mode (existing behaviour)
         process_datasheet(

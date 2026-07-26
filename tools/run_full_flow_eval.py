@@ -129,6 +129,9 @@ def run_one(pdf: Path) -> dict:
         "pdf": pdf.name,
         "seconds": round(time.time() - t0, 1),
         "exit_code": proc.returncode,
+        # Exit 3 = degraded: artifacts were produced but marked unvalidated
+        # (e.g. --force-best-effort). Produced, so not a hard failure.
+        "degraded": proc.returncode == 3,
     }
     m = DIMS_RE.search(proc.stdout)
     res["extracted_dims"] = json.loads(m.group(1).replace("'", '"')) if m else None
@@ -161,7 +164,7 @@ def run_one(pdf: Path) -> dict:
     if footprint_refused_ok:
         res["footprint_refused_expected"] = True
 
-    if ((proc.returncode != 0 or footprint_rejected) and not res["footprint"]
+    if ((proc.returncode not in (0, 3) or footprint_rejected) and not res["footprint"]
             and not footprint_refused_ok):
         # last non-warning stderr/stdout lines for diagnosis
         tail = [l for l in (proc.stdout + proc.stderr).splitlines() if l.strip()]

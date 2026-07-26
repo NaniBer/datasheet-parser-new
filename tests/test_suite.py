@@ -2637,6 +2637,23 @@ def test_cli_exit_code_contract(monkeypatch, tmp_path):
     assert exc.value.code == main_mod.EXIT_INTERNAL_ERROR
 
 
+def test_exit_degraded_on_unvalidated_output():
+    # Fix 5: output produced from unvalidated data (--force-best-effort) exits
+    # 3, not 0, so callers can tell a best-effort result from a trusted one.
+    import src.main as main_mod
+    from src.models.pin_data import PinData
+
+    degraded = PinData(component_name="X",
+                       validation_errors=["Unknown package type 'DDA-8'; substituted DIP-8"])
+    with pytest.raises(SystemExit) as exc:
+        main_mod._exit_if_degraded(degraded)
+    assert exc.value.code == main_mod.EXIT_DEGRADED
+
+    # Clean output (no validation errors) does not exit — stays on the 0 path.
+    main_mod._exit_if_degraded(PinData(component_name="X"))
+    main_mod._exit_if_degraded(None)
+
+
 @pytest.mark.integration
 def test_cli_exit_zero_on_success(tmp_path):
     # Deterministic-path part (DFN.pdf needs no LLM): full run -> exit 0.
