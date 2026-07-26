@@ -3080,3 +3080,28 @@ def test_ordering_llm_api_failure_returns_none(monkeypatch):
         raise RuntimeError("no API key")
     monkeypatch.setattr("src.chat_bot.get_completion_from_messages", boom)
     assert find_ordering_match_llm(_ST_ORDERING, "L293DD") is None
+
+
+# Fix 6: pin-number cells that use enclosed/decorated numerals must parse,
+# not crash. XC6218P332HR-G numbers its pins with circled digits and hit an
+# unhandled ValueError: int('①②').
+def test_extract_pin_numbers_circled_digits_no_crash():
+    from src.pdf_extractor.deterministic_table_parser import _extract_pin_numbers
+    # Circled digits: each character is a whole pin number.
+    assert _extract_pin_numbers("①②③") == [1, 2, 3]
+    assert _extract_pin_numbers("⑩") == [10]          # single char = 10
+    assert _extract_pin_numbers("① ② ③") == [1, 2, 3]
+
+
+def test_extract_pin_numbers_plain_and_fullwidth():
+    from src.pdf_extractor.deterministic_table_parser import _extract_pin_numbers
+    assert _extract_pin_numbers("1, 2, 3") == [1, 2, 3]
+    assert _extract_pin_numbers("1-4") == [1, 2, 3, 4]
+    assert _extract_pin_numbers("１２") == [12]        # full-width decimal
+
+
+def test_extract_pin_numbers_rejects_non_pin_tokens():
+    from src.pdf_extractor.deterministic_table_parser import _extract_pin_numbers
+    assert _extract_pin_numbers("GND") == []
+    assert _extract_pin_numbers("3.3") == []           # not a pin number
+    assert _extract_pin_numbers("") == []
