@@ -41,10 +41,13 @@ from .exceptions import (
 #   0 — all requested artifacts were produced and validated
 #   1 — domain failure: unsupported/unvalidatable input, fail-closed refusal
 #   2 — internal error: an unexpected exception (a bug), traceback printed
-#   3 — degraded: artifacts were produced but are UNVALIDATED (e.g.
-#       --force-best-effort substitutions). The GLB carries validated=false;
-#       this exit code lets callers that only read the status distinguish a
-#       trusted result from a best-effort one instead of seeing 0.
+#   3 — degraded: artifacts were produced but are UNVALIDATED. Either
+#       --force-best-effort accepted invalid data, or the output is
+#       best-effort by construction (a lossy geometry approximation, or a
+#       footprint built on display-proportion geometry with no real dims).
+#       The GLB carries validated=false; this exit code lets callers that
+#       only read the status distinguish a trusted result from a best-effort
+#       one instead of seeing 0.
 # ---------------------------------------------------------------------------
 EXIT_OK = 0
 EXIT_DOMAIN_FAILURE = 1
@@ -52,12 +55,29 @@ EXIT_INTERNAL_ERROR = 2
 EXIT_DEGRADED = 3
 
 
+def _record_degraded(pin_data, reasons) -> None:
+    """Merge best-effort/approximation reasons into pin_data.validation_errors.
+
+    Reusing validation_errors means the existing watermark + exit-3 machinery
+    fires automatically for auto-degraded output, not just --force-best-effort.
+    """
+    if pin_data is None or not reasons:
+        return
+    existing = list(pin_data.validation_errors or [])
+    for reason in reasons:
+        if reason not in existing:
+            existing.append(reason)
+    pin_data.validation_errors = existing
+
+
 def _exit_if_degraded(pin_data) -> None:
     """Exit EXIT_DEGRADED when output was produced from unvalidated data.
 
-    pin_data.validation_errors is set only when invalid data was accepted via
-    --force-best-effort (the same flag that watermarks the GLB). Surfacing it
-    in the exit code keeps degraded output from masquerading as a clean 0.
+    pin_data.validation_errors is set when invalid data was accepted via
+    --force-best-effort, or when the output is best-effort by construction
+    (lossy approximation / unverified geometry, recorded via _record_degraded).
+    Both watermark the GLB; surfacing it in the exit code keeps degraded output
+    from masquerading as a clean 0.
     """
     if pin_data is not None and getattr(pin_data, "validation_errors", None):
         sys.exit(EXIT_DEGRADED)
@@ -1037,6 +1057,7 @@ def process_datasheet(
                 if verbose:
                     print(f"[DimensionExtractor] Skipping: {e}")
 
+            degraded: List[str] = []
             result = build_pcb_2d_schematic(
                 package_type=package_type,
                 pin_count=pin_count,
@@ -1045,7 +1066,9 @@ def process_datasheet(
                 output_path=str(output_path),
                 custom_layout=custom_layout,
                 extracted_dims=extracted_dims,
+                degraded_out=degraded,
             )
+            _record_degraded(pin_data, degraded)
         else:
             # 3D mode - adapter handles both formats
             result = build_schematic_from_pin_data(
@@ -1063,7 +1086,8 @@ def process_datasheet(
                 print("Error: Failed to generate 3D schematic")
             return False
 
-        # Watermark output produced from unvalidated data (--force-best-effort)
+        # Watermark output that is unvalidated (forced best-effort, or a
+        # lossy/unverified footprint approximation recorded above).
         if pin_data.validation_errors and output_path.exists():
             from .core import mark_glb_unvalidated
             mark_glb_unvalidated(str(output_path), pin_data.validation_errors)
@@ -1146,6 +1170,7 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
             part_number=part_number,
             package_index=package_index,
         )
+        degraded: List[str] = []
         footprint_ok = bool(build_pcb_2d_schematic(
             package_type=package_type,
             pin_count=pin_count,
@@ -1154,7 +1179,10 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
             output_path=footprint_str,
             custom_layout=custom_layout,
             extracted_dims=extracted_dims,
+            degraded_out=degraded,
         ))
+        if footprint_ok:
+            _record_degraded(pin_data, degraded)
         if verbose:
             print(f"Footprint: {footprint_str}")
     except DatasheetParserError as e:
@@ -1402,7 +1430,8 @@ def _run_cli():
         if not success:
             sys.exit(EXIT_DOMAIN_FAILURE)
 
-        # Watermark both outputs when unvalidated data was forced through
+        # Watermark both outputs when unvalidated (forced best-effort, or a
+        # lossy/unverified footprint approximation recorded above).
         if pin_data.validation_errors:
             from .core import mark_glb_unvalidated
             for generated in _both_output_paths(str(output_path)):

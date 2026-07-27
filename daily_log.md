@@ -688,3 +688,168 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
   detector; vendor order-code decoding (NXP/Microchip/ON + TI DRB);
   TI multi-package column anchoring; diagram-aware extraction for big MCUs;
   remove the 6050 hack; SN6505A page detection.
+
+---
+
+## 2026-07-19 — New datasheets/ batch: full-flow eval + content-level quality analysis (covers 2026-07-17 sessions too)
+
+### What We Did
+- ✅ Ran the full flow (`--both`) over a new `datasheets/` folder supplied by
+  Nani. The folder was swapped mid-day on 07-17: first set of 5 (Quectel
+  UC200A-GL, BAS4002A, BQ25570, LPS4018, W25Q128JV → 2 PASS / 3 fail-closed
+  on unsupported packages LCC/SOT143/SMD), then the current set of 10
+  (LS7641, CDBHM1100L, MB10S, MB6S, SN6501-Q1, SN6505A, TPS2514, BQ25570,
+  BQ500211, BQ500511A). Harness result on set 2: 6 PASS / 4 FAIL
+  (eval_output/flow_eval_datasheets2_report.json); GLBs persisted to
+  output/datasheets_run_2026-07-17/
+- ✅ 9_BQ25570RGRT.pdf was a truncated download (exactly 1840 KiB, 0 readable
+  pages) — replaced with a clean TI copy (original kept as *.pdf.corrupt),
+  re-ran fine
+- ✅ Content-level quality analysis: dumped all pin names/numbers/sides/pad
+  positions from the 16 GLBs and compared pin-by-pin against the datasheet
+  pin-configuration + mechanical pages →
+  **eval_output/quality_analysis_2026-07-19.md** (scoreboard + findings
+  F1–F9 + prioritized recommendations)
+- ✅ Root-caused all four failures/miss-classes via verbose re-runs
+
+### Key results
+- Fully correct schematic pins: 4/8 (LS7641 14/14, bq25570 20/20,
+  bq500211 48/48, bq500511A 40/40 — big QFNs flawless incl. multi-pin rows)
+- Fully correct footprints: 1/8 (LS7641). QFN trio correct grids but no
+  thermal pad; MB10S/TPS2514 got SOIC-default grids (wrong pitch);
+  2 of the harness's 6 PASSes are content-level failures it cannot see
+
+### Issues Encountered (root causes confirmed)
+- **MB6S fabrication (worst)**: only detected page is the land-pattern page
+  (no pin table exists on a 4-terminal bridge); LLM sent mechanical text
+  fabricated a self-consistent 64-pin device that passed all structural
+  checks; identical re-run refused instead → nondeterministic garbage-PASS.
+  Also: filename hint parser turned MB6S-E3-80 into bogus part hint "E3-80"
+- **TPS2514 wrong variant**: extracted the TPS2513 table (pins 3/4 DP2/DM2
+  vs real N/C); order-code pin-count anchoring (0391c9b) can't disambiguate
+  two 6-pin variants — needs part-number match on table captions
+- **SN6505A refusal = page-detection miss**: real pin page (p3) never a
+  candidate — `_is_likely_heading` scans only first 10 lines and p3 opens
+  with revision-history spillover; position score 0 (p3/43 < 20%); the TOC
+  page scored 3 instead (its "Pin Configuration…" entry is in the first 10
+  lines) and the content filter fed the LLM 6 KB of TOC. Same family as the
+  July-14 noTOC work
+- **SN6501**: `GND | 4,5` table row not expanded (pin 5 dropped) + vision
+  dims returned pads at ±87.5 mm; leg-count validator correctly rejected the
+  footprint but the invalid GLB was still written first (known
+  write-before-validate issue)
+- **MB10S vs CDBHM1100L inconsistency**: same physical MBS bridge package —
+  onsemi's "SOIC4 W" alias slipped through as SOIC (wrong 1.27 grid, real
+  is 2.54 pitch / ~6.5 span per CASE 751EP), Comchip's "MBS" failed closed
+
+### Recommendations filed in the report (priority order)
+1. Ground extracted pin names against source-page text (kills fabrication)
+2. Variant selection by part-number match on table captions
+3. Expand comma/range pin-number lists in table rows
+4. Package-family gate before applying JEDEC default grids
+5. QFN thermal-pad support; 6. filename part number as component-name prior;
+7. vision-dims sanity bounds + don't write GLB pre-validation;
+8. add the 10 new stems to EXPECTED_PINS in run_full_flow_eval.py
+
+### Next
+- [ ] Continue running tests on further datasheet batches (per Nani)
+- [ ] Pick up recommendations above as fix tasks
+
+---
+
+## 2026-07-19 (second session) — Batch 3 (10 new PDFs), 20-part corpus report, unknown-package LLM probe
+
+### What We Did
+- ✅ Verified the 10 new PDFs (#8, #12–20) against Nani's DigiKey line-item
+  list. Caught: 17_DF10S is a **wrong document** (scanned TUK keystone-panel
+  brochure, no text layer); 8_MMBD3004CA is the Diodes Inc datasheet for a
+  Taiwan-Semi orderable; 14/16 TPS23751PWP(R) are byte-identical
+- ✅ Ran batch 3 through the full flow: 5 PASS / 5 fail-closed
+  (eval_output/flow_eval_datasheets3_report.json; GLBs in
+  output/datasheets_run_2026-07-19/)
+- ✅ Pin-by-pin verification of the 5 passes → consolidated 20-part corpus
+  report: **eval_output/quality_report_all20_2026-07-19.md** (supersedes the
+  batch-1 analysis as corpus summary)
+- ✅ Temporary unknown-package experiment (NOT implemented; /tmp only):
+  asked the integrated LLM to classify unknown package "MBS" and supply
+  build geometry. Result: family+pin-count mapping reliable (6/6 trials
+  → SOP/TO-269AA, 4 pins) but dimensions unreliable BOTH from world
+  knowledge (generic SOIC numbers) and from datasheet text (3 trials,
+  3 different wrong dim sets, one self-labeled "high confidence").
+  DimensionExtractor returned None on the same PDF (vision scan probe
+  paused). Conclusion: LLM may be used for family mapping only; numbers
+  must come from the vision/text dims path
+- ✅ Determinism data point: byte-identical inputs #14/#16 → pin-for-pin
+  identical outputs (weakens the MB6S "nondeterminism" theory; that file
+  was externally swapped after the eval — noted as caveat in the report)
+
+### Key corpus numbers (details in the report)
+- Schematics fully correct: 8/12 parts with output (the 5 TI QFN/PMIC parts
+  148/148 pins); footprints fully correct: 1/12 (LS7641)
+- 6 of 8 refusals were correct fail-closed; harness scored 3 wrong-content
+  parts as PASS (MB10S, TPS2514, TPS23751×2 — structural checks can't see
+  wrong names/columns/grids)
+
+### PRIORITIZED FIX LIST (agreed basis for upcoming work)
+
+**P0 — quick wins (minutes–1h each)**
+- [x] P0.1 Add all 20 corpus stems to EXPECTED_PINS in
+      tools/run_full_flow_eval.py (values in report §4.7) so wrong-variant/
+      wrong-count outputs FAIL instead of PASS — DONE 07-19, verified:
+      14_TPS23751PWP re-run now FAILs with "expected 16 pins, got 20"
+      (3rd identical extraction — wrong-column bug is deterministic)
+- [ ] P0.2 Corpus intake check in the eval harness: warn when the filename
+      part number does not appear in the PDF text, when a file is a byte-
+      duplicate, or when a PDF has no text layer (catches DF10S/MB6S-class
+      wrong files before burning LLM runs)
+- [ ] P0.3 Component-name prior: use CLI --part-number / filename stem as
+      PackageValue fallback instead of "Unknown"/app-figure names
+      (fixes 5×Unknown, MSP430G2001, PWM1, TPS23752 labels)
+
+**P1 — top wrong-output causes (each verified against named parts)**
+- [ ] P1.1 Pin-name grounding gate: every extracted pin name must occur in
+      the source page text, else refuse (kills MB6S-class fabrication and
+      wrong-file extraction; ~src/llm/client.py validation +
+      content pass-through). Acceptance: DF10S-style wrong file refuses
+      with a grounding error, not "no relevant pages" luck
+- [ ] P1.2 Part-number-driven column/variant/drawing selection: match part
+      number against pin-table column headers (TPS23751 vs TPS23752,
+      TPS2513x vs TPS2514x, LVDS104 vs 105) and package-drawing codes
+      before pin-count heuristics; also fix the filename hint parser that
+      turned "MB6S-E3-80" into bogus hint "E3-80".
+      Acceptance: 7_TPS2514 pins 3/4 = N/C; 14_TPS23751 = 16 pins;
+      15_SN65LVDS104 footprint from PW/TSSOP drawing
+- [ ] P1.3 Family/grid consistency gate at build time: layout family must
+      match the package string (TSSOP can never be quad), and JEDEC default
+      grids keyed by family+pin count with mismatch → refuse.
+      Acceptance: 13_MAX845 gets MSOP 0.65 grid or refuses (never SOIC
+      1.27); 14_TPS23751 never gets a QFN grid; 3_MB10S refuses or 2.54
+
+**P2 — high-value correctness**
+- [ ] P2.1 Page detector: scan headings beyond the first 10 lines,
+      de-score TOC/revision-history pages, soften the 20–70% position
+      window. Acceptance: 6_SN6505A extracts its 6 pins
+- [ ] P2.2 QFN thermal pad (EPAD) generation from pin-table PAD row +
+      package code. Acceptance: bq25570/bq500211/bq500511A/bq51050B
+      footprints include the exposed pad (bq500211 lists it as pin 49)
+- [ ] P2.3 Rectangular QFN bodies: RHL (3.5×4.5) must not get the square
+      default grid. Acceptance: 12_BQ51050B pad grid matches RHL
+- [ ] P2.4 Multi-pin table rows expanded consistently ("GND | 4,5").
+      Acceptance: 5_SN6501 schematic has 5/5 pins
+
+**P3 — robustness / hygiene**
+- [ ] P3.1 Vision dims sanity bounds (body 1–60mm, pads within body+margin)
+      + never write GLB before hierarchy validation (SN6501 ±87.5mm,
+      leftover invalid file)
+- [ ] P3.2 Discrete/bridge policy: either dedicated terminal-marking
+      extraction (+ , − , ~) with MBS/MBF/DFS/HD package geometries, or an
+      explicit documented out-of-scope refusal like modules. Candidate
+      assist: LLM family-mapping fallback (probe showed mapping reliable,
+      dims not) feeding the existing dims path — decision needed
+- [ ] P3.3 Bridge-name semantics guard (3_MB10S "A1,A2,K,K") — subsumed by
+      P3.2 if discretes go in scope
+- [ ] P3.4 Re-download correct 17_DF10S (onsemi) and optionally the TSC
+      MMBD3004CA-RFG datasheet; re-run both
+
+### Next
+- [ ] Execute P0 batch, then P1.1 → P1.2 → P1.3 with corpus re-runs after each

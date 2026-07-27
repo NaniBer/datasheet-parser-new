@@ -55,13 +55,18 @@ EXPECTED_PINS = {
     "MCP3208": 16, "MPU-6000-Datasheet1": 24, "NE555": 8, "NRF24L01": 20,
     "PIC16F877A": 40, "STM32F103RBT7": 64, "STM32F103X6": 48,
     "tl072": 8, "TPS63060": 10, "TSSOP": 8, "ULN2001A-ULN2002A": 16,
-    # DigiKey 20-part corpus (2026-07 batches), verified against the sheets.
-    "1_LS7641-S": 14, "3_MB10S": 4, "4_MB6S-E3-80": 4,
-    "5_SN6501QDBVRQ1": 5, "6_SN6505ADBVR": 6, "7_TPS2514DBVR": 6,
-    "8_MMBD3004CA-RFG": 3, "9_BQ25570RGRT": 20, "10_BQ500211RGZR": 48,
-    "11_BQ500511ARHAR": 40, "12_BQ51050BRHLR": 20, "13_MAX845EUA+": 8,
-    "14_TPS23751PWP": 16, "15_SN65LVDS104PWR": 16, "16_TPS23751PWPR": 16,
-    "17_DF10S": 4, "18_HD06-T": 4, "19_MB10F-13": 4,
+    # datasheets/ corpus (DigiKey line items, verified against pin-config
+    # pages 2026-07-19). Counts are perimeter pins; QFN thermal pads are
+    # not numbered pins (bq500211's "pin 49" EPAD excluded). Parts that
+    # currently fail closed (unknown discrete packages) are still listed
+    # so wrong-count output FAILs the day support lands.
+    "1_LS7641-S": 14, "2_CDBHM1100L-HF": 4, "3_MB10S": 4,
+    "4_MB6S-E3-80": 4, "5_SN6501QDBVRQ1": 5, "6_SN6505ADBVR": 6,
+    "7_TPS2514DBVR": 6, "8_MMBD3004CA-RFG": 3, "9_BQ25570RGRT": 20,
+    "10_BQ500211RGZR": 48, "11_BQ500511ARHAR": 40, "12_BQ51050BRHLR": 20,
+    "13_MAX845EUA+": 8, "14_TPS23751PWP": 16, "15_SN65LVDS104PWR": 16,
+    "16_TPS23751PWPR": 16, "17_DF10S": 4, "18_HD06-T": 4,
+    "19_MB10F-13": 4, "20_CDBU40-HF": 2,
 }
 
 # Grid-array parts: the correct outcome is a schematic plus a refused

@@ -175,6 +175,24 @@ class PcbFootprintBuilder:
         else:
             self.dims_source = "unverified"
 
+        # Reasons this footprint is buildable but not dimensionally trustworthy.
+        # Surfaced to the pipeline so the GLB is watermarked validated=false and
+        # the run exits degraded (3) without requiring --force-best-effort — the
+        # honest-flag layer for best-effort output. jedec_default is NOT degraded
+        # (it's the normal fallback for most parts); only lossy approximation and
+        # display-proportion ("unverified") geometry are.
+        from ..package_types.package_geometry import lossy_approximation_reason
+
+        self.degraded_reasons: List[str] = []
+        lossy = lossy_approximation_reason(package_type)
+        if lossy:
+            self.degraded_reasons.append(lossy)
+        if self.dims_source == "unverified":
+            self.degraded_reasons.append(
+                f"Footprint for '{package_type}' uses display-proportion "
+                "geometry (no real dimensions found); pad sizes are unverified."
+            )
+
         # Calculate pin positions
         self.pin_positions = layout_pins(self.params, custom_layout)
 
@@ -899,6 +917,7 @@ def build_pcb_footprint(
     output_path: str,
     custom_layout: Optional[Dict[str, List[int]]] = None,
     extracted_dims: Optional[Dict[str, Any]] = None,
+    degraded_out: Optional[List[str]] = None,
 ) -> bool:
     """
     Build and export PCB footprint from pin data.
@@ -912,6 +931,10 @@ def build_pcb_footprint(
         custom_layout: Optional dict mapping side names to pin numbers
                      (e.g., {"left_side": [1,2,3], "bottom_edge": [4,5,6]})
         extracted_dims: Optional flat dict of real dimensions from PDF extraction.
+        degraded_out: Optional list; if provided, extended with the reasons this
+                     footprint is buildable but not dimensionally trustworthy
+                     (lossy approximation, unverified geometry). The caller uses
+                     it to watermark the GLB and exit degraded.
 
     Returns:
         True if successful, False otherwise
@@ -919,4 +942,6 @@ def build_pcb_footprint(
     builder = PcbFootprintBuilder(
         package_type, pin_count, component_name, custom_layout, extracted_dims
     )
+    if degraded_out is not None:
+        degraded_out.extend(builder.degraded_reasons)
     return builder.save_glb(output_path, pin_data)

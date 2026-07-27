@@ -42,4 +42,4 @@ class PinData:
     ordered_pin_count: Optional[int] = None  # Pin count printed on the ordered part's row
     ordered_package_type: Optional[str] = None  # Package family printed on the ordered part's row
     extraction_method: str = "Table"  # Table, Diagram, Mixed
-    validation_errors: Optional[List[str]] = None  # Set only when invalid data was accepted via --force-best-effort
+    validation_errors: Optional[List[str]] = None  # Reasons output is unvalidated: forced best-effort, or lossy/unverified geometry. Drives the GLB watermark + exit 3.
