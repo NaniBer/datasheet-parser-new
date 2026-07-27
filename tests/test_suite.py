@@ -3166,3 +3166,132 @@ def test_client_fails_closed_on_package_pin_conflict(monkeypatch):
     with pytest.raises(LLMExtractionError):
         client.extract_pin_data(content="formatted", part_number="X",
                                 max_retries=2, retry_delay=0)
+
+
+# Task #13: the ordering-table grounded pin count fails closed when it matches
+# no extracted variant (the LLM read the wrong single variant), and now applies
+# in both single-output and --both paths.
+def test_ordered_count_conflict_fails_closed():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    from src.exceptions import ValidationError
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+        ordered_pin_count=5,  # ordering table says this order code is 5-pin
+    )
+    with pytest.raises(ValidationError):
+        _enforce_ordered_pin_count(pd, "PART-5PIN", force_best_effort=False)
+
+
+def test_ordered_count_multivariant_no_match_fails_closed():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData
+    from src.exceptions import ValidationError
+    pd = PinData(
+        component_name="X",
+        packages=[{"type": "SOIC-8", "pin_count": 8, "pins": []},
+                  {"type": "SOIC-14", "pin_count": 14, "pins": []}],
+        ordered_pin_count=20,  # no extracted variant has 20 pins
+    )
+    with pytest.raises(ValidationError):
+        _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)
+
+
+def test_ordered_count_match_passes():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData
+    # A variant matches the grounded count -> OK.
+    pd = PinData(
+        component_name="X",
+        packages=[{"type": "SOIC-8", "pin_count": 8, "pins": []},
+                  {"type": "QFN-20", "pin_count": 20, "pins": []}],
+        ordered_pin_count=20,
+    )
+    _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)  # no raise
+
+
+def test_ordered_count_absent_is_additive_noop():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+    )  # no ordered_pin_count
+    _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)  # no raise
+
+
+def test_ordered_count_force_best_effort_records_instead_of_refusing():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+        ordered_pin_count=12,
+    )
+    _enforce_ordered_pin_count(pd, "PART", force_best_effort=True)  # no raise
+    assert pd.validation_errors
+    assert any("wrong variant" in e.lower() for e in pd.validation_errors)
+
+
+# Fix 1 coverage (#14/#15): ordering fallback fires for single-variant, and a
+# grounded package FAMILY mismatch fails closed — but only for recognized
+# families, so raw LLM strings ("SO20") can't force a false refusal.
+def test_ordering_fallback_fires_for_single_variant(monkeypatch):
+    import src.main as main_mod
+    from src.pdf_extractor import ordering_table as ot
+    from src.pdf_extractor.ordering_table import OrderingMatch
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    from pathlib import Path
+
+    monkeypatch.setattr(ot, "full_pdf_text", lambda p: "text")
+    monkeypatch.setattr(ot, "find_ordering_match", lambda t, pn: None)  # deterministic miss
+    fired = {}
+    def fake_llm(t, pn, model="m", verbose=False):
+        fired["yes"] = True
+        return OrderingMatch(orderable=pn, package="SOIC", pin_count=8, exact=True, reason="llm")
+    monkeypatch.setattr(ot, "find_ordering_match_llm", fake_llm)
+
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)])  # single variant
+    main_mod.apply_ordering_ground_truth(pd, Path("x.pdf"), "PART", "m")
+    assert fired.get("yes"), "LLM fallback must fire for single-variant now"
+    assert pd.ordered_pin_count == 8
+
+
+def test_ordered_family_mismatch_fails_closed():
+    from src.main import _enforce_ordered_package_family
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    from src.exceptions import ValidationError
+    # Ordering says SON (leadless -> QFN family); extraction is SOIC-8.
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+                 ordered_package_type="SON")
+    with pytest.raises(ValidationError):
+        _enforce_ordered_package_family(pd, "UCC24610DRBT", force_best_effort=False)
+
+
+def test_ordered_family_match_passes():
+    from src.main import _enforce_ordered_package_family
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+                 ordered_package_type="SOIC")
+    _enforce_ordered_package_family(pd, "PART", force_best_effort=False)  # no raise
+
+
+def test_ordered_family_unrecognized_string_does_not_refuse():
+    from src.main import _enforce_ordered_package_family
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    # Raw LLM fallback string that package_family can't classify must be ignored.
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+                 ordered_package_type="SO20")
+    _enforce_ordered_package_family(pd, "L293DD", force_best_effort=False)  # no raise

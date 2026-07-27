@@ -10,7 +10,7 @@ import sys
 import argparse
 import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 # Import project modules
 from .pdf_extractor import PageDetector, ContentExtractor
@@ -704,6 +704,180 @@ def enforce_known_package_type(
     pin_data.validation_errors = errors
 
 
+# Canonical package families that PackageDetector.package_family() produces for
+# real packages (it collapses SON/DFN/WSON->QFN, PDIP->DIP, etc.). Used to gate
+# the family-mismatch check so unrecognized vendor strings can't force a refusal.
+_KNOWN_PACKAGE_FAMILIES = {
+    "SOIC", "SOP", "SSOP", "TSSOP", "MSOP", "VSSOP", "HVSSOP", "QSOP",
+    "QFN", "DFN", "SON", "WSON", "VSON",
+    "DIP", "PDIP", "CDIP", "SDIP",
+    "PLCC", "LCCC", "LCC",
+    "TQFP", "LQFP", "QFP", "BGA", "LGA",
+    "SOT-23", "SOT-89", "SOT-223", "SOT-143",
+    "TO-92", "TO-220", "TO-263", "TO-252", "TO-247", "TO-100",
+}
+
+
+def _extracted_pin_counts(pin_data: PinData) -> List[int]:
+    """Pin counts of every extracted variant (declared count, or pin list length)."""
+    counts: List[int] = []
+    if pin_data.packages:
+        for pkg in pin_data.packages:
+            try:
+                count = int(pkg.get("pin_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            count = count or len(pkg.get("pins") or [])
+            if count:
+                counts.append(count)
+    elif pin_data.package:
+        count = pin_data.package.pin_count or len(pin_data.pins or [])
+        if count:
+            counts.append(int(count))
+    return counts
+
+
+def _enforce_ordered_pin_count(
+    pin_data: PinData,
+    part_number: Optional[str],
+    force_best_effort: bool,
+) -> None:
+    """Fail closed when the ordering table's grounded pin count matches no
+    extracted variant — i.e. the LLM read the wrong variant/count and there is
+    nothing for select_package_variant to correct it to.
+
+    With --force-best-effort the conflict is recorded (watermark + exit 3)
+    instead of refusing.
+    """
+    ordered = pin_data.ordered_pin_count
+    if not ordered:
+        return
+    counts = _extracted_pin_counts(pin_data)
+    if not counts or any(count == ordered for count in counts):
+        return  # an extracted variant matches the grounded count
+
+    message = (
+        f"Ordering table lists {part_number!r} as a {ordered}-pin package, but the "
+        f"extracted variant(s) have {counts} pins — the wrong variant was read."
+    )
+    if force_best_effort:
+        pin_data.validation_errors = list(pin_data.validation_errors or []) + [message]
+        print(f"Warning: {message} Proceeding UNVALIDATED (--force-best-effort).")
+        return
+    raise ValidationError(
+        message + " Re-run with --force-best-effort to override.",
+        error_code=ErrorCodes.EXTRACTION_VALIDATION_FAILED,
+        details={"ordered_pin_count": ordered, "extracted_pin_counts": counts},
+    )
+
+
+def _enforce_ordered_package_family(
+    pin_data: PinData,
+    part_number: Optional[str],
+    force_best_effort: bool,
+) -> None:
+    """Fail closed when the ordering table's grounded package family matches no
+    extracted variant — the wrong *shape* was read even if the pin count agrees
+    (e.g. SON-8 ordered but SOIC-8 extracted: same 8 pins, wrong 1.27mm grid).
+
+    Conservative: only fires when the grounded family can be classified, so an
+    unclassifiable vendor string never causes a false refusal.
+    """
+    ordered_type = pin_data.ordered_package_type
+    if not ordered_type:
+        return
+    from .utils.package_detector import PackageDetector
+
+    detector = PackageDetector()
+    ordered_family = detector.package_family(ordered_type)
+    # Only fire on a RECOGNIZED family. package_family() returns raw strings
+    # unchanged for things it doesn't know (e.g. the LLM fallback's "SO20"),
+    # which must NOT trigger a refusal against a real extracted family.
+    if ordered_family not in _KNOWN_PACKAGE_FAMILIES:
+        return
+
+    families: List[str] = []
+    if pin_data.packages:
+        for pkg in pin_data.packages:
+            fam = detector.package_family(str(pkg.get("type", "") or ""))
+            if fam:
+                families.append(fam)
+    elif pin_data.package:
+        fam = detector.package_family(pin_data.package.type)
+        if fam:
+            families.append(fam)
+
+    if not families or any(fam == ordered_family for fam in families):
+        return
+
+    message = (
+        f"Ordering table lists {part_number!r} as a {ordered_type} "
+        f"({ordered_family}) package, but the extracted variant(s) are "
+        f"{families} — the wrong package shape was read."
+    )
+    if force_best_effort:
+        pin_data.validation_errors = list(pin_data.validation_errors or []) + [message]
+        print(f"Warning: {message} Proceeding UNVALIDATED (--force-best-effort).")
+        return
+    raise ValidationError(
+        message + " Re-run with --force-best-effort to override.",
+        error_code=ErrorCodes.EXTRACTION_VALIDATION_FAILED,
+        details={"ordered_package": ordered_type, "extracted_families": families},
+    )
+
+
+def apply_ordering_ground_truth(
+    pin_data: PinData,
+    input_path: Path,
+    part_number: Optional[str],
+    model: str,
+    verbose: bool = False,
+    force_best_effort: bool = False,
+) -> None:
+    """Ground the ordered variant in the datasheet's own ordering table.
+
+    The order-code -> package mapping is printed in the sheet, so reading it is
+    vendor-agnostic and outranks the LLM's variant choice. Sets
+    pin_data.ordered_pin_count/type, then fails closed when that grounded count
+    contradicts every extracted variant. A missing/unreadable table is safe:
+    selection keeps its prior behaviour.
+    """
+    try:
+        from .pdf_extractor.ordering_table import (
+            find_ordering_match,
+            find_ordering_match_llm,
+            full_pdf_text,
+        )
+
+        doc_text = full_pdf_text(str(input_path))
+        match = find_ordering_match(doc_text, part_number)
+        # Deterministic parsing only covers layouts we hand-coded. When it
+        # misses, fall back to the LLM reading the table (grounded against the
+        # document text). This fires for single-variant extractions too, not
+        # only multi-variant: most wrong-variant parts come out single-variant
+        # from non-TI vendors, so without this they get no ground truth at all.
+        if match is None and part_number and (pin_data.packages or pin_data.package):
+            match = find_ordering_match_llm(
+                doc_text, part_number, model=model, verbose=verbose
+            )
+    except Exception as exc:  # never let table parsing break the pipeline
+        if verbose:
+            print(f"  Ordering-table lookup skipped: {exc}")
+        return
+
+    if not match:
+        return
+    if match.pin_count:
+        pin_data.ordered_pin_count = match.pin_count
+    if match.package:
+        pin_data.ordered_package_type = match.package
+    if verbose:
+        print(f"  Ordering table: {match.reason}")
+
+    _enforce_ordered_pin_count(pin_data, part_number, force_best_effort)
+    _enforce_ordered_package_family(pin_data, part_number, force_best_effort)
+
+
 def process_datasheet(
     input_path: Path,
     output_path: Path,
@@ -771,43 +945,16 @@ def process_datasheet(
             force_best_effort=force_best_effort,
         )
 
-        # Ground the ordered variant in the datasheet's own ordering table.
-        # The order-code -> package mapping is printed in the sheet, so reading
-        # it is vendor-agnostic and outranks the LLM's variant choice. Failing
-        # to find a row is safe: selection falls back to its prior behaviour.
-        try:
-            from .pdf_extractor.ordering_table import (
-                find_ordering_match,
-                find_ordering_match_llm,
-                full_pdf_text,
-            )
-
-            doc_text = full_pdf_text(str(input_path))
-            ordering_match = find_ordering_match(doc_text, resolved_part_number)
-            # Deterministic parsing only covers layouts we hand-coded. When it
-            # misses and there is a genuine multi-variant choice to make, fall
-            # back to the LLM reading the ordering table (grounded against the
-            # document), so the lookup works across vendors, not just TI.
-            if (
-                ordering_match is None
-                and resolved_part_number
-                and pin_data.packages
-                and len(pin_data.packages) > 1
-            ):
-                ordering_match = find_ordering_match_llm(
-                    doc_text, resolved_part_number, model=model, verbose=verbose
-                )
-        except Exception as exc:  # never let table parsing break the pipeline
-            ordering_match = None
-            if verbose:
-                print(f"  Ordering-table lookup skipped: {exc}")
-        if ordering_match:
-            if ordering_match.pin_count:
-                pin_data.ordered_pin_count = ordering_match.pin_count
-            if ordering_match.package:
-                pin_data.ordered_package_type = ordering_match.package
-            if verbose:
-                print(f"  Ordering table: {ordering_match.reason}")
+        # Ground the ordered variant in the datasheet's own ordering table and
+        # fail closed if the grounded pin count contradicts the extraction.
+        apply_ordering_ground_truth(
+            pin_data,
+            input_path,
+            resolved_part_number,
+            model,
+            verbose=verbose,
+            force_best_effort=force_best_effort,
+        )
 
         # Step 4: Extract layout with Vision API (if enabled)
         layout_data = None
@@ -1188,6 +1335,16 @@ def _run_cli():
             pin_data = extract_pin_data(
                 content, args.model, args.verbose,
                 part_number=resolved_part_number,
+                force_best_effort=args.force_best_effort,
+            )
+            # Ground the ordered variant in the datasheet's ordering table
+            # (also applied in single-output mode via process_datasheet).
+            apply_ordering_ground_truth(
+                pin_data,
+                input_path,
+                resolved_part_number,
+                args.model,
+                verbose=args.verbose,
                 force_best_effort=args.force_best_effort,
             )
         except DatasheetParserError as e:
