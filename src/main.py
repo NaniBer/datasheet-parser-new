@@ -898,6 +898,49 @@ def apply_ordering_ground_truth(
     _enforce_ordered_package_family(pin_data, part_number, force_best_effort)
 
 
+def _representative_package_type(pin_data: PinData) -> Optional[str]:
+    """A package-type string to classify the family from, across both formats."""
+    if pin_data.package and pin_data.package.type:
+        return pin_data.package.type
+    if pin_data.packages:
+        for pkg in pin_data.packages:
+            ptype = pkg.get("type")
+            if ptype:
+                return str(ptype)
+    return None
+
+
+def flag_module_footprint(
+    pin_data: PinData, input_path: Path, verbose: bool = False
+) -> None:
+    """Flag modules / SiPs / grid-array parts so the pipeline emits schematic
+    only. A module's land pattern is nothing like the chip package its pin table
+    resembles, so building a footprint from it is silent-wrong (ESP32 module ->
+    QFN-32). Sets pin_data.footprint_unsupported_reason; never raises.
+    """
+    try:
+        from .pdf_extractor.module_detector import module_footprint_reason
+        from .pdf_extractor.ordering_table import full_pdf_text
+        from .utils.package_detector import PackageDetector
+
+        ptype = _representative_package_type(pin_data)
+        family = PackageDetector().package_family(ptype) if ptype else None
+        reason = module_footprint_reason(
+            full_pdf_text(str(input_path)),
+            component_name=pin_data.component_name,
+            package_family=family,
+        )
+    except Exception as exc:  # detection must never break the pipeline
+        if verbose:
+            print(f"  Module detection skipped: {exc}")
+        return
+
+    if reason:
+        pin_data.footprint_unsupported_reason = reason
+        if verbose:
+            print(f"  Module detected: {reason}")
+
+
 def process_datasheet(
     input_path: Path,
     output_path: Path,
@@ -976,6 +1019,9 @@ def process_datasheet(
             force_best_effort=force_best_effort,
         )
 
+        # Modules/SiPs/grid-array parts: emit schematic only (no chip footprint).
+        flag_module_footprint(pin_data, input_path, verbose=verbose)
+
         # Step 4: Extract layout with Vision API (if enabled)
         layout_data = None
         if layout_mode:
@@ -1029,6 +1075,16 @@ def process_datasheet(
 
         # Choose schematic builder based on mode
         if pcb_2d_mode:
+            # Modules/SiPs/grid-array parts have no chip-style land pattern.
+            # This mode emits only a footprint, so refuse (fail closed) rather
+            # than ship a wrong one; the schematic flow (--both / default) still
+            # produces the schematic (Fix 4).
+            if pin_data.footprint_unsupported_reason:
+                raise DatasheetParserError(
+                    f"Footprint refused: {pin_data.footprint_unsupported_reason}",
+                    error_code=ErrorCodes.PACKAGE_UNKNOWN,
+                )
+
             # Use the shared package selector so 2D and 3D flows agree.
             package_type, pin_count, _, pin_data_list = pin_data_to_builder_format(
                 pin_data,
@@ -1163,6 +1219,15 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
         print(f"Schematic refused: {e}")
 
     # --- PCB footprint (2D) ---
+    # Modules/SiPs/grid-array parts have no chip-style land pattern; emit the
+    # schematic only rather than a wrong footprint (Fix 4).
+    if pin_data.footprint_unsupported_reason:
+        print(f"Footprint skipped (schematic only): "
+              f"{pin_data.footprint_unsupported_reason}")
+        if not schematic_ok:
+            print(f"Failed to generate schematic: {schematic_str}")
+        return schematic_ok
+
     footprint_ok = False
     try:
         package_type, pin_count, _, pin_data_list = pin_data_to_builder_format(
@@ -1375,6 +1440,8 @@ def _run_cli():
                 verbose=args.verbose,
                 force_best_effort=args.force_best_effort,
             )
+            # Modules/SiPs/grid-array parts -> schematic only (no chip footprint).
+            flag_module_footprint(pin_data, input_path, verbose=args.verbose)
         except DatasheetParserError as e:
             print(f"Error: {e}")
             sys.exit(EXIT_DOMAIN_FAILURE)
