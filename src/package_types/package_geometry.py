@@ -8,7 +8,7 @@ dimensions and can be customized as needed.
 
 import logging
 from dataclasses import dataclass
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 from enum import Enum
 
 from ..exceptions import SchematicGenerationError, ErrorCodes
@@ -757,6 +757,36 @@ def parse_package_type(package_str: str) -> PackageType:
         error_code=ErrorCodes.PACKAGE_UNKNOWN,
         details={"package_type": package_str},
     )
+
+
+def lossy_approximation_reason(package_str: str) -> Optional[str]:
+    """Return a human-readable reason if ``package_str`` only resolves through a
+    lossy alias (a physically different package approximated with the nearest
+    supported geometry), else None.
+
+    Mirrors ``parse_package_type``'s resolution order so the two never disagree.
+    Used to auto-flag degraded output: an approximated grid is buildable but not
+    dimensionally faithful, so the GLB is watermarked and the run exits degraded.
+    """
+    normalized = (package_str or "").upper().strip()
+
+    def _reason(alias: str) -> Optional[str]:
+        if alias in LOSSY_ALIASES:
+            return (
+                f"Package '{package_str}' has no dedicated geometry; "
+                f"approximated with {PACKAGE_TYPE_ALIASES[alias].value} "
+                "(pad grid may not match the datasheet)."
+            )
+        return None
+
+    if normalized in PACKAGE_TYPE_ALIASES:
+        return _reason(normalized)
+
+    for alias in sorted(PACKAGE_TYPE_ALIASES, key=len, reverse=True):
+        if normalized.startswith(alias) and not normalized[len(alias):len(alias) + 1].isalpha():
+            return _reason(alias)
+
+    return None
 
 
 def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicParameters:

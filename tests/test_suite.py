@@ -3295,3 +3295,89 @@ def test_ordered_family_unrecognized_string_does_not_refuse():
                  pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
                  ordered_package_type="SO20")
     _enforce_ordered_package_family(pd, "L293DD", force_best_effort=False)  # no raise
+
+
+# ===========================================================================
+# Fix 5 (completion): auto-degraded signal — lossy/unverified footprint output
+# watermarks the GLB (validated=false) and exits 3 WITHOUT --force-best-effort,
+# while cleanly-grounded output stays exit 0.
+# ===========================================================================
+def test_lossy_approximation_reason_flags_lossy_and_clears_clean():
+    from src.package_types.package_geometry import lossy_approximation_reason
+    # Families approximated with a nearest supported grid -> a reason.
+    for lossy in ("SSOP-16", "MSOP-10", "SOP-8", "TSOP-48"):
+        assert lossy_approximation_reason(lossy), f"{lossy} should be lossy"
+    # Families with dedicated geometry -> no reason (must not over-flag).
+    for clean in ("SOIC-8", "DIP-8", "TSSOP-8", "QFN-32", "LQFP64"):
+        assert lossy_approximation_reason(clean) is None, f"{clean} not lossy"
+
+
+def test_builder_records_degraded_for_lossy_package():
+    from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+    b = PcbFootprintBuilder("SSOP-16", 16, "X")
+    assert b.degraded_reasons
+    assert any("approximated" in r.lower() for r in b.degraded_reasons)
+
+
+def test_builder_no_degraded_for_grounded_jedec_default():
+    # jedec_default is the normal fallback, NOT degraded (keeps the signal useful).
+    from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+    b = PcbFootprintBuilder("DIP-8", 8, "X")
+    assert b.dims_source == "jedec_default"
+    assert b.degraded_reasons == []
+
+
+def test_builder_records_degraded_for_unverified_dims(monkeypatch):
+    # No jedec defaults and no extracted dims -> display-proportion geometry.
+    import src.schematic_generator.pcb_footprint_builder as bmod
+    monkeypatch.setattr(bmod, "get_footprint_defaults", lambda *a, **k: None)
+    b = bmod.PcbFootprintBuilder("DIP-8", 8, "X")
+    assert b.dims_source == "unverified"
+    assert any("unverified" in r.lower() for r in b.degraded_reasons)
+
+
+def test_build_pcb_footprint_populates_degraded_out(tmp_path):
+    # End-to-end propagation: the out-list is filled for a lossy part.
+    from src.schematic_generator import build_pcb_footprint
+    pins = [{"number": i, "name": f"P{i}"} for i in range(1, 17)]
+    degraded = []
+    ok = build_pcb_footprint("SSOP-16", 16, "X", pins,
+                             str(tmp_path / "ssop.glb"), degraded_out=degraded)
+    assert ok
+    assert degraded and any("approximated" in r.lower() for r in degraded)
+
+
+def test_record_degraded_merges_and_dedupes():
+    from src.main import _record_degraded
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SSOP-16", pin_count=16, width=1.0, height=1.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)])
+    _record_degraded(pd, ["reason A", "reason A", "reason B"])
+    assert pd.validation_errors == ["reason A", "reason B"]
+    # Idempotent: re-recording the same reason does not duplicate it.
+    _record_degraded(pd, ["reason B", "reason C"])
+    assert pd.validation_errors == ["reason A", "reason B", "reason C"]
+
+
+def test_record_degraded_empty_is_noop():
+    from src.main import _record_degraded
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)])
+    _record_degraded(pd, [])
+    # A cleanly-grounded part must stay non-degraded (exit 0).
+    assert not pd.validation_errors
+
+
+def test_exit_if_degraded_exits_3_when_reasons_present():
+    from src.main import _exit_if_degraded
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SSOP-16", pin_count=16, width=1.0, height=1.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+                 validation_errors=["lossy approximation"])
+    with pytest.raises(SystemExit) as exc:
+        _exit_if_degraded(pd)
+    assert exc.value.code == 3
