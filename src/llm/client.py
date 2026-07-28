@@ -163,6 +163,11 @@ class LLMClient:
                 response = get_completion_from_messages(
                     messages,
                     model=self.model,
+                    # Pin extraction must be deterministic: identical input
+                    # should yield identical pins across repeat runs. Pin the
+                    # sampling temperature to 0 explicitly so this call is not
+                    # affected by any future change to the default.
+                    temperature=0.0,
                     max_retries=max_retries,
                     retry_delay=retry_delay,
                 )

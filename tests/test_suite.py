@@ -444,17 +444,58 @@ def test_infer_part_number_hint_prefers_datasheet_text():
     assert infer_part_number_hint(text_content, source_name="foo.pdf") == "NE555"
 
 
-def test_single_filename_candidate_wins_unconditionally():
-    """A single plausible token in the filename takes priority over text scores."""
+def test_single_filename_candidate_corroborated_by_text_wins():
+    """A single filename token that is also present in the text is strong,
+    corroborated evidence and wins even over noisier repeated tokens."""
     text_content = (
         "--- Page 1 ---\n"
-        # Many occurrences of a plausible-but-wrong token
+        # Uppercase so the uppercase-only token pattern captures it (text_hits > 0)
+        "ATMEGA328P\n"
+        # Many occurrences of a plausible-but-wrong token (register bit name)
         "ICES1 ICES1 ICES1 ICES1 ICES1 ICES1\n"
         "--- Page 2 ---\n"
         "ICES1 ICES1 ICES1\n"
     )
-    # "ATmega328P" → uppercased "ATMEGA328P" — plausible, single filename candidate
+    # "ATmega328P" → uppercased "ATMEGA328P" — plausible filename token, and it
+    # occurs in the text (text_hits > 0), so it is returned.
     result = infer_part_number_hint(text_content, source_name="ATmega328P.pdf")
+    assert result == "ATMEGA328P"
+
+
+def test_filename_token_absent_from_text_does_not_override_strong_identifier():
+    """Fix 10: an uncorroborated filename token (present nowhere in the text)
+    must NOT override a strong in-document identifier — the in-text one wins."""
+    text_content = (
+        "--- Page 1 ---\n"
+        "LM358 LM358 LM358\n"
+        "--- Page 2 ---\n"
+        "LM358\n"
+    )
+    # "ZZ8888" is a plausible single filename candidate but appears nowhere in
+    # the text; the strong in-document identifier LM358 must win.
+    result = infer_part_number_hint(text_content, source_name="ZZ8888.pdf")
+    assert result == "LM358"
+
+
+def test_hint_is_deterministic_across_source_names():
+    """Fix 10 determinism guarantee: identical document text under two
+    different (uncorroborated) source names resolves to the SAME part number,
+    so byte-identical files renamed differently cannot diverge."""
+    text_content = (
+        "--- Page 1 ---\n"
+        "LM358 LM358 LM358\n"
+        "--- Page 2 ---\n"
+        "LM358\n"
+    )
+    a = infer_part_number_hint(text_content, source_name="AA1111.pdf")
+    b = infer_part_number_hint(text_content, source_name="BB2222.pdf")
+    assert a == b == "LM358"
+
+
+def test_filename_token_used_when_no_strong_in_document_identifier():
+    """Existing conservative behavior preserved: when there is no trustworthy
+    in-document identifier, the single filename token still resolves."""
+    result = infer_part_number_hint("", source_name="ATmega328P.pdf")
     assert result == "ATMEGA328P"
 
 
