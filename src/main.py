@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import List, Optional
 
 # Import project modules
-from .pdf_extractor import PageDetector, ContentExtractor
+from .pdf_extractor import PageDetector, PageCandidate, ContentExtractor
 from .pdf_extractor import infer_part_number_hint
 from .pdf_extractor.deterministic_table_parser import parse_pin_data_from_tables
 from .pdf_extractor.extraction_validator import validate_pin_data_extraction
-from .llm import LLMClient
+from .llm import LLMClient, PageVerifier
 from .llm.image_ocr_client import ImageOCRClient
 from .schematic_generator import (
     build_schematic_from_pin_data,
@@ -142,7 +142,74 @@ def _both_output_paths(output: str) -> tuple:
 # Pipeline Functions
 # ============================================================================
 
-def detect_relevant_pages(input_path: str, min_confidence: int, verbose: bool = False):
+def _build_page_heading_index(input_path: str, max_pages: int = 600) -> list:
+    """Build a compact ``(page_number, heading)`` index of a whole document.
+
+    Each entry is the first couple of non-empty lines of a page — enough for
+    the LLM fallback to recognise a "Pin Assignments" / "Pinout" section
+    without shipping the full page text. 1-indexed page numbers.
+    """
+    index = []
+    try:
+        import pdfplumber
+        with pdfplumber.open(input_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, start=1):
+                if page_num > max_pages:
+                    break
+                text = page.extract_text() or ""
+                lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+                heading = " | ".join(lines[:2]) if lines else ""
+                index.append((page_num, heading))
+    except Exception as e:
+        print(f"Warning: could not build page heading index: {e}")
+        return []
+    return index
+
+
+def _verify_pin_page_fallback(input_path: str, model: str, verbose: bool = False):
+    """LLM fallback: locate the pin-assignment page when detection came up empty.
+
+    Returns a one-element list of ``PageCandidate`` for the located page, or
+    ``None`` when the page cannot be confidently located (fail closed — never
+    fabricate a page).
+    """
+    page_index = _build_page_heading_index(input_path)
+    if not page_index:
+        return None
+
+    if verbose:
+        print(
+            f"  Deterministic detection empty; asking LLM to locate the "
+            f"pin-assignment page across {len(page_index)} pages..."
+        )
+
+    try:
+        verifier = PageVerifier(LLMClient(model=model))
+        page_number = verifier.locate_pin_assignment_page(page_index)
+    except Exception as e:
+        print(f"Warning: page-verifier fallback failed: {e}. Failing closed.")
+        return None
+
+    if not page_number:
+        return None
+
+    if verbose:
+        print(f"  LLM located pin-assignment page: {page_number}")
+
+    candidate = PageCandidate(
+        page_number=page_number,
+        confidence_score=5,
+        reasons=["LLM fallback located pin-assignment page"],
+    )
+    return [candidate]
+
+
+def detect_relevant_pages(
+    input_path: str,
+    min_confidence: int,
+    verbose: bool = False,
+    model: Optional[str] = None,
+):
     """
     Detect pages in PDF that contain pinout information.
 
@@ -150,6 +217,8 @@ def detect_relevant_pages(input_path: str, min_confidence: int, verbose: bool = 
         input_path: Path to PDF file
         min_confidence: Minimum confidence score
         verbose: Enable verbose output
+        model: LLM model name for the page-verifier fallback (when the
+            deterministic detector finds nothing above the threshold)
 
     Returns:
         List of PageCandidate objects
@@ -166,9 +235,16 @@ def detect_relevant_pages(input_path: str, min_confidence: int, verbose: bool = 
             print(f"  - Page {c.page_number} (confidence: {c.confidence_score}): {', '.join(c.reasons)}")
 
     if not candidates:
-        print("Error: No relevant pages found in datasheet")
-        print("Try lowering --min-confidence")
-        sys.exit(EXIT_DOMAIN_FAILURE)
+        # No page cleared the confidence threshold. Before giving up, ask the
+        # LLM to locate the pin-assignment page over a compact heading index
+        # (handles deep pages in long documents). Fail closed if it can't.
+        if model is not None:
+            candidates = _verify_pin_page_fallback(input_path, model, verbose)
+
+        if not candidates:
+            print("Error: No relevant pages found in datasheet")
+            print("Try lowering --min-confidence")
+            sys.exit(EXIT_DOMAIN_FAILURE)
 
     return candidates
 
@@ -987,7 +1063,7 @@ def process_datasheet(
     try:
         # Step 1: Detect relevant pages with dynamic min_confidence
         adjusted_min_confidence = get_dynamic_min_confidence(input_path, min_confidence, verbose)
-        candidates = detect_relevant_pages(str(input_path), adjusted_min_confidence, verbose)
+        candidates = detect_relevant_pages(str(input_path), adjusted_min_confidence, verbose, model=model)
 
         # Step 2: Extract content
         content = extract_content(str(input_path), candidates, verbose)
@@ -1417,7 +1493,7 @@ def _run_cli():
     if args.both:
         # Run pipeline once, then call both builders
         adjusted_min_confidence = get_dynamic_min_confidence(input_path, args.min_confidence, args.verbose)
-        candidates = detect_relevant_pages(str(input_path), adjusted_min_confidence, args.verbose)
+        candidates = detect_relevant_pages(str(input_path), adjusted_min_confidence, args.verbose, model=args.model)
         content = extract_content(str(input_path), candidates, args.verbose)
 
         resolved_part_number = args.part_number or infer_part_number_hint(
