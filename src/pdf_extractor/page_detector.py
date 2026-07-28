@@ -311,19 +311,34 @@ class PageDetector:
 
         return 0, ""
 
+    # Above this page count a document is "long" (multi-chapter manuals, SiP
+    # references). In those the pin-assignment table can legitimately sit on a
+    # deep page (p385 of 400), so the early-page position bonus is dropped: it
+    # would otherwise let cover/TOC/front-matter pages out-score the real deep
+    # pin page purely on position. Content signals (heading/table/keywords)
+    # decide the winner instead.
+    LONG_DOCUMENT_PAGE_COUNT = 50
+
     def _check_page_position(self, page_num: int) -> Tuple[int, str]:
         """Check if page is in a plausible pinout position.
 
-        Long datasheets routinely put the pin table right after the cover
-        (page 3 of 40+ is common), so only the cover page and the legal/
-        ordering tail are treated as unlikely. Position carries no signal
-        at all in very short sheets.
+        Short/medium datasheets routinely put the pin table right after the
+        cover (page 3 of 40+ is common), so only the cover page and the legal/
+        ordering tail are treated as unlikely and everything in between earns a
+        small position bonus. Position carries no signal at all in very short
+        sheets, and — crucially — none in long documents, where a deep page can
+        hold the real pin table and the early bonus would suppress it.
         """
         if self.total_pages == 0:
             return 0, ""
 
         if self.total_pages <= 4:
             return 1, "Short datasheet: any page is a plausible pinout position"
+
+        # Long document: position is neutral (no early bonus), so a deep
+        # pin-assignment page is not out-scored by early front matter.
+        if self.total_pages > self.LONG_DOCUMENT_PAGE_COUNT:
+            return 0, ""
 
         position_pct = page_num / self.total_pages
 

@@ -3456,3 +3456,236 @@ def test_process_both_non_module_builds_footprint(monkeypatch, tmp_path):
     ok = m.process_datasheet_both(pd, tmp_path / "out")
     assert ok is True
     assert called["footprint"] is True, "a normal chip must still build a footprint"
+
+
+# ===========================================================================
+# FIX 9: DEEP / LONG-DOCUMENT PAGE DETECTION + PAGEVERIFIER FALLBACK
+# ===========================================================================
+
+from src.pdf_extractor.page_detector import PageDetector, PageCandidate
+from src.llm.page_verifier import PageVerifier
+
+
+def _detector_with_total(total_pages):
+    """A PageDetector whose PDF is not opened, with a fixed page count.
+
+    Bypasses __init__ (which would open a real PDF) so the pure scoring
+    rules can be exercised on synthetic inputs.
+    """
+    det = PageDetector.__new__(PageDetector)
+    det.total_pages = total_pages
+    det.pdf = None
+    return det
+
+
+def test_position_neutral_in_long_document():
+    """In a long document the early-page bonus is dropped, so a deep page is
+    not out-scored by front matter purely on position."""
+    det = _detector_with_total(400)
+    early = det._check_page_position(2)[0]
+    deep = det._check_page_position(385)[0]
+    assert early == 0, "long docs must not reward early pages"
+    assert deep == 0, "deep pages are not penalised relative to early pages"
+    assert early == deep, "position must be neutral across a long document"
+
+
+def test_position_bonus_kept_for_medium_document():
+    """Short/medium datasheets keep the plausible-position bonus (regression)."""
+    det = _detector_with_total(30)
+    # Cover page earns nothing; a mid-document page earns the +1 bonus.
+    assert det._check_page_position(1)[0] == 0
+    assert det._check_page_position(3)[0] == 1
+    # Very short sheets: any page is plausible.
+    short = _detector_with_total(3)
+    assert short._check_page_position(2)[0] == 1
+
+
+def test_deep_pin_page_can_outscore_early_cover_in_long_doc():
+    """Scoring rule: a deep page carrying a pinout heading + keywords out-scores
+    an early cover page in a long document, because position no longer tips the
+    balance toward the front."""
+    det = _detector_with_total(400)
+
+    pin_text = (
+        "Pin Assignments\n"
+        "Pin No. Pin Name Function\n"
+        "1 VDD Power supply input\n"
+        "2 GND Ground reference\n"
+        "3 GPIO0 Digital input/output\n"
+        "4 RESET Reset input enable clock\n"
+    )
+    cover_text = (
+        "Acme Semiconductor\n"
+        "Ultra SiP Reference Manual\n"
+        "Document Rev 1.2\n"
+        "www.example.com\n"
+    )
+
+    def score(text, page_num):
+        total = 0
+        total += det._check_pinout_heading(text)[0]
+        total += det._check_keyword_density(text)[0]
+        total += det._check_page_position(page_num)[0]
+        return total
+
+    deep_score = score(pin_text, 385)
+    cover_score = score(cover_text, 2)
+    assert deep_score > cover_score, (
+        f"deep pin page ({deep_score}) must beat early cover page ({cover_score})"
+    )
+
+
+def test_page_verifier_locate_parses_page_number(monkeypatch):
+    """The fallback returns the LLM-named page when it is in the supplied index."""
+    import src.llm.page_verifier as pv
+    monkeypatch.setattr(
+        pv, "get_completion_from_messages",
+        lambda messages, model=None: "385"
+    )
+    client = MagicMock()
+    client.model = "test-model"
+    verifier = PageVerifier(client)
+    index = [(1, "Cover"), (200, "Registers"), (385, "Pin Assignments")]
+    assert verifier.locate_pin_assignment_page(index) == 385
+
+
+def test_page_verifier_locate_fails_closed_on_none(monkeypatch):
+    """When the LLM cannot locate a page it answers NONE and the fallback
+    returns None (no fabricated page)."""
+    import src.llm.page_verifier as pv
+    monkeypatch.setattr(
+        pv, "get_completion_from_messages",
+        lambda messages, model=None: "NONE - no pinout table present"
+    )
+    client = MagicMock()
+    client.model = "test-model"
+    verifier = PageVerifier(client)
+    index = [(1, "Cover"), (2, "Features")]
+    assert verifier.locate_pin_assignment_page(index) is None
+
+
+def test_page_verifier_locate_rejects_out_of_range(monkeypatch):
+    """A page number the LLM invents that is not in the index is rejected."""
+    import src.llm.page_verifier as pv
+    monkeypatch.setattr(
+        pv, "get_completion_from_messages",
+        lambda messages, model=None: "999"
+    )
+    client = MagicMock()
+    client.model = "test-model"
+    verifier = PageVerifier(client)
+    assert verifier.locate_pin_assignment_page([(1, "Cover"), (2, "Pinout")]) is None
+
+
+def test_page_verifier_locate_fails_closed_on_llm_error(monkeypatch):
+    """Any LLM/transport error fails closed rather than guessing."""
+    import src.llm.page_verifier as pv
+
+    def boom(messages, model=None):
+        raise RuntimeError("endpoint unreachable")
+
+    monkeypatch.setattr(pv, "get_completion_from_messages", boom)
+    client = MagicMock()
+    client.model = "test-model"
+    verifier = PageVerifier(client)
+    assert verifier.locate_pin_assignment_page([(1, "Pinout")]) is None
+
+
+def _patch_empty_detector(monkeypatch):
+    """Make src.main.PageDetector return no candidates without opening a PDF."""
+    import src.main as m
+
+    class FakeDetector:
+        def __init__(self, path):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def detect_relevant_pages(self, min_confidence):
+            return []
+
+    monkeypatch.setattr(m, "PageDetector", FakeDetector)
+    monkeypatch.setattr(m, "LLMClient", lambda **k: object())
+
+
+def test_detect_pages_invokes_fallback_and_uses_located_page(monkeypatch):
+    """When the deterministic detector finds nothing, the PageVerifier fallback
+    is invoked and its located deep page is used."""
+    import src.main as m
+    _patch_empty_detector(monkeypatch)
+    monkeypatch.setattr(
+        m, "_build_page_heading_index",
+        lambda p, **k: [(1, "Cover"), (385, "Pin Assignments")]
+    )
+
+    class FakeVerifier:
+        def __init__(self, client):
+            pass
+
+        def locate_pin_assignment_page(self, index):
+            return 385
+
+    monkeypatch.setattr(m, "PageVerifier", FakeVerifier)
+
+    candidates = m.detect_relevant_pages("dummy.pdf", 4, False, model="test-model")
+    assert len(candidates) == 1
+    assert candidates[0].page_number == 385
+
+
+def test_detect_pages_fallback_fails_closed(monkeypatch):
+    """If the verifier cannot locate a page, the pipeline fails closed
+    (SystemExit / domain failure) rather than fabricating a page."""
+    import src.main as m
+    _patch_empty_detector(monkeypatch)
+    monkeypatch.setattr(
+        m, "_build_page_heading_index",
+        lambda p, **k: [(1, "Cover"), (2, "Features")]
+    )
+
+    class FakeVerifier:
+        def __init__(self, client):
+            pass
+
+        def locate_pin_assignment_page(self, index):
+            return None
+
+    monkeypatch.setattr(m, "PageVerifier", FakeVerifier)
+
+    with pytest.raises(SystemExit) as exc_info:
+        m.detect_relevant_pages("dummy.pdf", 4, False, model="test-model")
+    assert exc_info.value.code == m.EXIT_DOMAIN_FAILURE
+
+
+def test_detect_pages_no_fallback_when_detector_succeeds(monkeypatch):
+    """Short-datasheet regression: when the detector already surfaces a page,
+    the LLM fallback is never consulted."""
+    import src.main as m
+
+    early = PageCandidate(page_number=3, confidence_score=7, reasons=["heading"])
+
+    class FakeDetector:
+        def __init__(self, path):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def detect_relevant_pages(self, min_confidence):
+            return [early]
+
+    monkeypatch.setattr(m, "PageDetector", FakeDetector)
+
+    def fail_if_called(p, **k):
+        raise AssertionError("fallback must not run when detector succeeds")
+
+    monkeypatch.setattr(m, "_build_page_heading_index", fail_if_called)
+
+    candidates = m.detect_relevant_pages("dummy.pdf", 4, False, model="test-model")
+    assert candidates == [early]

@@ -68,6 +68,95 @@ class PageVerifier:
 
         return verified_candidates
 
+    def locate_pin_assignment_page(self, page_index: List) -> Optional[int]:
+        """Ask the LLM which page holds the pin-assignment table.
+
+        This is the deep-document fallback: when the deterministic detector
+        surfaces no confident candidate, the LLM is shown a compact index of
+        page headings for the whole document and asked to name the single page
+        that carries the pin-assignment / pinout table.
+
+        Args:
+            page_index: list of ``(page_number, heading_text)`` tuples, one per
+                page, where ``page_number`` is 1-indexed. ``heading_text`` is a
+                short snippet (first non-empty line(s) of the page).
+
+        Returns:
+            The 1-indexed page number the LLM identifies, or ``None`` when it
+            cannot confidently locate one. Returning ``None`` lets the caller
+            fail closed rather than fabricate a page.
+        """
+        if not page_index:
+            return None
+
+        valid_pages = {int(pn) for pn, _ in page_index}
+
+        messages = self._build_locate_messages(page_index)
+        try:
+            response = get_completion_from_messages(messages, model=self.model)
+        except Exception as e:
+            # Fail closed on any LLM/transport error: do not guess a page.
+            print(f"Warning: LLM page location failed: {e}. Failing closed.")
+            return None
+
+        return self._parse_locate_response(response, valid_pages)
+
+    def _build_locate_messages(self, page_index: List) -> list:
+        """Build the messages that ask the LLM to locate the pin table."""
+        index_lines = []
+        for page_number, heading in page_index:
+            snippet = " ".join(str(heading or "").split())
+            if len(snippet) > 160:
+                snippet = snippet[:157] + "..."
+            index_lines.append(f"Page {page_number}: {snippet}")
+        index_text = "\n".join(index_lines)
+
+        system_prompt = (
+            "You are locating the page of an electronic component datasheet "
+            "that contains the pin-assignment / pinout table (pin numbers "
+            "mapped to pin names and functions). You are given a compact index "
+            "of page headings for the whole document."
+        )
+
+        user_prompt = f"""Document page index (one line per page):
+{index_text}
+
+Which single page most likely contains the pin-assignment / pinout table
+(pin numbers with their names/functions)?
+
+Answer with ONLY the page number (for example: 385). If none of the pages
+clearly contains a pin-assignment table, answer with exactly NONE."""
+
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+    def _parse_locate_response(self, response: str, valid_pages) -> Optional[int]:
+        """Parse the located page number, failing closed on anything unclear.
+
+        Only a page number that actually appears in the supplied index is
+        accepted; an explicit NONE, an out-of-range number, or an
+        unparseable answer all return ``None``.
+        """
+        if not response:
+            return None
+
+        text = response.strip()
+        if text.upper().startswith("NONE"):
+            return None
+
+        import re as _re
+        match = _re.search(r"\d+", text)
+        if not match:
+            return None
+
+        page_number = int(match.group())
+        if page_number not in valid_pages:
+            return None
+
+        return page_number
+
     def verify_single_page(
         self,
         candidate,
