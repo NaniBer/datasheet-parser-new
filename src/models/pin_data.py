@@ -43,3 +43,4 @@ class PinData:
     ordered_package_type: Optional[str] = None  # Package family printed on the ordered part's row
     extraction_method: str = "Table"  # Table, Diagram, Mixed
     validation_errors: Optional[List[str]] = None  # Reasons output is unvalidated: forced best-effort, or lossy/unverified geometry. Drives the GLB watermark + exit 3.
+    footprint_unsupported_reason: Optional[str] = None  # Set when the part is a module/SiP/grid-array whose footprint we won't build; the pipeline emits schematic-only.

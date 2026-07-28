@@ -3381,3 +3381,78 @@ def test_exit_if_degraded_exits_3_when_reasons_present():
     with pytest.raises(SystemExit) as exc:
         _exit_if_degraded(pd)
     assert exc.value.code == 3
+
+
+# ===========================================================================
+# Fix 4: module / out-of-scope detector. Modules/SiPs/grid-array parts have no
+# chip-style land pattern -> emit schematic only, never a wrong footprint.
+# ===========================================================================
+def test_module_reason_fires_on_castellated():
+    from src.pdf_extractor.module_detector import module_footprint_reason
+    assert module_footprint_reason("The XYZ has castellated pad edges for reflow")
+
+
+def test_module_reason_fires_on_grid_array_family():
+    from src.pdf_extractor.module_detector import module_footprint_reason
+    assert module_footprint_reason("", package_family="LGA")
+    assert module_footprint_reason("", package_family="bga")
+
+
+def test_module_reason_fires_on_title_module_wording():
+    from src.pdf_extractor.module_detector import module_footprint_reason
+    assert module_footprint_reason("ESP32-WROOM Wi-Fi Module\n\nPin definitions ...")
+    assert module_footprint_reason("IKCM IPM intelligent power module\n\n...")
+
+
+def test_module_reason_fires_on_component_name():
+    from src.pdf_extractor.module_detector import module_footprint_reason
+    assert module_footprint_reason("some text", component_name="ESP32-WROOM-32 module")
+
+
+def test_module_reason_none_for_plain_chip():
+    from src.pdf_extractor.module_detector import module_footprint_reason
+    # A normal chip datasheet, no module signals in the title region.
+    text = "LM358 Low-Power Dual Operational Amplifiers. " * 40
+    assert module_footprint_reason(text, component_name="LM358",
+                                   package_family="SOIC") is None
+
+
+def test_process_both_module_emits_schematic_only(monkeypatch, tmp_path):
+    import src.main as m
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    called = {"footprint": False}
+    monkeypatch.setattr(m, "build_schematic_from_pin_data", lambda **k: True)
+
+    def fake_footprint(**k):
+        called["footprint"] = True
+        return True
+    monkeypatch.setattr(m, "build_pcb_2d_schematic", fake_footprint)
+
+    pd = PinData(component_name="MOD",
+                 package=PackageInfo(type="QFN-32", pin_count=32, width=1.0, height=1.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 33)],
+                 footprint_unsupported_reason="castellated module")
+    ok = m.process_datasheet_both(pd, tmp_path / "out")
+    assert ok is True, "schematic-only should count as success"
+    assert called["footprint"] is False, "footprint must NOT be built for a module"
+
+
+def test_process_both_non_module_builds_footprint(monkeypatch, tmp_path):
+    import src.main as m
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    called = {"footprint": False}
+    monkeypatch.setattr(m, "build_schematic_from_pin_data", lambda **k: True)
+
+    def fake_footprint(**k):
+        called["footprint"] = True
+        if k.get("degraded_out") is not None:
+            pass
+        return True
+    monkeypatch.setattr(m, "build_pcb_2d_schematic", fake_footprint)
+
+    pd = PinData(component_name="U",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=1.0, height=1.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)])  # no module flag
+    ok = m.process_datasheet_both(pd, tmp_path / "out")
+    assert ok is True
+    assert called["footprint"] is True, "a normal chip must still build a footprint"
