@@ -114,7 +114,14 @@ NON_DATASHEET_SIGNALS = [
     ("user-guide", [r"user'?s?\s+guide", r"user'?s?\s+manual",
                     r"owner'?s?\s+manual", r"instruction\s+manual"]),
     ("tutorial", [r"tutorial", r"how[-\s]to\s+guide", r"step[-\s]by[-\s]step"]),
-    ("reference-design", [r"reference\s+design", r"design\s+guide"]),
+    # NB: "reference design" was removed as a signal -- vendors (notably TI)
+    # print it as a boilerplate header/navigation link ("Product Folder | Order
+    # Now | ... | Reference Design") on ordinary chip datasheets, so it wrongly
+    # excluded 4 real datasheets (7_TPS2514, 14_TPS23751, 24_UCC24610,
+    # 139_TPS2378). Same header-chrome trap avoided in module_detector. A
+    # genuine reference-design doc that merely runs and refuses is far cheaper
+    # than dropping a real datasheet from scoring. "design guide" is retained.
+    ("reference-design", [r"design\s+guide"]),
     ("reference-manual", [r"reference\s+manual"]),
     ("demo-board", [r"demo(?:nstration)?\s+board", r"demo(?:nstration)?\s+kit",
                     r"evaluation\s+board", r"evaluation\s+kit",
