@@ -126,10 +126,20 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
     """
     Infer a likely part number from extracted datasheet text.
 
-    When a single plausible token is derived from the source filename it is
-    returned unconditionally — the filename is stronger evidence than
-    frequently-repeated internal identifiers (e.g. register bit names).
-    The score-based ranking is used only when the filename yields zero or
+    The filename is a tie-breaker, not an override. A single plausible token
+    derived from the source filename wins when it is *corroborated* by the
+    document text (it occurs at least once in the extracted content) — that is
+    strong, mutually-confirming evidence.
+
+    When that filename token appears NOWHERE in the text, it must not override
+    a strong in-document identifier: a token that clears the score thresholds
+    used below (``best_score >= 3.0`` and separated from the runner-up by at
+    least 0.5) is preferred instead. This makes the result independent of the
+    filename, so byte-identical files under different names resolve to the same
+    part number. The uncorroborated filename token is used only as a last
+    resort, when no in-document identifier is strong enough to trust.
+
+    The score-based ranking decides directly when the filename yields zero or
     multiple candidates.
     """
     stats: Dict[str, Dict[str, int]] = {}
@@ -173,12 +183,6 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
 
     filename_candidates = [token for token, entry in stats.items() if entry["filename_hits"] > 0]
 
-    # A single filename candidate is strong evidence for the part number.
-    # Return it unconditionally — it should not be overridden by frequently-
-    # repeated internal identifiers (e.g. register bit names like "ICES1").
-    if len(filename_candidates) == 1:
-        return filename_candidates[0]
-
     ranked = sorted(
         ((token, _score_token(token, stats)) for token in stats),
         key=lambda item: item[1],
@@ -187,6 +191,31 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
 
     if not ranked:
         return None
+
+    # A single filename token is a tie-breaker, not an override.
+    if len(filename_candidates) == 1:
+        filename_token = filename_candidates[0]
+
+        # Corroborated by the document text -> strong, keep it.
+        if stats[filename_token]["text_hits"] > 0:
+            return filename_token
+
+        # Uncorroborated: the filename claims a part that appears nowhere in the
+        # text. Prefer a strong in-document identifier if one clears the score
+        # thresholds, so the result stays independent of the filename. Only the
+        # tokens that actually occur in the text are eligible here.
+        in_doc_ranked = [
+            (token, score) for token, score in ranked if stats[token]["text_hits"] > 0
+        ]
+        if in_doc_ranked:
+            best_token, best_score = in_doc_ranked[0]
+            second_score = in_doc_ranked[1][1] if len(in_doc_ranked) > 1 else 0.0
+            if best_score >= 3.0 and (not second_score or (best_score - second_score) >= 0.5):
+                return best_token
+
+        # No trustworthy in-document identifier -> fall back to the filename
+        # token rather than making a brittle guess.
+        return filename_token
 
     best_token, best_score = ranked[0]
     second_score = ranked[1][1] if len(ranked) > 1 else 0.0
