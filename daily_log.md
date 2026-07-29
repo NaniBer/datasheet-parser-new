@@ -853,3 +853,64 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 
 ### Next
 - [ ] Execute P0 batch, then P1.1 → P1.2 → P1.3 with corpus re-runs after each
+
+---
+
+## 2026-07-29 — Fail-open flip, full ground-truth answer key, first accuracy number + GLB hierarchy audit
+
+### What We Did
+- ✅ **Fail-open flip (PR #13, merged to main).** Inverted the validation policy: gates
+  now emit a watermarked best-effort GLB (exit 3) instead of refusing (exit 1) when pin
+  data exists. exit 1 is now reserved for genuinely no-extractable-pins inputs.
+  - Added `--strict` flag (default off) + `_resolve_best_effort(force, strict) = force or not strict`
+    in `src/main.py`; replaced all 4 `args.force_best_effort` call sites with the effective value.
+  - **GLB coverage jumped 38/122 (31%) → 116/127 (91%).** Full suite green (~241 tests).
+- ✅ **PR cleanup.** Determined only #12 (reference-design pattern removal) needed merging;
+  closed stale #5/#3/#2 (would have reverted Fixes 4/5/9/10/11). Merged #12. main now has
+  all fixes + fail-open.
+- ✅ **Built a complete, independent ground-truth answer key** (5 parallel worktree subagents).
+  `EXPECTED_PINS` in `tools/run_full_flow_eval.py` grew 20 → 174 entries (27 pdfs/ fixtures +
+  147 corpus parts; 144 high-conf + 3 med). Method: derive true pin count from the ORDERED
+  part's package (suffix + ordering table) + printed "N-lead" wording — deliberately NOT by
+  counting pinout rows (keeps it independent of the parser). Zero conflicts with all 30
+  earlier hand-verified values. Committed on branch `ground-truth-answer-key` → **PR #14 (open)**.
+- ✅ **First real accuracy measurement:** 78 correct / 33 wrong / 16 no-GLB →
+  **70% (78/111) among gradable GLBs, 61% (78/127) of all scored.** Coverage is great but
+  ~30% of produced GLBs have the wrong pin count. Wrote `docs/pin-count-accuracy-bugs.md`
+  (33 defects in 5 classes A–E).
+- ✅ **GLB hierarchy audit (today's session close).** Ran the repo's own
+  `validate_pcb_footprint_hierarchy` over every produced GLB, ignoring pin count (graded
+  separately) to isolate tree SHAPE:
+  - Footprint GLBs: **105/105 PASS** (68 TH / 37 SMD, correct per-pin node sets, sequential legs).
+  - Schematic GLBs: **116/116 PASS** structural (all pins `[leg, pinPoint, text, boundingBox, pinName]`).
+  - 116 schematics vs 105 footprints is **by design**: `flag_module_footprint` suppresses the
+    footprint for 11 module/grid-array parts (ESP32, MKL, MAX-M10S, UC200, LSM6DSO32…) because
+    a chip-package footprint built from a module pin table is silent-wrong.
+
+### Issues Encountered
+- **Spurious bg "exit 0":** early background full-suite runs reported success with empty output;
+  synchronous re-run revealed `test_cli_exit_code_contract` actually failed (foo.pdf now exit 3,
+  not 1). Fixed the test to reflect the new contract. Lesson: verify by real re-run, not bg rc.
+- **AVR128 subagent stall** during corpus run (child 0% CPU 8+ min, hung LLM call). Killed just
+  the child → parent harness auto-advanced (recorded exit -15). Built a watchdog to auto-kill
+  stalls (0% CPU >180s). PC also slept mid-run; process resumed. 5 network-flaky parts recovered.
+- **git cherry false-positives:** flagged stale PR branches as "not in main" though content was
+  already merged under different SHAs; confirmed via actual diffs + grep of main.
+- **Data-quality bug:** `52_PIC16F1512` corpus PDF is the WRONG document (an LCD-clock demo guide).
+
+### What We Learned
+- Coverage and accuracy are separate axes: fail-open fixed coverage (31→91%) but exposed that
+  ~30% of GLBs carry the wrong pin count. Hierarchy is a THIRD axis — and it's 100% clean, so
+  a wrong part (e.g. INA228 with 16 legs instead of 10) is still a well-formed 16-leg tree.
+- The 33 accuracy defects cluster into systematic bugs, not noise: Class B small-IC over-count
+  (10→16 on INA228/238, L4984D, L6564T — likely ONE root cause), D wrong-variant, C diode/tab
+  off-by-one, A big diagram-only MCUs (need vision path), E modules/near-miss.
+- Projected trajectory: B → ~79%, +C+D → ~86%, +A(vision) → ~93%+.
+
+### Tomorrow's Plan
+- [ ] Merge PR #14 (ground-truth answer key).
+- [ ] **Class B** — diagnose the `10→16` small-IC over-count (highest-volume, likely one root
+      cause, low risk); come back with a diagnosis + plan before touching parser src/.
+- [ ] Then Class D (ordered-suffix → variant), Class C (tab/pad not a signal pin).
+- [ ] Fix corpus data bug: replace the wrong `52_PIC16F1512` PDF.
+- [ ] Class A vision path (Fix 8 / Option D) — also unblocks the ~11 no-GLB parts.
