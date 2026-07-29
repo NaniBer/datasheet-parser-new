@@ -90,11 +90,21 @@ def test_tutorial_is_flagged():
     assert flag["doc_type"] == "tutorial"
 
 
-def test_reference_design_is_flagged():
-    text = "TIDA-01234 Reference Design\nHigh-efficiency power supply\n"
+def test_design_guide_is_flagged():
+    text = "ACME1234 Design Guide\nHow to lay out the power stage\n"
     flag = harness.classify_non_datasheet(text)
     assert flag is not None
     assert flag["doc_type"] == "reference-design"
+
+
+def test_reference_design_header_chrome_is_not_flagged():
+    # TI stamps "Reference Design" as a boilerplate nav link on real datasheets.
+    # It must NOT trigger a non-datasheet exclusion (regression: 4 real TI
+    # datasheets were wrongly dropped by this exact signal).
+    text = ("Product Folder Order Now Technical Documents Tools & Software "
+            "Support & Community Reference Design\nTPS2514 USB Charging Port "
+            "Controller\n")
+    assert harness.classify_non_datasheet(text) is None
 
 
 def test_demo_board_user_guide_is_flagged():
