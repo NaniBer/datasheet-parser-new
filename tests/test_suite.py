@@ -2651,19 +2651,30 @@ def test_shared_datasheet_selects_device_column_by_part_number():
 
 
 def test_cli_exit_code_contract(monkeypatch, tmp_path):
-    # Exit-code contract: 0 = artifacts produced, 1 = domain failure,
-    # 2 = internal error (bug). Automation and the future service wrapper
-    # depend on these being distinguishable.
+    # Exit-code contract under the fail-open default:
+    #   0 = validated artifacts, 3 = best-effort artifacts produced,
+    #   1 = domain failure (no artifacts), 2 = internal error (bug).
+    # Automation and the future service wrapper depend on these being
+    # distinguishable.
     import src.main as main_mod
 
-    # Domain failure: nonexistent input file -> 1
+    # Domain failure: nonexistent input file -> 1 (nothing to build from).
     monkeypatch.setattr("sys.argv", ["prog", str(tmp_path / "missing.pdf"), "out.glb"])
     with pytest.raises(SystemExit) as exc:
         main_mod.main()
     assert exc.value.code == main_mod.EXIT_DOMAIN_FAILURE
 
-    # Domain failure: junk PDF with no detectable pinout pages -> 1
+    # Fail-open: a datasheet whose pins fail a validation gate (foo.pdf is a
+    # diode whose 'Anode'/'Cathode' names aren't groundable in the text) still
+    # emits a watermarked best-effort GLB -> 3, instead of refusing.
     monkeypatch.setattr("sys.argv", ["prog", "pdfs/foo.pdf", str(tmp_path / "foo.glb")])
+    with pytest.raises(SystemExit) as exc:
+        main_mod.main()
+    assert exc.value.code == main_mod.EXIT_DEGRADED
+
+    # --strict restores fail-closed: the same validation failure -> domain
+    # failure (1), no artifacts.
+    monkeypatch.setattr("sys.argv", ["prog", "pdfs/foo.pdf", str(tmp_path / "foo_strict.glb"), "--strict"])
     with pytest.raises(SystemExit) as exc:
         main_mod.main()
     assert exc.value.code == main_mod.EXIT_DOMAIN_FAILURE
@@ -3410,6 +3421,34 @@ def test_record_degraded_empty_is_noop():
     _record_degraded(pd, [])
     # A cleanly-grounded part must stay non-degraded (exit 0).
     assert not pd.validation_errors
+
+
+def test_resolve_best_effort_fail_open_default():
+    # Fail-open flip (Option C): best-effort is ON by default so the product
+    # always emits a GLB when it has pin data. --strict is the only opt-out.
+    from src.main import _resolve_best_effort
+    # Default invocation (no flags): fail-open.
+    assert _resolve_best_effort(force_best_effort=False, strict=False) is True
+    # --strict restores fail-closed.
+    assert _resolve_best_effort(force_best_effort=False, strict=True) is False
+    # --force-best-effort (legacy) still forces best-effort even under --strict.
+    assert _resolve_best_effort(force_best_effort=True, strict=True) is True
+    assert _resolve_best_effort(force_best_effort=True, strict=False) is True
+
+
+def test_strict_flag_defaults_off():
+    # The CLI must default to fail-open: --strict present but off unless passed.
+    import src.main as main_mod
+    monkeypatch_argv = ["prog", "in.pdf", "out.glb"]
+    import sys
+    old = sys.argv
+    try:
+        sys.argv = monkeypatch_argv
+        args = main_mod.parse_arguments()
+    finally:
+        sys.argv = old
+    assert args.strict is False
+    assert main_mod._resolve_best_effort(args.force_best_effort, args.strict) is True
 
 
 def test_exit_if_degraded_exits_3_when_reasons_present():

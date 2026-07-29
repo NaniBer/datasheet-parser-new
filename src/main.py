@@ -39,15 +39,24 @@ from .exceptions import (
 # ---------------------------------------------------------------------------
 # Exit-code contract (kept stable for callers and automation):
 #   0 — all requested artifacts were produced and validated
-#   1 — domain failure: unsupported/unvalidatable input, fail-closed refusal
+#   1 — domain failure: no GLB could be produced at all — there was no usable
+#       pin data to build from (no relevant pages, or no extractable text /
+#       tables). Reachable only for genuinely unparseable inputs; validation
+#       failures no longer refuse here (see the fail-open default below).
 #   2 — internal error: an unexpected exception (a bug), traceback printed
-#   3 — degraded: artifacts were produced but are UNVALIDATED. Either
-#       --force-best-effort accepted invalid data, or the output is
-#       best-effort by construction (a lossy geometry approximation, or a
-#       footprint built on display-proportion geometry with no real dims).
-#       The GLB carries validated=false; this exit code lets callers that
-#       only read the status distinguish a trusted result from a best-effort
-#       one instead of seeing 0.
+#   3 — degraded: artifacts were produced but are UNVALIDATED. This is the
+#       fail-open default's common outcome — when extracted data fails a
+#       validation gate (ungrounded pin names, unknown package geometry,
+#       ordering/variant mismatch), or the output is best-effort by
+#       construction (a lossy geometry approximation, or a footprint built on
+#       display-proportion geometry with no real dims), we still emit the GLB
+#       rather than refuse. The GLB carries validated=false; this exit code
+#       lets callers that only read the status distinguish a trusted result
+#       from a best-effort one instead of seeing 0.
+#
+# Fail-open is the default so the product always emits a GLB when it has any
+# pin data to build from. Pass --strict to restore fail-closed behaviour
+# (validation gates raise and the run exits 1 instead of emitting best-effort).
 # ---------------------------------------------------------------------------
 EXIT_OK = 0
 EXIT_DOMAIN_FAILURE = 1
@@ -68,6 +77,17 @@ def _record_degraded(pin_data, reasons) -> None:
         if reason not in existing:
             existing.append(reason)
     pin_data.validation_errors = existing
+
+
+def _resolve_best_effort(force_best_effort: bool, strict: bool) -> bool:
+    """Fail-open policy: best-effort is on unless --strict is passed.
+
+    The product must emit a GLB whenever it has pin data to build from, so
+    validation gates default to producing a watermarked best-effort result
+    (exit 3) instead of refusing (exit 1). --strict restores fail-closed
+    behaviour; --force-best-effort is the (now redundant) legacy opt-in.
+    """
+    return force_best_effort or not strict
 
 
 def _exit_if_degraded(pin_data) -> None:
@@ -1437,10 +1457,18 @@ Exit codes:
     parser.add_argument(
         "--force-best-effort",
         action="store_true",
-        help="Emit output even when extracted pin data fails validation. "
-             "The GLB is watermarked with validated=false and the validation "
-             "errors in its scene extras. Without this flag, validation "
-             "failures abort the run."
+        help="Deprecated / redundant: best-effort is now the default. Emit "
+             "output even when extracted pin data fails validation. The GLB is "
+             "watermarked with validated=false and the validation errors in "
+             "its scene extras. Kept for back-compat; use --strict to opt out."
+    )
+
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail closed: abort the run (exit 1) when extracted pin data "
+             "fails a validation gate, instead of emitting a watermarked "
+             "best-effort GLB. Restores the pre-fail-open behaviour."
     )
 
     parser.add_argument(
@@ -1476,6 +1504,12 @@ def main():
 def _run_cli():
     args = parse_arguments()
 
+    # Fail-open by default: validation gates emit a watermarked best-effort GLB
+    # (exit 3) rather than refusing (exit 1), so the product always produces a
+    # GLB when it has any pin data. --strict restores fail-closed behaviour;
+    # --force-best-effort is the (now redundant) legacy opt-in.
+    effective_best_effort = _resolve_best_effort(args.force_best_effort, args.strict)
+
     # Mutual exclusion: --both and --pcb-2d cannot be used together
     if args.both and args.pcb_2d:
         print("Error: --both and --pcb-2d are mutually exclusive. "
@@ -1504,7 +1538,7 @@ def _run_cli():
             pin_data = extract_pin_data(
                 content, args.model, args.verbose,
                 part_number=resolved_part_number,
-                force_best_effort=args.force_best_effort,
+                force_best_effort=effective_best_effort,
             )
             # Ground the ordered variant in the datasheet's ordering table
             # (also applied in single-output mode via process_datasheet).
@@ -1514,7 +1548,7 @@ def _run_cli():
                 resolved_part_number,
                 args.model,
                 verbose=args.verbose,
-                force_best_effort=args.force_best_effort,
+                force_best_effort=effective_best_effort,
             )
             # Modules/SiPs/grid-array parts -> schematic only (no chip footprint).
             flag_module_footprint(pin_data, input_path, verbose=args.verbose)
@@ -1529,7 +1563,7 @@ def _run_cli():
                 pin_data,
                 part_number=resolved_part_number,
                 package_index=args.package_index,
-                force_best_effort=args.force_best_effort,
+                force_best_effort=effective_best_effort,
             )
         except SchematicGenerationError as e:
             print(f"Error: {e}")
@@ -1596,7 +1630,7 @@ def _run_cli():
             min_confidence=args.min_confidence,
             verbose=args.verbose,
             package_index=args.package_index,
-            force_best_effort=args.force_best_effort,
+            force_best_effort=effective_best_effort,
         )
 
 
