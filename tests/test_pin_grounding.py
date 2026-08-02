@@ -108,9 +108,15 @@ def test_drop_never_removes_ungrounded_signal_pins():
     assert [p["number"] for p in pin_data.packages[0]["pins"]] == list(range(1, 17))
 
 
-def test_drop_removes_only_ungrounded_nc_from_noisy_index():
-    # A noisy index (spurious numbers from spec/register tables) must not drop
-    # real signals; only the ungrounded NC padding goes.
+def test_noisy_high_index_number_suppresses_trailing_nc_drop():
+    # Intentional safety tradeoff: we only drop NC padding numbered ABOVE
+    # max(index). A spurious HIGH number (600) from a spec/register table
+    # inflates max(index) to 600, so the NC@11-14 padding is no longer past the
+    # captured range and is therefore NOT dropped. We deliberately accept
+    # MISSING a fabrication here rather than risk dropping a real pin: NC pins
+    # at or below max(index) may be genuine pins the parser simply failed to
+    # capture. (Previously this test dropped 11-14; the rule was tightened to
+    # only trailing padding beyond the real pin range.)
     pins = [{"number": n, "name": f"IO{n}", "function": None} for n in range(1, 11)]
     pins += [{"number": n, "name": "NC", "function": "none"} for n in range(11, 15)]
     pin_data = PinData(
@@ -119,14 +125,41 @@ def test_drop_removes_only_ungrounded_nc_from_noisy_index():
     )
     index = {n: set() for n in range(1, 11)}
     index[40] = set()   # spec-table noise
-    index[600] = set()  # spec-table noise
+    index[600] = set()  # spec-table noise inflates max(index) to 600
 
     dropped = drop_ungrounded_pins(pin_data, index)
 
-    assert dropped == 4
+    assert dropped == 0
     package = pin_data.packages[0]
-    assert package["pin_count"] == 10
-    assert [p["number"] for p in package["pins"]] == list(range(1, 11))
+    assert package["pin_count"] == 14
+    assert [p["number"] for p in package["pins"]] == list(range(1, 15))
+
+
+def test_drop_keeps_nc_inside_incomplete_index_range():
+    # Incomplete-index regression (L6564T-class): the parser captured only the
+    # middle of the pin table (signals 3-8), so the index is {3..8} with
+    # max(index)=8. NC pins INSIDE that range (1, 2) may be real pins the parser
+    # missed, so they must be KEPT; only the trailing NC padding numbered above
+    # max(index) (9-12) is confidently fabricated and dropped.
+    pins = [{"number": 1, "name": "NC", "function": "none"},
+            {"number": 2, "name": "NC", "function": "none"}]
+    pins += [{"number": n, "name": f"IO{n}", "function": None} for n in range(3, 9)]
+    pins += [{"number": n, "name": "NC", "function": "none"} for n in range(9, 13)]
+    pin_data = PinData(
+        component_name="INCOMPLETE-INDEX",
+        packages=[{"type": "SOIC-12", "pin_count": 12, "pins": pins}],
+    )
+    index = {n: set() for n in range(3, 9)}  # only 3-8 captured, max = 8
+
+    dropped = drop_ungrounded_pins(pin_data, index)
+
+    assert dropped == 4  # only 9, 10, 11, 12
+    package = pin_data.packages[0]
+    assert package["pin_count"] == 8
+    assert [p["number"] for p in package["pins"]] == [1, 2, 3, 4, 5, 6, 7, 8]
+    # The NC pins inside the incomplete range survive.
+    kept_nc = [p["number"] for p in package["pins"] if p["name"] == "NC"]
+    assert kept_nc == [1, 2]
 
 
 # ---------------------------------------------------------------------------

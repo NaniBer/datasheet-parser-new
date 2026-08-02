@@ -111,13 +111,29 @@ def _resuffix_type(type_str: Optional[str], new_count: int) -> Optional[str]:
     return type_str
 
 
-def _is_droppable(number, name, index: Dict[int, Set[str]]) -> bool:
-    """A pin is droppable only when it is a no-connect AND its number appears
-    in no parsed table row. Real signal pins are never droppable."""
-    return _is_no_connect(name) and number not in index
+def _is_droppable(number, name, index: Dict[int, Set[str]], index_max: int) -> bool:
+    """A pin is droppable only when it is a no-connect, its number appears in no
+    parsed table row, AND its number is GREATER THAN the highest number the
+    table parser captured (`index_max`) - i.e. genuine TRAILING padding beyond
+    the real table's range.
+
+    NC pins numbered at or below `index_max` are kept: when the parser captures
+    only PART of a pin table, the index is incomplete and a real NC pin inside
+    the true range can be absent from it. Only padding past the last captured
+    number is confidently fabricated. Real signal pins are never droppable, and
+    a non-integer/None number is never droppable.
+    """
+    return (
+        _is_no_connect(name)
+        and number not in index
+        and isinstance(number, int)
+        and number > index_max
+    )
 
 
-def _drop_from_dict_package(package: dict, index: Dict[int, Set[str]]) -> int:
+def _drop_from_dict_package(
+    package: dict, index: Dict[int, Set[str]], index_max: int
+) -> int:
     """Drop fabricated no-connect pins from a single multi-package dict in
     place. Returns the number of pins dropped."""
     pins = package.get("pins")
@@ -129,7 +145,11 @@ def _drop_from_dict_package(package: dict, index: Dict[int, Set[str]]) -> int:
     if not any(pin.get("number") in index for pin in pins):
         return 0
 
-    kept = [pin for pin in pins if not _is_droppable(pin.get("number"), pin.get("name"), index)]
+    kept = [
+        pin
+        for pin in pins
+        if not _is_droppable(pin.get("number"), pin.get("name"), index, index_max)
+    ]
     dropped = len(pins) - len(kept)
     if dropped == 0:
         return 0
@@ -140,7 +160,7 @@ def _drop_from_dict_package(package: dict, index: Dict[int, Set[str]]) -> int:
     return dropped
 
 
-def _grounded_pin_list(pins: List, index: Dict[int, Set[str]]):
+def _grounded_pin_list(pins: List, index: Dict[int, Set[str]], index_max: int):
     """Returns the trimmed pin list and drop count for a legacy `Pin` dataclass
     list, or (None, 0) when nothing should change."""
     if not pins:
@@ -149,7 +169,11 @@ def _grounded_pin_list(pins: List, index: Dict[int, Set[str]]):
     if not any(pin.number in index for pin in pins):
         return None, 0
 
-    kept = [pin for pin in pins if not _is_droppable(pin.number, pin.name, index)]
+    kept = [
+        pin
+        for pin in pins
+        if not _is_droppable(pin.number, pin.name, index, index_max)
+    ]
     dropped = len(pins) - len(kept)
     if dropped == 0:
         return None, 0
@@ -169,10 +193,15 @@ def drop_ungrounded_pins(pin_data, index: Dict[int, Set[str]]) -> int:
       - Empty `index` -> do nothing.
       - Only no-connect pins are ever dropped; a real signal pin is never
         removed, no matter how noisy the index is.
+      - Only TRAILING no-connect pins numbered past `max(index)` are dropped;
+        an NC pin inside the captured range is kept in case the parser only
+        grabbed part of the table.
       - A package whose pins are entirely ungrounded is skipped.
     """
     if not index:
         return 0
+
+    index_max = max(index)
 
     total_dropped = 0
 
@@ -181,11 +210,11 @@ def drop_ungrounded_pins(pin_data, index: Dict[int, Set[str]]) -> int:
         for package in packages:
             if not isinstance(package, dict):
                 continue
-            total_dropped += _drop_from_dict_package(package, index)
+            total_dropped += _drop_from_dict_package(package, index, index_max)
 
     pins = getattr(pin_data, "pins", None)
     if pins:
-        kept, dropped = _grounded_pin_list(pins, index)
+        kept, dropped = _grounded_pin_list(pins, index, index_max)
         if kept is not None:
             pin_data.pins = kept
             package_info = getattr(pin_data, "package", None)
