@@ -17,6 +17,7 @@ from typing import List, Optional, Tuple
 from .pdf_extractor import PageDetector, PageCandidate, ContentExtractor
 from .pdf_extractor import infer_part_number_hint
 from .pdf_extractor.deterministic_table_parser import parse_pin_data_from_tables
+from .pdf_extractor.pin_grounding import build_pin_number_index, drop_ungrounded_pins
 from .pdf_extractor.extraction_validator import validate_pin_data_extraction
 from .llm import LLMClient, PageVerifier
 from .llm.image_ocr_client import ImageOCRClient
@@ -360,6 +361,10 @@ def extract_pin_data(
             print(f"Using mixed mode (tables + diagrams)")
 
     grounding_text = _grounding_source_text(content)
+    # Ground truth for pin NUMBERS: the numbers the datasheet's own pin-table
+    # rows actually print. Used below to drop LLM-fabricated pins (e.g. NC
+    # padding numbered past the real count) whose numbers appear in no table.
+    pin_number_index = build_pin_number_index(content.tables)
 
     deterministic_pin_data = parse_pin_data_from_tables(content, part_number=part_number)
     if deterministic_pin_data is not None:
@@ -427,6 +432,17 @@ def extract_pin_data(
         # Normalize before validation so the checks reflect what the rest of the
         # pipeline will actually use.
         pin_data = normalize_package(pin_data, verbose=False)
+
+        # Drop LLM-fabricated pins whose numbers appear in no datasheet pin
+        # table (e.g. NC padding numbered past the real count). No-op when
+        # there is no parseable table to ground against.
+        dropped = drop_ungrounded_pins(pin_data, pin_number_index)
+        if dropped:
+            print(
+                f"Note: dropped {dropped} pin(s) whose numbers are absent from "
+                f"the datasheet pin table (fabricated/ungrounded)."
+            )
+
         last_pin_data = pin_data
 
         validation = validate_pin_data_extraction(
