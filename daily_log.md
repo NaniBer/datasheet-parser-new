@@ -914,3 +914,58 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] Then Class D (ordered-suffix → variant), Class C (tab/pad not a signal pin).
 - [ ] Fix corpus data bug: replace the wrong `52_PIC16F1512` PDF.
 - [ ] Class A vision path (Fix 8 / Option D) — also unblocks the ~11 no-GLB parts.
+
+## 2026-08-02 — Two pin-count accuracy fixes (NC-padding trim + revision-history TOC) → PR #15
+
+### What We Did
+- ✅ **Corpus re-run diff (07-30 → 07-31): 75 → 81 PASS (+6), but mostly NOISE.**
+  Only 18 of 81 passes are fully validated; the other 63 are correct-count-but-watermarked
+  (fail-open). 12 parts flipped, in BOTH directions — the signature of LLM run-to-run variance,
+  not a code effect. Lesson: **a single corpus run's score can't confirm a fix** (±6 noise ≈ the
+  "gain"). Trust deterministic unit + end-to-end tests, not one run.
+- ✅ **Investigated the 3 PASS→FAIL regressions by re-running each 3×.** Result was
+  DETERMINISTIC, not noise: `TPS51100` → 20 (should be 10) ×3, `MCP101-460` → 8 (should be 3) ×3,
+  `NCP5623` → 12 (correct) ×3. So NCP5623 was the noisy one (now fine); the other two are real,
+  repeatable bugs. Corrected my earlier "it's all noise" claim.
+- ✅ **Root-caused both real failures (systematic-debugging) — THREE different causes, not one:**
+  - **TPS51100** — the system *had the right answer and threw it away*. Deterministic table parser
+    returned `None` (pinout filter stripped `MSOP`/`HVSSOP` so `_infer_family` failed; also its
+    pin-label regex caps names at 6 chars, dropping 7-char `VDDQSNS`), so it fell to the LLM. The
+    LLM read the 10 real pins correctly, then **fabricated 10 `NC` pins (11-20)** and invented a
+    `QFN-20`. The grounding gate missed it because `NC` appears in the text. The ordering table
+    correctly grounded `HVSSOP, 10 pins` and reconciliation DETECTED the 20≠10 mismatch — but
+    fail-open shipped the wrong 20-pin model anyway.
+  - **MCP101-460** — **unreadable PDF**: both pdfplumber AND PyMuPDF return garbage (embedded
+    fonts have no Unicode/ToUnicode map). The consistent "8" is a guess off unreadable input, not
+    a real read. Separate, harder track (needs OCR/vision fallback or garbled-text refusal).
+  - **NCP5623** — genuine run-to-run noise; no action.
+- ✅ **Fixed TPS51100 (defense-in-depth at the reconciliation layer), `src/main.py`.**
+  `_reconcile_ordered_nc_padding`: when the ordering table grounds a smaller authoritative pin
+  count and the *excess* pins are all NC, drop the surplus padding (highest-numbered NC first) to
+  match ground truth; also re-suffix the type (`QFN-20`→`QFN-10`). Conservative — only removes
+  no-connect pins, only when they reconcile EXACTLY; real signal pins still fail closed. Wired
+  into `_enforce_ordered_pin_count`. **General, not corpus-tuned** (trusts the datasheet's own
+  ordering table; NC-padding is a common LLM fabrication mode).
+- ✅ **Also landed the earlier SN6505A page-detector fix** (`page_detector.py`): revision-history
+  dot-leader lines no longer trip the TOC veto that stole the real "Pin Configuration" heading
+  bonus. Only an explicit "Table of Contents" title page is vetoed now.
+- ✅ **Verified:** 3 new regression tests (NC-trim + guard against trimming real pins + revision-
+  history heading bonus) RED→GREEN; full suite green; **end-to-end** TPS51100 through the real
+  ordering-table grounding trims 20 → 10 correct pins (all NC padding removed).
+- ✅ **Committed `c09c40a` on `fix/pin-count-nc-padding-and-revision-toc`; opened PR #15 → main.**
+  main untouched, still in sync with origin.
+
+### What We Learned
+- **Result: TPS51100 goes FAIL → PASS-degraded** — correct 10-pin count, but still watermarked
+  because the LLM's package *shape* (QFN vs real HVSSOP/SOIC) is wrong. Geometry family was
+  deliberately NOT faked; turning degraded→validated (family→geometry) is a separate step.
+- **The dominant refusal/accuracy story is confidence, not coverage:** only 18/127 come out fully
+  validated. Many "passes" are correct-but-unverified because the system detects its own error
+  (ordering-table reconciliation) but fail-open ships it anyway. Acting on that ground truth
+  (like this NC-trim) is the lever to convert degraded → correct.
+
+### Tomorrow's / Next Plan
+- [ ] Get PR #15 reviewed/merged.
+- [ ] TPS51100 family→geometry (QFN→HVSSOP) to move it from degraded → validated.
+- [ ] MCP101 broken-font track: detect garbled text (both extractors fail) → OCR/vision or clean refusal.
+- [ ] Consider pinning extraction to temperature 0 so before/after corpus diffs reflect code, not noise.
