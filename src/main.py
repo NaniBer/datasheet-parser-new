@@ -9,8 +9,9 @@ Refactored into smaller, focused functions for better maintainability.
 import sys
 import argparse
 import os
+import re
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # Import project modules
 from .pdf_extractor import PageDetector, PageCandidate, ContentExtractor
@@ -853,6 +854,87 @@ def _extracted_pin_counts(pin_data: PinData) -> List[int]:
     return counts
 
 
+def _is_nc_pin_entry(name) -> bool:
+    """True for a no-connect pin label (NC / DNC / N.C. / "no connect")."""
+    if not name:
+        return False
+    compact = re.sub(r"[^A-Z]", "", str(name).upper())
+    return compact in {"NC", "DNC", "NCDNC", "NOCONNECT", "NOCONNECTION"}
+
+
+def _pin_field(pin, key: str):
+    """Read a field from a pin whether it is a dict or a Pin dataclass."""
+    if isinstance(pin, dict):
+        return pin.get(key)
+    return getattr(pin, key, None)
+
+
+def _trim_nc_padding(pins: list, target: int) -> Tuple[list, bool]:
+    """Drop the surplus no-connect pins so ``len(pins) == target``.
+
+    Only reconciles when the *entire* excess over ``target`` can be explained by
+    NC pins: the highest-numbered NC pins are removed. Returns the (possibly
+    unchanged) pin list and whether a trim happened. Refuses to touch real
+    (signal-bearing) pins, so a genuine wrong-variant read still fails closed.
+    """
+    if not pins or len(pins) <= target:
+        return pins, False
+    excess = len(pins) - target
+    nc_indices = [i for i, p in enumerate(pins) if _is_nc_pin_entry(_pin_field(p, "name"))]
+    if len(nc_indices) < excess:
+        return pins, False  # excess isn't all NC padding -> not our case
+
+    def _num(i):
+        try:
+            return int(_pin_field(pins[i], "number") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    drop = set(sorted(nc_indices, key=_num, reverse=True)[:excess])
+    return [p for i, p in enumerate(pins) if i not in drop], True
+
+
+def _reconcile_ordered_nc_padding(pin_data: PinData, ordered: int) -> bool:
+    """Trim LLM-fabricated NC padding down to the grounded ordering-table count.
+
+    The LLM sometimes reads a pin table correctly, then pads it with fabricated
+    NC pins to reach a larger invented package (e.g. TPS51100's real 10-pin
+    HVSSOP becomes a bogus "QFN-20" with NC pins 11-20). "NC" appears in the
+    datasheet text, so the grounding gate passes it. When the ordering table
+    grounds a smaller authoritative count and the excess pins are all NC, honor
+    ground truth by dropping the padding. Returns True if anything was trimmed.
+    """
+    changed = False
+    if pin_data.packages:
+        for pkg in pin_data.packages:
+            pins = pkg.get("pins") or []
+            try:
+                count = int(pkg.get("pin_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            count = count or len(pins)
+            if count <= ordered:
+                continue
+            trimmed, did = _trim_nc_padding(pins, ordered)
+            if did:
+                pkg["pins"] = trimmed
+                pkg["pin_count"] = len(trimmed)
+                pkg["type"] = re.sub(r"-\d+$", f"-{len(trimmed)}", str(pkg.get("type") or ""))
+                changed = True
+    elif pin_data.package and pin_data.pins:
+        count = pin_data.package.pin_count or len(pin_data.pins)
+        if count > ordered:
+            trimmed, did = _trim_nc_padding(pin_data.pins, ordered)
+            if did:
+                pin_data.pins = trimmed
+                pin_data.package.pin_count = len(trimmed)
+                pin_data.package.type = re.sub(
+                    r"-\d+$", f"-{len(trimmed)}", str(pin_data.package.type or "")
+                )
+                changed = True
+    return changed
+
+
 def _enforce_ordered_pin_count(
     pin_data: PinData,
     part_number: Optional[str],
@@ -862,12 +944,20 @@ def _enforce_ordered_pin_count(
     extracted variant — i.e. the LLM read the wrong variant/count and there is
     nothing for select_package_variant to correct it to.
 
+    Before failing, reconcile the common case where the LLM padded a correct
+    read with fabricated NC pins (see _reconcile_ordered_nc_padding).
+
     With --force-best-effort the conflict is recorded (watermark + exit 3)
     instead of refusing.
     """
     ordered = pin_data.ordered_pin_count
     if not ordered:
         return
+    if _reconcile_ordered_nc_padding(pin_data, ordered):
+        print(
+            f"Note: trimmed fabricated NC padding to match the ordering-table "
+            f"count for {part_number!r} ({ordered} pins)."
+        )
     counts = _extracted_pin_counts(pin_data)
     if not counts or any(count == ordered for count in counts):
         return  # an extracted variant matches the grounded count

@@ -234,6 +234,24 @@ def test_page_detector_toc_page_scores_no_heading_bonus(detector):
     assert score == 0
 
 
+def test_page_detector_revision_history_page_keeps_heading_bonus(detector):
+    """A revision-history page carries dot-leader change entries (which trip
+    the TOC detector) but also the real section heading on a plain line; the
+    genuine heading must still earn the bonus (regression: SN6505A p3)."""
+    text = (
+        "SN6505A, SN6505B\n"
+        "• Changed Table 9-3 ...................................... 12\n"
+        "• Changed the Section 6.7 section........................ 8\n"
+        "• Added the Section 6.8 section.......................... 9\n"
+        "• Changed Table 9-3 ..................................... 12\n"
+        "5 Pin Configuration and Functions\n"
+        "Table 5-1. Pin Functions\n"
+        "1 VCC Power supply\n"
+    )
+    score, _ = detector._check_pinout_heading(text)
+    assert score == 3
+
+
 def test_page_detector_early_page_gets_position_bonus(detector):
     """Long datasheets routinely put the pin table on page 3 of 40+; only
     the cover page and the legal/ordering tail are unlikely positions."""
@@ -3262,6 +3280,51 @@ def test_ordered_count_match_passes():
         ordered_pin_count=20,
     )
     _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)  # no raise
+
+
+# The LLM sometimes pads a correctly-read pin table with fabricated NC
+# (no-connect) pins to reach a larger, invented package size — e.g. it reads
+# TPS51100's clean 10-pin HVSSOP table, then appends NC pins 11-20 and calls it
+# a "QFN-20". "NC" trivially appears in the datasheet text, so the grounding
+# gate misses it. When the ordering table grounds an authoritative smaller count
+# and the *excess* pins are all NC, reconcile by trimming that fabricated
+# padding to match ground truth (regression: TPS51100DGQ).
+def test_ordered_count_trims_fabricated_nc_padding():
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData
+    real_names = ["VDDQSNS", "VLDOIN", "VTT", "PGND", "VTTSNS",
+                  "VTTREF", "S3", "GND", "S5", "VIN"]
+    real = [{"number": i, "name": n, "function": None}
+            for i, n in enumerate(real_names, start=1)]
+    nc = [{"number": i, "name": "NC", "function": "none"} for i in range(11, 21)]
+    pd = PinData(
+        component_name="TPS51100",
+        packages=[{"type": "QFN-20", "pin_count": 20, "pins": real + nc}],
+        ordered_pin_count=10,  # ordering table: HVSSOP, 10 pins
+    )
+    # Must reconcile silently, not raise, and not fail closed.
+    _enforce_ordered_pin_count(pd, "TPS51100DGQ", force_best_effort=False)
+    pkg = pd.packages[0]
+    assert pkg["pin_count"] == 10
+    assert len(pkg["pins"]) == 10
+    assert all(p["name"] != "NC" for p in pkg["pins"])  # only the padding went
+    assert pkg["type"] == "QFN-10"  # suffix follows the corrected count
+
+
+def test_ordered_count_does_not_trim_real_pin_excess():
+    # Excess pins that are NOT no-connects are real disagreement, not padding:
+    # never silently trim them — fail closed so the wrong variant is caught.
+    from src.main import _enforce_ordered_pin_count
+    from src.models.pin_data import PinData
+    from src.exceptions import ValidationError
+    pins = [{"number": i, "name": f"IO{i}", "function": None} for i in range(1, 13)]
+    pd = PinData(
+        component_name="X",
+        packages=[{"type": "SOIC-12", "pin_count": 12, "pins": pins}],
+        ordered_pin_count=10,
+    )
+    with pytest.raises(ValidationError):
+        _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)
 
 
 def test_ordered_count_absent_is_additive_noop():

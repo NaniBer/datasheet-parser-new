@@ -198,7 +198,13 @@ class PageDetector:
 
     def _check_pinout_heading(self, text: str) -> Tuple[int, str]:
         """Check if page contains a pinout section heading."""
-        if self._looks_like_toc(text):
+        # An explicit "Table of Contents" page never holds the real section;
+        # its dot-leader entries are not headings. A revision-history page,
+        # by contrast, carries similar dot-leader lines but *also* the genuine
+        # section heading — so we no longer veto the whole page on dot leaders,
+        # and instead ignore individual leader lines when matching (below).
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        if any("table of contents" in line.lower() for line in lines[:5]):
             return 0, ""
 
         text_lower = text.lower()
@@ -211,22 +217,18 @@ class PageDetector:
 
         return 0, ""
 
-    def _looks_like_toc(self, text: str) -> bool:
-        """Detect table-of-contents / index pages by their dot-leader lines."""
-        lines = [line.strip() for line in text.split("\n") if line.strip()]
-        leader_lines = sum(1 for line in lines if self._TOC_LINE_PATTERN.search(line))
-        if leader_lines >= 4:
-            return True
-        return any("table of contents" in line.lower() for line in lines[:5])
-
     def _is_likely_heading(self, text: str, pattern: str) -> bool:
         """Check if matched pattern starts a line anywhere on the page.
 
         Vendor boilerplate (part title, URLs, document ids) routinely pushes
         the section heading well past the top of the page, so the whole page
-        is scanned rather than only its first lines.
+        is scanned rather than only its first lines. Dot-leader lines (TOC
+        entries and revision-history change bars, e.g. "Changed Table 9-3
+        ....... 12") are skipped: they name a section but are not the heading.
         """
         for line in text.split("\n"):
+            if self._TOC_LINE_PATTERN.search(line.strip()):
+                continue
             if re.search(pattern, line.lower(), re.IGNORECASE):
                 return True
         return False
