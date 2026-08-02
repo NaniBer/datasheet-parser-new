@@ -969,3 +969,54 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] TPS51100 family→geometry (QFN→HVSSOP) to move it from degraded → validated.
 - [ ] MCP101 broken-font track: detect garbled text (both extractors fail) → OCR/vision or clean refusal.
 - [ ] Consider pinning extraction to temperature 0 so before/after corpus diffs reflect code, not noise.
+
+## 2026-08-02 (second session) — pin-number grounding (PR #16), seed dead-end, Class B split
+
+### What We Did
+- ✅ **Merged PR #15** (NC-trim + SN6505A) to main.
+- ✅ **Built pin-number grounding — PR #16, merged.** New `src/pdf_extractor/pin_grounding.py`:
+  `build_pin_number_index(content.tables)` (the pin NUMBERS the datasheet's own table rows print,
+  reusing deterministic_table_parser helpers) + `drop_ungrounded_pins(pin_data, index)`. Wired into
+  `main.extract_pin_data` after normalize, before validation. Catches NC-padding fabrication
+  **without needing an ordering table** — grounds against the pin table itself.
+- ✅ **Parallel-agent workflow (dispatching-parallel-agents skill).** Split the feature into
+  non-conflicting streams: Agent A built the module + tests (new files only), Agent B did read-only
+  false-positive de-risking, I integrated (main.py wiring). **Agent B caught a real bug pre-commit:**
+  the first number-only rule would have dropped **16/48 real pins on STM32L031** and **23/48 on
+  AVR128DA48** (multi-package tables → incomplete index). Hardened the rule in response:
+  **only ever drop a pin that is BOTH no-connect (NC/DNC) AND absent from any table row** — so index
+  noise can only MISS a fabrication, never drop a real signal pin. Verified: STM32/AVR/INA228 drop 0
+  real pins; TPS51100 still caught (20→10). 17 new unit tests; full suite green.
+- ✅ **Seed experiment (determinism) — DEAD END.** Temperature is already 0 (Fix 10). Tested the
+  backend directly: same extraction request x3 with `seed=42` produced 3 DIFFERENT outputs;
+  `system_fingerprint=None`. `fastchat.ideeza.com` does NOT honor `seed`. Conclusion: stop chasing
+  API-level determinism; rely on grounding (correctness despite wobble) + multi-run majority for
+  measurement.
+- 🔎 **Class B (10→16 over-count) diagnosis — it's TWO bugs, not one:**
+  - **INA228/INA238:** deterministic ordering table DOES match → VSSOP, 10 pins. INA228 now reads 10
+    (5 signals VCC/SCL/SDA/ALERT/GND + 5 NC). INA238 read **8** (under-count). Our NC-trim only trims
+    DOWN, so it can't fix an under-count; the pipeline already DETECTS 8≠10 via
+    `_enforce_ordered_pin_count` but fail-open ships the 8. Fix = honor the grounded count (pad up
+    to the provably-NC pads).
+  - **L4984D/L6564T:** NO deterministic ordering match; number-grounding actively over-trims them
+    (index incomplete → 6/5). These need the LLM ordering fallback / suffix decoding + the guard below.
+
+### Issues Encountered / Open
+- ⚠️ **Grounding false-drop on INCOMPLETE index (found via Class B diag).** When the table parser
+  captures only part of the pin table (L4984D index `[3-8]`, L6564T `[6-10]`), real NC pins outside
+  that range get dropped (→ 6/5, should be 10). These parts were already wrong (16), so not a fresh
+  eval regression on them — but it could hit a previously-correct part. Planned guard: **only drop an
+  ungrounded NC pin whose number is GREATER than max(index)** (true trailing padding).
+- ✅ **Blast-radius sweep DONE (read-only, 148 parts): PR #16 did NOT regress live main.**
+  Index classification: 95 SAFE-empty, 39 SAFE-covers, 14 AT-RISK. Of the 14, **13 were already
+  FAIL/DUP** (big multi-package/module parts: dsPIC×3, MKL×3, AVR, ESP32, NRF9160×2, PIC16F871) —
+  no fresh regression, and they're signal-pin-heavy so grounding barely touches them. Only ONE
+  was-correct part flagged at-risk (`85_IS82C59AZX96`, prev PASS/28, index only `[14,28]`) — and a
+  real run confirmed it has **0 NC pins → grounding drops nothing → stays 28**. So the guard is a
+  calm FOLLOW-UP, not a hotfix. (Sweeping first was the right call.)
+
+### Next Plan
+- [ ] Add the trailing-NC guard (drop ungrounded NC only when number > max(index)) as a follow-up;
+      TDD + verify vs TPS51100 (still caught) and L4984D/L6564T (no over-trim). Not urgent.
+- [ ] Class B, INA-type: enforce the grounded ordering count (pad up missing NC to reach 10).
+- [ ] Class B, L-type + TPS51100 family→geometry; MCP101 broken-font track (unchanged).
