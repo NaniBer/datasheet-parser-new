@@ -160,6 +160,15 @@ def _both_output_paths(output: str) -> tuple:
     )
 
 
+def _body_output_base(output: str) -> str:
+    """Derive the 3D body-model base path (no extension) from a base output arg.
+
+    "output/NE555.glb" -> "output/NE555_body"; the exporter appends .step/.glb.
+    """
+    p = Path(output)
+    return str(p.parent / f"{p.stem}_body")
+
+
 # ============================================================================
 # Pipeline Functions
 # ============================================================================
@@ -1383,7 +1392,8 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
                             custom_layout=None, part_number: Optional[str] = None,
                             package_index: Optional[int] = None,
                             verbose: bool = False,
-                            extracted_dims=None) -> bool:
+                            extracted_dims=None,
+                            emit_body_3d: bool = False) -> bool:
     """Run both schematic and PCB footprint builders on already-extracted pin data.
 
     Args:
@@ -1456,6 +1466,28 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
         # Fail-closed refusals (grid-array packages, unknown geometry)
         # are expected domain outcomes, not bugs.
         print(f"Failed to generate footprint: {e}")
+
+    # --- 3D component body (STEP + GLB) ---
+    # Best-effort and opt-in: a bonus artifact aligned to the footprint we just
+    # built. Unsupported families are skipped; any failure here must never turn
+    # a good schematic/footprint run into a failure.
+    if emit_body_3d and footprint_ok:
+        try:
+            from .model3d import build_body_model
+            body = build_body_model(
+                package_type=package_type,
+                pin_count=pin_count,
+                component_name=pin_data.component_name,
+                extracted_dims=extracted_dims,
+                output_base=_body_output_base(str(output_path)),
+            )
+            if body.success:
+                tag = "verified" if body.validated else f"UNVALIDATED ({'; '.join(body.issues) or body.confidence})"
+                print(f"3D body: {body.step_path} + {body.glb_path} [{tag}]")
+            else:
+                print(f"3D body skipped: {body.reason}")
+        except Exception as e:  # pragma: no cover - defensive: never break the run
+            print(f"3D body generation error (skipped): {e}")
 
     if not schematic_ok:
         print(f"Failed to generate schematic: {schematic_str}")
@@ -1561,6 +1593,16 @@ Exit codes:
     )
 
     parser.add_argument(
+        "--body-3d",
+        action="store_true",
+        help="Also generate a 3D component-body model (STEP + GLB) after the "
+             "footprint, e.g. NE555_body.step / NE555_body.glb. Requires --both. "
+             "Best-effort: unsupported package families are skipped without "
+             "failing the run. Currently supports dual-row gull-wing families "
+             "(SOIC/SOP/SSOP/TSSOP/MSOP)."
+    )
+
+    parser.add_argument(
         "--force-best-effort",
         action="store_true",
         help="Deprecated / redundant: best-effort is now the default. Emit "
@@ -1620,6 +1662,12 @@ def _run_cli():
     if args.both and args.pcb_2d:
         print("Error: --both and --pcb-2d are mutually exclusive. "
               "Use --both to generate both outputs, or --pcb-2d for footprint only.")
+        sys.exit(1)
+
+    # --body-3d builds on the footprint produced by the --both path.
+    if args.body_3d and not args.both:
+        print("Error: --body-3d requires --both (the 3D body is generated "
+              "alongside the footprint).")
         sys.exit(1)
 
     # Validate input file
@@ -1709,6 +1757,7 @@ def _run_cli():
             package_index=args.package_index,
             verbose=args.verbose,
             extracted_dims=extracted_dims,
+            emit_body_3d=args.body_3d,
         )
         if not success:
             sys.exit(EXIT_DOMAIN_FAILURE)
