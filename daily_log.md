@@ -1020,3 +1020,55 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
       TDD + verify vs TPS51100 (still caught) and L4984D/L6564T (no over-trim). Not urgent.
 - [ ] Class B, INA-type: enforce the grounded ordering count (pad up missing NC to reach 10).
 - [ ] Class B, L-type + TPS51100 family→geometry; MCP101 broken-font track (unchanged).
+
+## 2026-08-03 — 3D component-body model layer (research → Milestone 1, Milestone 2 start)
+
+### What We Did
+- ✅ **Multi-agent research → architecture doc.** Ran 6 parallel subagents (pipeline audit,
+  physical-package data model, current 3D/GLB generation, OSS CAD-tool selection, package-modeling
+  conventions & reusable libraries, validation strategy), reconciled the two real tensions
+  (origin convention; generator licensing), and wrote **`docs/3d-model-generation-architecture.md`**
+  (full 12-part plan). Key findings: the system is already a cadquery/OCCT B-rep pipeline extracting
+  the JEDEC dims a body needs (A, A1, b, D, E, E1, e, L) in mm/+Z-up/origin-at-centre; **STEP export
+  is basically free** (`Assembly.export`); **`A`/`A1` were extracted but discarded** by the footprint
+  path; **stay on CadQuery** (Apache/LGPL-with-exception, no GPL); clean-room our own templates using
+  KiCad generator params as reference (their code is GPL/LGPL/AGPL).
+- ✅ **Milestone 1 — SOIC gull-wing vertical slice, committed (`fd31bf9`, branch
+  `feat/3d-body-model-milestone-1`).** New `src/model3d/` package, all test-first (TDD):
+  `spec.py` (Body3DSpec + build_spec — wires in the discarded A/A1, resolves SOIC narrow-vs-wide
+  D/DW by lead span), `templates/{base,gullwing}.py`, `registry.py` (fail-closed on unsupported
+  styles), `exporter.py` (STEP+GLB via `Assembly.export`), `validator.py` (measures in-memory B-rep
+  vs spec — lead count exact, span/length/height, seating plane), `builder.py` (`build_body_model`).
+  `main.py`: opt-in `--body-3d` flag (requires `--both`), best-effort hook after footprint success
+  that can never fail a run. **Verified on SN74HC595 SOIC-16:** STEP/GLB match the datasheet exactly
+  (span 10.325, length 9.90, height 2.50 mm, seated Z=0, 16 leads).
+- ✅ **Milestone 2 (start) — footprint↔body alignment + gull-wing breadth (uncommitted).**
+  - **Alignment check:** `validator.validate_alignment(assembly, pad_map)` compares each lead's foot
+    (`faces("<Z").val().Center()`) to the **real** footprint pad centres
+    (`PcbFootprintBuilder.pin_positions`). SOIC-16 worst-pin delta = **~1e-15 mm** (two independent
+    computations agree perfectly, incl. pin-1/CCW numbering). Wired an optional `footprint_pad_map`
+    into `build_body_model` (folds into `validated`) and into the `main.py` hook (reconstructs the
+    pad map cheaply — heavy work is in `save_glb`, not the ctor).
+  - **Breadth:** proved the gull-wing template generalizes with **zero new geometry** — TSSOP-20,
+    SSOP-16, MSOP-8 all build + validate end-to-end (guards the "general parser, not corpus-tuned"
+    principle).
+- ✅ **Tests:** 19 new tests in `tests/test_model3d.py` (spec, template, exporter, validator,
+  alignment, breadth, builder, pipeline hook). Full suite green (exit 0), no regressions.
+
+### Notes / Decisions
+- **Origin:** align the body to the footprint's own origin (component centre, Z=0) for internal
+  consistency; KiCad datum + WRL 1/2.54 scale is a separate optional export mode, not baked into
+  templates.
+- **Validation is two-tier:** tight (±0.02–0.05 mm) for our own build fidelity; loose
+  (±0.35 placement) for alignment. `A` is treated as one-sided max.
+- Demo artifacts (gitignored) in `eval_output/body3d_demo_2026-08-03/`.
+
+### Next Plan
+- [ ] Commit the Milestone-2 increment (alignment + breadth) on the feature branch.
+- [ ] Milestone 2 breadth — new templates: **leadless** (QFN/DFN/WSON/SON, + exposed pad D2/E2),
+      **quad gull-wing** (QFP/TQFP/LQFP), **chip** passives (R/C/L), **through-hole** DIP.
+- [ ] Add a small 3D ground-truth gate: compare generated bodies' bounding boxes to official KiCad
+      STEP models, centroid-normalized, within tolerance.
+- [ ] Extractor: add **`c`** (lead thickness) and **`D2/E2`** (exposed pad) — needed for faithful
+      leadless/gull-wing bodies (currently defaulted).
+- [ ] Real CLI run `--both --body-3d` on an actual SOIC datasheet PDF (needs LLM/vision endpoints).

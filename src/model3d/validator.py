@@ -7,8 +7,9 @@ we fed the generator? Tolerances follow docs/3d-model-generation-architecture.md
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import cadquery as cq
 
@@ -20,6 +21,7 @@ TOL_BODY_ABS = 0.10   # body length/width (or 2%, whichever larger)
 TOL_BODY_PCT = 0.02
 TOL_HEIGHT = 0.05     # overall height A
 TOL_SEATING = 0.02    # seating plane at Z=0
+TOL_ALIGN = 0.35      # lead-foot centre vs pad centre (IPC-7351 placement tol)
 
 
 @dataclass
@@ -29,8 +31,64 @@ class Body3DValidationResult:
     metrics: Dict[str, float] = field(default_factory=dict)
 
 
+@dataclass
+class AlignmentResult:
+    ok: bool
+    worst_delta: float = 0.0            # worst lead-foot -> pad centre distance (mm)
+    issues: List[str] = field(default_factory=list)
+    per_pin: Dict[str, float] = field(default_factory=dict)
+
+
 def _count_leads(assembly: cq.Assembly) -> int:
     return sum(1 for c in assembly.children if c.name.startswith("Lead_"))
+
+
+def _lead_foot_center(obj) -> Tuple[float, float]:
+    """(x, y) of a lead's seating-plane foot, from its lowest (-Z) face."""
+    wp = obj if isinstance(obj, cq.Workplane) else cq.Workplane(obj)
+    center = wp.faces("<Z").val().Center()
+    return center.x, center.y
+
+
+def validate_alignment(
+    assembly: cq.Assembly,
+    pad_map: Dict[str, Tuple[float, float]],
+    tol: float = TOL_ALIGN,
+) -> AlignmentResult:
+    """Check that each lead's foot lands on its footprint pad.
+
+    Args:
+        assembly: the built body (leads named ``Lead_<pin>``).
+        pad_map: ``{pin_number(str): (x, y)}`` pad centres from the footprint
+            (e.g. PcbFootprintBuilder.pin_positions). Shared coordinate frame:
+            mm, origin at component centre.
+        tol: max lead-foot -> pad-centre distance before a pin is flagged.
+    """
+    issues: List[str] = []
+    per_pin: Dict[str, float] = {}
+    worst = 0.0
+
+    for child in assembly.children:
+        if not child.name.startswith("Lead_"):
+            continue
+        pin = child.name.split("_", 1)[1]
+        if pin not in pad_map:
+            issues.append(f"lead {pin} has no matching footprint pad")
+            continue
+        fx, fy = _lead_foot_center(child.obj)
+        px, py = pad_map[pin]
+        delta = math.hypot(fx - px, fy - py)
+        per_pin[pin] = delta
+        worst = max(worst, delta)
+        if delta > tol:
+            issues.append(
+                f"pin {pin} lead foot ({fx:.3f},{fy:.3f}) off pad "
+                f"({px:.3f},{py:.3f}) by {delta:.3f}mm (tol {tol})"
+            )
+
+    return AlignmentResult(
+        ok=not issues, worst_delta=worst, issues=issues, per_pin=per_pin
+    )
 
 
 def validate_body(assembly: cq.Assembly, spec: Body3DSpec) -> Body3DValidationResult:

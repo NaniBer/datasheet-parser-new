@@ -1474,12 +1474,28 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
     if emit_body_3d and footprint_ok:
         try:
             from .model3d import build_body_model
+            from .schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+
+            # Recover the footprint's pad centres (cheap: geometry is built in
+            # save_glb, not the constructor) so the body can be validated for
+            # lead-on-pad alignment against the footprint we just shipped.
+            pad_map = None
+            try:
+                fb = PcbFootprintBuilder(
+                    package_type, pin_count, pin_data.component_name,
+                    custom_layout, extracted_dims,
+                )
+                pad_map = {str(p.pin_number): (p.x, p.y) for p in fb.pin_positions}
+            except Exception:
+                pad_map = None  # alignment is a bonus check; never block on it
+
             body = build_body_model(
                 package_type=package_type,
                 pin_count=pin_count,
                 component_name=pin_data.component_name,
                 extracted_dims=extracted_dims,
                 output_base=_body_output_base(str(output_path)),
+                footprint_pad_map=pad_map,
             )
             if body.success:
                 tag = "verified" if body.validated else f"UNVALIDATED ({'; '.join(body.issues) or body.confidence})"

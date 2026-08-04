@@ -217,6 +217,90 @@ class TestBuildBodyModel:
         assert result.step_path is None
 
 
+class TestGullwingBreadth:
+    """The gull-wing template must generalize beyond SOIC (no corpus overfit)."""
+
+    # TSSOP-20 dimensions (JEDEC MO-153): body 6.5x4.4, span 6.4, 0.65 pitch.
+    TSSOP20 = {
+        "package_type": "TSSOP-20", "unit": "mm",
+        "e": 0.65, "E": 6.4, "D": 6.5, "b": 0.25, "L": 0.6,
+        "A": 1.10, "A1": 0.05, "dims_source": "text",
+    }
+
+    def test_tssop20_end_to_end(self, tmp_path):
+        import os
+        from src.model3d.builder import build_body_model
+
+        result = build_body_model(
+            package_type="TSSOP-20",
+            pin_count=20,
+            component_name="SN74LVC245",
+            extracted_dims=self.TSSOP20,
+            output_base=str(tmp_path / "tssop20_body"),
+        )
+
+        assert result.success is True
+        assert result.validated is True
+        assert result.issues == []
+        assert result.metrics["lead_count"] == 20
+        # span=E, length=D, height=A land within the validator's own tolerances.
+        assert result.metrics["span_x"] == pytest.approx(6.4, abs=0.15)
+        assert result.metrics["length_y"] == pytest.approx(6.5, abs=0.15)
+        assert result.metrics["height_z"] == pytest.approx(1.10, abs=0.05)
+        assert os.path.getsize(result.step_path) > 0
+
+    @pytest.mark.parametrize(
+        "pkg,count,dims",
+        [
+            ("SSOP-16", 16, {"package_type": "SSOP-16", "e": 0.65, "E": 7.8,
+                             "D": 6.2, "b": 0.3, "L": 0.75, "A": 2.0, "A1": 0.1,
+                             "dims_source": "text"}),
+            ("MSOP-8", 8, {"package_type": "MSOP-8", "e": 0.65, "E": 4.9,
+                           "D": 3.0, "b": 0.33, "L": 0.53, "A": 1.1, "A1": 0.05,
+                           "dims_source": "text"}),
+        ],
+    )
+    def test_other_dual_row_families(self, tmp_path, pkg, count, dims):
+        from src.model3d.builder import build_body_model
+
+        result = build_body_model(pkg, count, "X", dims, str(tmp_path / pkg))
+        assert result.success is True
+        assert result.metrics["lead_count"] == count
+        assert result.issues == []
+
+
+class TestAlignment:
+    def _footprint_pad_map(self):
+        from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+
+        fb = PcbFootprintBuilder("SOIC-16", 16, "SN74HC595", None, SOIC16_DIMS)
+        return {str(p.pin_number): (p.x, p.y) for p in fb.pin_positions}
+
+    def test_leads_land_on_footprint_pads(self):
+        from src.model3d.registry import select_template
+        from src.model3d.validator import validate_alignment
+
+        spec = _spec()
+        asm = select_template(spec).build(spec)
+        result = validate_alignment(asm, self._footprint_pad_map())
+
+        assert result.ok is True, result.issues
+        assert result.worst_delta < 0.05   # two independent computations agree
+
+    def test_flags_when_pads_shifted(self):
+        from src.model3d.registry import select_template
+        from src.model3d.validator import validate_alignment
+
+        spec = _spec()
+        asm = select_template(spec).build(spec)
+        shifted = {n: (x + 1.0, y) for n, (x, y) in self._footprint_pad_map().items()}
+        result = validate_alignment(asm, shifted)
+
+        assert result.ok is False
+        assert result.worst_delta > 0.9
+        assert any("align" in i.lower() or "pad" in i.lower() for i in result.issues)
+
+
 @pytest.mark.integration
 class TestPipelineHook:
     def test_process_both_emits_body_when_enabled(self, tmp_path):

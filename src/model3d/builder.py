@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from src.exceptions import SchematicGenerationError
 
 from .exporter import export_model
 from .registry import select_template
 from .spec import build_spec
-from .validator import validate_body
+from .validator import validate_alignment, validate_body
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,8 @@ class Body3DResult:
     confidence: str = "unverified"
     issues: List[str] = field(default_factory=list)
     metrics: Dict[str, float] = field(default_factory=dict)
+    align_ok: Optional[bool] = None          # None when no pad map supplied
+    worst_align_delta: Optional[float] = None
     reason: Optional[str] = None
 
 
@@ -40,6 +42,7 @@ def build_body_model(
     component_name: str,
     extracted_dims: Optional[Dict],
     output_base: str,
+    footprint_pad_map: Optional[Dict[str, Tuple[float, float]]] = None,
 ) -> Body3DResult:
     """Generate a package-body STEP + GLB from pipeline data.
 
@@ -50,6 +53,9 @@ def build_body_model(
         extracted_dims: flat dict from DimensionExtractor.extract() (or None).
         output_base: output path without extension; writes ``<base>.step`` and
             ``<base>.glb``.
+        footprint_pad_map: optional ``{pin(str): (x, y)}`` pad centres from the
+            footprint. When supplied, lead-foot placement is validated against
+            it (the "body matches the footprint" guarantee).
     """
     spec = build_spec(package_type, pin_count, component_name, extracted_dims)
 
@@ -61,13 +67,27 @@ def build_body_model(
 
     assembly = template.build(spec)
     validation = validate_body(assembly, spec)
+    issues = list(validation.issues)
+
+    align_ok: Optional[bool] = None
+    worst_align: Optional[float] = None
+    if footprint_pad_map:
+        alignment = validate_alignment(assembly, footprint_pad_map)
+        align_ok = alignment.ok
+        worst_align = alignment.worst_delta
+        issues.extend(alignment.issues)
+
     paths = export_model(assembly, output_base)
 
-    validated = validation.ok and spec.confidence == "verified"
-    if not validation.ok:
+    validated = (
+        validation.ok
+        and spec.confidence == "verified"
+        and align_ok is not False
+    )
+    if issues:
         logger.warning(
-            "3D body for %s failed geometry checks: %s",
-            component_name, "; ".join(validation.issues),
+            "3D body for %s has checks to review: %s",
+            component_name, "; ".join(issues),
         )
 
     return Body3DResult(
@@ -76,6 +96,8 @@ def build_body_model(
         glb_path=paths["glb"],
         validated=validated,
         confidence=spec.confidence,
-        issues=validation.issues,
+        issues=issues,
         metrics=validation.metrics,
+        align_ok=align_ok,
+        worst_align_delta=worst_align,
     )
