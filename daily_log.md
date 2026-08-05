@@ -1072,3 +1072,53 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] Extractor: add **`c`** (lead thickness) and **`D2/E2`** (exposed pad) — needed for faithful
       leadless/gull-wing bodies (currently defaulted).
 - [ ] Real CLI run `--both --body-3d` on an actual SOIC datasheet PDF (needs LLM/vision endpoints).
+
+## 2026-08-05 — Milestone 2 breadth: four package-body templates (parallel build)
+
+### What We Did
+- ✅ **Committed the Milestone-2 start increment (`cf23c4d`)** — footprint↔body alignment check
+  + gull-wing breadth (TSSOP-20/SSOP-16/MSOP-8), the work left uncommitted on 08-03.
+- ✅ **Built the four remaining core body templates in parallel**, one background subagent each,
+  under strict guardrails (each creates ONLY its own template + test file; do NOT touch the shared
+  registry/spec/validator; strict TDD). This kept them collision-free — all four landed green with
+  no merge conflicts. Committed together as **`11309f9`** on branch
+  `feat/3d-body-model-milestone-1`:
+  - `templates/quad_gullwing.py` — **QuadGullwingTemplate** (QFP/TQFP/LQFP). 4-sided gull-wing;
+    derives the Y-axis body edge as `D − (E − E1)` (same overhang as the E axis). 4 tests.
+  - `templates/leadless.py` — **LeadlessTemplate** (QFN/DFN/WSON/SON). Flush bottom terminals on
+    the seating plane; handles dual-row (DFN/SON) and quad (QFN) off `pins_per_side`. Exposed
+    thermal pad D2/E2 **deferred** (extractor doesn't emit it yet). 3 tests.
+  - `templates/chip.py` — **ChipTemplate** (R/C/L, 0201–1206). Two wrap-around end caps; band
+    width = `L` or default `0.25·D`. 5 tests.
+  - `templates/dip.py` — **DIPTemplate** (DIP/PDIP/CDIP). Straight through-hole leads running
+    **below the board** to Z=−3.0; body sits above on its standoff. 5 tests.
+- ✅ **Integration pass (parent, after all four landed):**
+  - `spec.py`: `_LEAD_STYLE` remaps QFP-family → `"quad_gullwing"`, adds chip families
+    (R/C/L/RES/CAP/IND → `"chip"`) and `BGA/LGA → "bga"` (no template ⇒ **fail closed**). New
+    `_pins_per_side()` computes a quad `[L,R,T,B]` split for QFP/QFN (remainder onto first sides).
+  - `registry.py` + `templates/__init__.py`: registered all four.
+  - `validator.py`: `validate_body` is now **through-hole-aware** — for `lead_style=="through_hole"`
+    it measures the lead-**foot** span (blades overshoot the bbox) and validates the Body child's
+    top (A) + underside standoff (A1), instead of demanding the whole assembly seat at Z=0.
+  - Repointed two existing fail-closed assertions from QFN/leadless (now supported) → BGA.
+- ✅ **Tests:** +17 across 4 standalone template suites. **Full suite 297 passed, 1 skipped**
+  (was 280), exit 0, no regressions.
+
+### Notes / Decisions
+- **Template coverage now 5 of ~7 core styles** (dual + quad gull-wing, leadless, chip, DIP) —
+  covers the large majority of real parts. Left for Milestone 4 long tail: BGA/grid, power-tab
+  (TO-220/DPAK). BGA deliberately skips (fail-closed) rather than emit a wrong shape.
+- **Parallel-subagent pattern worked:** geometry files are independent; the ONLY collision risk was
+  the shared wiring (registry/spec/validator/shared test), so that was reserved for the parent. Good
+  template for future fan-out work.
+- **Still validated against own dimensional spec only** (bbox + seating), NOT yet against official
+  KiCad reference STEP models — the 3D ground-truth gate remains open.
+
+### Next Plan
+- [ ] 3D ground-truth gate: compare generated bodies' bounding boxes to official KiCad STEP models,
+      centroid-normalized, within tolerance.
+- [ ] Extractor: add **`c`** (lead thickness) and **`D2/E2`** (exposed pad) → then add the QFN/DFN
+      center thermal pad to LeadlessTemplate.
+- [ ] Real CLI run `--both --body-3d` on an actual datasheet PDF (needs LLM/vision endpoints).
+- [ ] Milestone 4 long tail: BGA/grid-array + power-tab (TO-220/DPAK) templates.
+- [ ] Consider merging `feat/3d-body-model-milestone-1` to main once ground-truth gate lands.
