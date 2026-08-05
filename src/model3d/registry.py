@@ -8,10 +8,21 @@ from __future__ import annotations
 from src.exceptions import SchematicGenerationError, ErrorCodes
 
 from .spec import Body3DSpec
-from .templates import GullwingTemplate, PackageTemplate
+from .templates import (
+    ChipTemplate,
+    DIPTemplate,
+    GullwingTemplate,
+    LeadlessTemplate,
+    PackageTemplate,
+    QuadGullwingTemplate,
+)
 
 _TEMPLATES = {
     GullwingTemplate.lead_style: GullwingTemplate,
+    QuadGullwingTemplate.lead_style: QuadGullwingTemplate,
+    LeadlessTemplate.lead_style: LeadlessTemplate,
+    ChipTemplate.lead_style: ChipTemplate,
+    DIPTemplate.lead_style: DIPTemplate,
 }
 
 

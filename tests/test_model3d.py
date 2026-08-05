@@ -110,7 +110,7 @@ class TestGullwingTemplate:
         import dataclasses
         from src.model3d.registry import select_template
 
-        spec = dataclasses.replace(_spec(), lead_style="leadless")
+        spec = dataclasses.replace(_spec(), lead_style="bga")
         with pytest.raises(Exception):
             select_template(spec)
 
@@ -204,12 +204,14 @@ class TestBuildBodyModel:
     def test_unsupported_family_skips_gracefully(self, tmp_path):
         from src.model3d.builder import build_body_model
 
+        # BGA has no 3D template yet, so the body must fail closed (skip) rather
+        # than emit a wrong shape. (QFN/DFN/QFP/DIP are now supported.)
         result = build_body_model(
-            package_type="QFN-32",
+            package_type="BGA-32",
             pin_count=32,
             component_name="X",
-            extracted_dims={"package_type": "QFN-32", "e": 0.5, "dims_source": "text"},
-            output_base=str(tmp_path / "qfn_body"),
+            extracted_dims={"package_type": "BGA-32", "e": 0.5, "dims_source": "text"},
+            output_base=str(tmp_path / "bga_body"),
         )
 
         assert result.success is False

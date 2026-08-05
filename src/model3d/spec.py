@@ -20,16 +20,28 @@ from typing import Dict, List, Optional
 from src.package_types.footprint_defaults import get_footprint_defaults, _family
 
 
-# Family -> lead style. Milestone 1 implements "gullwing" only.
+# Family -> lead style. Each style maps to a template in templates/ (registry).
 _LEAD_STYLE = {
+    # Dual-row gull-wing
     "SOIC": "gullwing", "SOP": "gullwing", "SO": "gullwing",
     "SSOP": "gullwing", "TSSOP": "gullwing", "MSOP": "gullwing",
     "QSOP": "gullwing", "HVSSOP": "gullwing", "VSSOP": "gullwing",
     "SOT23": "gullwing",
-    "QFP": "gullwing", "LQFP": "gullwing", "TQFP": "gullwing",
+    # Quad gull-wing (leads on all four sides)
+    "QFP": "quad_gullwing", "LQFP": "quad_gullwing", "TQFP": "quad_gullwing",
+    # Leadless (flush bottom terminals; QFN is quad, DFN/WSON/SON dual-row)
     "QFN": "leadless", "DFN": "leadless", "WSON": "leadless", "SON": "leadless",
+    # Through-hole
     "DIP": "through_hole", "PDIP": "through_hole", "CDIP": "through_hole",
+    # Chip passives (routes here once the pipeline recognises passive families)
+    "R": "chip", "C": "chip", "L": "chip",
+    "RES": "chip", "CAP": "chip", "IND": "chip",
+    # BGA has no template yet -> fail closed rather than emit a wrong body.
+    "BGA": "bga", "LGA": "bga",
 }
+
+# Families whose leads run along all four sides (quad pins_per_side split).
+_QUAD_FAMILIES = {"QFP", "LQFP", "TQFP", "QFN"}
 
 # SOIC-family (span, body-width) pairs. A 16-pin SOIC is ambiguous between the
 # narrow "D" and wide "DW" body; the extracted lead span disambiguates them.
@@ -79,6 +91,19 @@ def _soic_e1_from_span(span_E: Optional[float], default_e1: float) -> float:
     return nearest[1]
 
 
+def _pins_per_side(family: str, pin_count: int) -> List[int]:
+    """Split pin_count across sides: quad [L,R,T,B] for QFP/QFN, else dual-row.
+
+    Quad split spreads any remainder onto the first sides so the total always
+    equals pin_count (e.g. 30 pins -> [8, 8, 7, 7]).
+    """
+    if family in _QUAD_FAMILIES:
+        base, rem = divmod(pin_count, 4)
+        return [base + (1 if i < rem else 0) for i in range(4)]
+    half = pin_count // 2
+    return [half, pin_count - half, 0, 0]
+
+
 def build_spec(
     package_type: str,
     pin_count: int,
@@ -125,9 +150,7 @@ def build_spec(
     verified = height_extracted and dims_source in ("text", "vision", "text+vision")
     confidence = "verified" if verified else "unverified"
 
-    # Dual-row split for Milestone 1 (SOIC etc.).
-    half = pin_count // 2
-    pins_per_side = [half, pin_count - half, 0, 0]
+    pins_per_side = _pins_per_side(family, pin_count)
 
     return Body3DSpec(
         component_name=component_name,

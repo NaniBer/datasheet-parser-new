@@ -43,6 +43,26 @@ def _count_leads(assembly: cq.Assembly) -> int:
     return sum(1 for c in assembly.children if c.name.startswith("Lead_"))
 
 
+def _child_bbox(assembly: cq.Assembly, name: str):
+    """BoundingBox of a named assembly child (CAD coords), or None if absent."""
+    for child in assembly.children:
+        if child.name == name:
+            obj = child.obj
+            shape = obj.val() if isinstance(obj, cq.Workplane) else obj
+            return shape.BoundingBox()
+    return None
+
+
+def _lead_foot_span_x(assembly: cq.Assembly) -> float:
+    """X span between the outermost lead-foot centres (row spacing E)."""
+    xs = [
+        _lead_foot_center(c.obj)[0]
+        for c in assembly.children
+        if c.name.startswith("Lead_")
+    ]
+    return (max(xs) - min(xs)) if xs else 0.0
+
+
 def _lead_foot_center(obj) -> Tuple[float, float]:
     """(x, y) of a lead's seating-plane foot, from its lowest (-Z) face."""
     wp = obj if isinstance(obj, cq.Workplane) else cq.Workplane(obj)
@@ -112,10 +132,14 @@ def validate_body(assembly: cq.Assembly, spec: Body3DSpec) -> Body3DValidationRe
             f"lead count {lead_count} != expected {spec.pin_count}"
         )
 
-    # Lead span (X).
-    if abs(bb.xlen - spec.lead_span_E) > TOL_SPAN:
+    through_hole = spec.lead_style == "through_hole"
+
+    # Lead span (X). Through-hole leads are blades centred on the hole, so the
+    # bbox overshoots by the lead thickness; measure the foot-centre span instead.
+    span_x = _lead_foot_span_x(assembly) if through_hole else bb.xlen
+    if abs(span_x - spec.lead_span_E) > TOL_SPAN:
         issues.append(
-            f"lead span {bb.xlen:.3f} != E {spec.lead_span_E:.3f} (tol {TOL_SPAN})"
+            f"lead span {span_x:.3f} != E {spec.lead_span_E:.3f} (tol {TOL_SPAN})"
         )
 
     # Body length (Y).
@@ -125,14 +149,33 @@ def validate_body(assembly: cq.Assembly, spec: Body3DSpec) -> Body3DValidationRe
             f"body length {bb.ylen:.3f} != D {spec.body_length_D:.3f} (tol {tol_len:.3f})"
         )
 
-    # Overall height (Z) and seating plane.
-    if abs(bb.zlen - spec.body_height_A) > TOL_HEIGHT:
-        issues.append(
-            f"height {bb.zlen:.3f} != A {spec.body_height_A:.3f} (tol {TOL_HEIGHT})"
-        )
-    if abs(bb.zmin) > TOL_SEATING:
-        issues.append(
-            f"seating plane z_min {bb.zmin:.3f} != 0 (tol {TOL_SEATING})"
-        )
+    if through_hole:
+        # Through-hole: leads intentionally protrude below Z=0, so the overall
+        # bbox is not the body envelope. Validate the moulded body instead: its
+        # top at A and its underside sitting on the standoff A1 (> 0).
+        body_bb = _child_bbox(assembly, "Body")
+        if body_bb is None:
+            issues.append("no Body node to validate")
+        else:
+            if abs(body_bb.zmax - spec.body_height_A) > TOL_HEIGHT:
+                issues.append(
+                    f"body top {body_bb.zmax:.3f} != A {spec.body_height_A:.3f} "
+                    f"(tol {TOL_HEIGHT})"
+                )
+            if abs(body_bb.zmin - spec.standoff_A1) > TOL_SEATING:
+                issues.append(
+                    f"body standoff z_min {body_bb.zmin:.3f} != A1 "
+                    f"{spec.standoff_A1:.3f} (tol {TOL_SEATING})"
+                )
+    else:
+        # Surface-mount: whole body sits on the seating plane, Z = 0 .. A.
+        if abs(bb.zlen - spec.body_height_A) > TOL_HEIGHT:
+            issues.append(
+                f"height {bb.zlen:.3f} != A {spec.body_height_A:.3f} (tol {TOL_HEIGHT})"
+            )
+        if abs(bb.zmin) > TOL_SEATING:
+            issues.append(
+                f"seating plane z_min {bb.zmin:.3f} != 0 (tol {TOL_SEATING})"
+            )
 
     return Body3DValidationResult(ok=not issues, issues=issues, metrics=metrics)
