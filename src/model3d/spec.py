@@ -15,7 +15,7 @@ run along Y at pitch e (that is the body-length D axis).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from src.package_types.footprint_defaults import get_footprint_defaults, _family
 
@@ -36,12 +36,29 @@ _LEAD_STYLE = {
     # Chip passives (routes here once the pipeline recognises passive families)
     "R": "chip", "C": "chip", "L": "chip",
     "RES": "chip", "CAP": "chip", "IND": "chip",
-    # BGA has no template yet -> fail closed rather than emit a wrong body.
+    # Grid-array: BGA/LGA solder-ball body.
     "BGA": "bga", "LGA": "bga",
+    # J-lead chip carriers (PLCC/LCCC) are not modelled yet -> fail closed
+    # rather than emit a wrong (gull-wing) body.
+    "LCCC": "jlead",
 }
+
+# Power-tab families (TO-220/DPAK/D2PAK/TO-247). The upstream footprint-family
+# detector does not recognise these yet, so they are matched from the raw
+# package-type string here to route them to the power_tab template.
+_POWER_TAB_TOKENS = (
+    "TO-220", "TO220", "TO-252", "TO252", "DPAK",
+    "TO-263", "TO263", "D2PAK", "TO-247", "TO247",
+)
 
 # Families whose leads run along all four sides (quad pins_per_side split).
 _QUAD_FAMILIES = {"QFP", "LQFP", "TQFP", "QFN"}
+
+
+def _is_power_tab(package_type: Optional[str]) -> bool:
+    """True when the package type names a TO-220-style power-tab package."""
+    up = (package_type or "").upper().replace("_", "-")
+    return any(tok in up for tok in _POWER_TAB_TOKENS)
 
 # SOIC-family (span, body-width) pairs. A 16-pin SOIC is ambiguous between the
 # narrow "D" and wide "DW" body; the extracted lead span disambiguates them.
@@ -73,9 +90,11 @@ class Body3DSpec:
     lead_pitch_e: float
     lead_width_b: float
     lead_foot_L: float
+    lead_thickness_c: Optional[float] = None      # JEDEC c (gull-wing solids)
+    exposed_pad: Optional[Tuple[float, float]] = None  # (D2, E2) thermal pad
 
-    dims_source: str                # text | vision | text+vision | jedec_default
-    confidence: str                 # verified | unverified
+    dims_source: str = "jedec_default"  # text | vision | text+vision | jedec_default
+    confidence: str = "unverified"      # verified | unverified
 
 
 def _soic_e1_from_span(span_E: Optional[float], default_e1: float) -> float:
@@ -116,6 +135,10 @@ def build_spec(
     defaults = get_footprint_defaults(package_type, pin_count) or {}
 
     lead_style = _LEAD_STYLE.get(family, "gullwing")
+    # Power-tab families are not recognised by the footprint-family detector;
+    # route them from the raw package-type string.
+    if not family and _is_power_tab(package_type):
+        lead_style = "power_tab"
 
     def pick(key: str) -> Optional[float]:
         val = dims.get(key)
@@ -146,6 +169,17 @@ def build_spec(
     body_height_A = float(dims["A"]) if dims.get("A") is not None else 1.75
     standoff_A1 = float(dims["A1"]) if dims.get("A1") is not None else 0.10
 
+    # Lead thickness c (optional): extracted only; drives gull-wing lead solids.
+    lead_thickness_c = float(dims["c"]) if dims.get("c") is not None else None
+
+    # Exposed thermal pad (D2, E2) for leadless families, when the extractor
+    # captured it. Only surfaced when both dimensions are present and positive.
+    d2 = dims.get("D2")
+    e2 = dims.get("E2")
+    exposed_pad: Optional[Tuple[float, float]] = None
+    if d2 is not None and e2 is not None and float(d2) > 0 and float(e2) > 0:
+        exposed_pad = (float(d2), float(e2))
+
     dims_source = dims.get("dims_source", "jedec_default")
     verified = height_extracted and dims_source in ("text", "vision", "text+vision")
     confidence = "verified" if verified else "unverified"
@@ -167,6 +201,8 @@ def build_spec(
         lead_pitch_e=lead_pitch_e,
         lead_width_b=lead_width_b,
         lead_foot_L=lead_foot_L,
+        lead_thickness_c=lead_thickness_c,
+        exposed_pad=exposed_pad,
         dims_source=dims_source,
         confidence=confidence,
     )

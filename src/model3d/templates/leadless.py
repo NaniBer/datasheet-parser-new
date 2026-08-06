@@ -90,6 +90,19 @@ class LeadlessTemplate(PackageTemplate):
         )
         asm.add(body, name="Body", color=_BODY_COLOR)
 
+        # Exposed thermal pad (D2 x E2) on the underside centre, bottom at Z=0,
+        # when the extractor captured it. E2 runs along X, D2 along Y (matching
+        # the E/D body axes). Skipped entirely when dims are absent.
+        if spec.exposed_pad is not None:
+            d2, e2 = spec.exposed_pad
+            if d2 > 0 and e2 > 0:
+                epad = (
+                    cq.Workplane("XY")
+                    .box(e2, d2, t)
+                    .translate((0, 0, t / 2.0))
+                )
+                asm.add(epad, name="ExposedPad", color=_LEAD_COLOR)
+
         for pin, coord, side in _pin_numbering(spec.pins_per_side, e):
             lead = self._terminal(side, coord, E1, D, L, b, t)
             asm.add(lead, name=f"Lead_{pin}", color=_LEAD_COLOR)

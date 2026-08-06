@@ -9,11 +9,13 @@ from src.exceptions import SchematicGenerationError, ErrorCodes
 
 from .spec import Body3DSpec
 from .templates import (
+    BgaTemplate,
     ChipTemplate,
     DIPTemplate,
     GullwingTemplate,
     LeadlessTemplate,
     PackageTemplate,
+    PowerTabTemplate,
     QuadGullwingTemplate,
 )
 
@@ -23,6 +25,8 @@ _TEMPLATES = {
     LeadlessTemplate.lead_style: LeadlessTemplate,
     ChipTemplate.lead_style: ChipTemplate,
     DIPTemplate.lead_style: DIPTemplate,
+    BgaTemplate.lead_style: BgaTemplate,
+    PowerTabTemplate.lead_style: PowerTabTemplate,
 }
 
 

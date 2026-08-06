@@ -132,7 +132,8 @@ def validate_body(assembly: cq.Assembly, spec: Body3DSpec) -> Body3DValidationRe
             f"lead count {lead_count} != expected {spec.pin_count}"
         )
 
-    through_hole = spec.lead_style == "through_hole"
+    # Through-hole and power-tab leads both intentionally protrude below Z=0.
+    through_hole = spec.lead_style in ("through_hole", "power_tab")
 
     # Lead span (X). Through-hole leads are blades centred on the hole, so the
     # bbox overshoots by the lead thickness; measure the foot-centre span instead.

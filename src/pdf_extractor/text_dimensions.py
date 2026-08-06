@@ -152,6 +152,23 @@ def parse_ti_outline(text: str, pin_count: int) -> Dict[str, float]:
             if len(pair) == 2 and all(0.3 <= p <= 1.5 for p in pair):
                 dims["L"] = (pair[0] + pair[1]) / 2.0
 
+        # c = lead/frame thickness: a bare "c" label anchored to a thin
+        # MIN/MAX pair on the two preceding lines (JEDEC thickness ~0.1-0.3mm).
+        if line == "c" and i >= 2:
+            pair = _floats(" ".join(lines[i - 2:i]))
+            if len(pair) == 2 and all(0.05 <= p <= 0.60 for p in pair):
+                dims["c"] = (pair[0] + pair[1]) / 2.0
+
+        # D2/E2 = exposed thermal pad (QFN/DFN): the two floats that follow
+        # an "exposed pad" / "thermal pad" heading are its D2 then E2 sizes.
+        if re.search(r"(exposed|thermal)\s+pad", line, re.IGNORECASE):
+            following = _floats(" ".join(lines[i + 1:i + 3]))
+            if len(following) >= 2:
+                if 0 < following[0] < 60.0:
+                    dims["D2"] = following[0]
+                if 0 < following[1] < 60.0:
+                    dims["E2"] = following[1]
+
     # Cross-check pitch against the row span annotation ("2X 4.55").
     if "e" in dims:
         m = re.search(rf"\b2X\s+({_FLOAT})", text)
@@ -227,6 +244,29 @@ def plausible_dims(dims: Dict[str, Any]) -> bool:
     body = dims.get("E1") or dims.get("E")
     if body is not None and b is not None and body <= b:
         return False
+
+    # c = lead/frame thickness (JEDEC): a thin sheet, ~0.05-0.60mm.
+    c = dims.get("c")
+    if c is not None and not 0.05 <= c <= 0.60:
+        return False
+
+    # D2/E2 = exposed thermal pad (QFN/DFN): positive and smaller than the
+    # body it sits inside (D along the D axis, E1/E along the E axis).
+    d2 = dims.get("D2")
+    if d2 is not None:
+        if d2 <= 0:
+            return False
+        d_body = dims.get("D")
+        if d_body is not None and d2 >= d_body:
+            return False
+
+    e2 = dims.get("E2")
+    if e2 is not None:
+        if e2 <= 0:
+            return False
+        e_body = dims.get("E1") or dims.get("E")
+        if e_body is not None and e2 >= e_body:
+            return False
 
     return True
 

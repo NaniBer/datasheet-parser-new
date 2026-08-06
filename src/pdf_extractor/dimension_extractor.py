@@ -624,8 +624,11 @@ Extract every labeled dimension and return ONLY valid JSON:
   "dimensions": {{
     "A":  {{"min": "1.05", "max": "1.20"}},
     "b":  {{"min": "0.19", "max": "0.30"}},
+    "c":  {{"min": "0.09", "max": "0.20"}},
     "D":  {{"min": "4.90", "max": "5.10"}},
+    "D2": {{"min": "2.50", "max": "2.70"}},
     "E":  {{"min": "6.20", "max": "6.60"}},
+    "E2": {{"min": "2.50", "max": "2.70"}},
     "e":  "0.65",
     "L":  {{"min": "0.45", "max": "0.75"}}
   }},
@@ -635,6 +638,9 @@ Extract every labeled dimension and return ONLY valid JSON:
 Rules:
 - Read values directly from the drawing — do not guess or use assumed values
 - The pitch e should match what is printed on the drawing (likely 0.65mm)
+- c is the lead/frame thickness (a thin sheet, ~0.1–0.3mm); include it if labeled
+- D2 and E2 are the exposed thermal-pad dimensions on QFN/DFN/leadless
+  packages; include them only if the drawing shows an exposed pad
 - Use a single string value when only one value is shown
 - Return ONLY JSON"""
         else:
@@ -650,6 +656,7 @@ Return ONLY valid JSON:
     "A":  {"min": "2.35", "max": "2.65"},
     "A1": {"min": "0.10", "max": "0.25"},
     "b":  {"min": "0.31", "max": "0.51"},
+    "c":  {"min": "0.17", "max": "0.25"},
     "D":  {"min": "9.80", "max": "10.00"},
     "E":  {"min": "10.00", "max": "10.65"},
     "e":  "1.27",
@@ -661,4 +668,7 @@ Return ONLY valid JSON:
 Rules:
 - Use a single string value (not min/max) when only one value is shown
 - Capture ALL labeled dimensions in the drawing
+- c is the lead thickness (a thin sheet, ~0.1–0.3mm); include it if labeled
+- D2 and E2 are the exposed thermal-pad dimensions on QFN/DFN/leadless
+  packages; include them only if the drawing shows an exposed pad, otherwise omit
 - Return ONLY JSON"""
