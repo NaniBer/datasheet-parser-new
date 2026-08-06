@@ -36,7 +36,15 @@ _PAGE_SIGNATURES = (
     "PACKAGE DIMENSIONS",
     "MECHANICAL DATA",
     "MECHANICAL DIMENSIONS",
+    # Lettered "Dimension Limits" tables (Microchip/Atmel packaging pages).
+    "COMMON DIMENSIONS",
+    "DIMENSION LIMITS",
+    "PACKAGING INFORMATION",
 )
+
+# Headings/markers that identify a lettered dimension-limits TABLE (as opposed
+# to a graphical TI outline). Used to gate parse_dimension_table.
+_TABLE_SIGNATURES = ("COMMON DIMENSIONS", "DIMENSION LIMITS", "PACKAGING INFORMATION")
 
 _FLOAT = r"\d+\.\d+"
 
@@ -212,6 +220,64 @@ def parse_prose(text: str) -> Dict[str, float]:
     return dims
 
 
+def _adjacent_floats(lines: List[str], i: int) -> List[float]:
+    """Floats on the run of pure-float lines immediately before (else after) i.
+
+    In a two-column dimension table the PDF text flow splits each row into a
+    symbol token and its numeric values on separate lines; the values sit in a
+    contiguous run directly adjacent to the symbol. Prefer the preceding run
+    (Microchip/Atmel order is values-then-symbol) and fall back to the following
+    run so symbol-then-values tables also work.
+    """
+    back: List[float] = []
+    j = i - 1
+    while j >= 0 and re.fullmatch(_FLOAT, lines[j]):
+        back.append(float(lines[j]))
+        j -= 1
+    if back:
+        return sorted(back)
+    fwd: List[float] = []
+    j = i + 1
+    while j < len(lines) and re.fullmatch(_FLOAT, lines[j]):
+        fwd.append(float(lines[j]))
+        j += 1
+    return sorted(fwd)
+
+
+def parse_dimension_table(text: str) -> Dict[str, float]:
+    """Parse the vertical profile (A, A1, A2) from a lettered dimension table.
+
+    Microchip/Atmel-style "Dimension Limits" / "COMMON DIMENSIONS" tables print
+    each JEDEC symbol with its MIN/NOM/MAX values on adjacent lines. This reads
+    the standoff A1 and body thickness A2 that the graphical TI-outline parser
+    cannot see (their labels live in the drawing, not the text layer). Only
+    trusted inside a lettered-table context so stray "A"/"A1" tokens elsewhere
+    cannot be mistaken for dimensions.
+    """
+    up = text.upper()
+    has_table = ("SYMBOL" in up and "MIN" in up and "MAX" in up) or any(
+        sig in up for sig in _TABLE_SIGNATURES
+    )
+    if not has_table:
+        return {}
+
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    dims: Dict[str, float] = {}
+    # Per-symbol plausibility: A = overall height, A1 = standoff, A2 = body.
+    bounds = {"A": (0.3, 6.0), "A1": (0.0, 0.6), "A2": (0.2, 6.0)}
+    for i, line in enumerate(lines):
+        if line not in bounds:
+            continue
+        vals = _adjacent_floats(lines, i)
+        if not vals:
+            continue
+        mid = (vals[0] + vals[-1]) / 2.0
+        lo, hi = bounds[line]
+        if lo <= mid <= hi:
+            dims.setdefault(line, mid)
+    return dims
+
+
 def plausible_dims(dims: Dict[str, Any]) -> bool:
     """
     Sanity gate for extracted dimensions (any source — text or vision).
@@ -234,6 +300,19 @@ def plausible_dims(dims: Dict[str, Any]) -> bool:
     a = dims.get("A")
     if a is not None and not 0.3 <= a <= 6.0:
         return False
+
+    # A1 = standoff (seating plane to body underside): a small positive gap.
+    a1 = dims.get("A1")
+    if a1 is not None and not 0.0 <= a1 <= 0.6:
+        return False
+
+    # A2 = moulded body thickness: positive, and no taller than overall A.
+    a2 = dims.get("A2")
+    if a2 is not None:
+        if not 0.2 <= a2 <= 6.0:
+            return False
+        if a is not None and a2 > a + 0.05:
+            return False
 
     for key in ("D", "E", "E1"):
         v = dims.get(key)
@@ -319,6 +398,12 @@ def extract_text_dimensions(
             dims = parse_ti_outline(text, pin_count)
         if not dims:
             dims = parse_prose(text)
+
+        # Supplement the vertical profile (standoff A1, body A2, and height A
+        # when missing) from a lettered dimension table on the same page. The
+        # graphical parser reads the X/Y footprint but not the Z standoff.
+        for key, val in parse_dimension_table(text).items():
+            dims.setdefault(key, val)
 
         if not dims or not plausible_dims(dims):
             continue
