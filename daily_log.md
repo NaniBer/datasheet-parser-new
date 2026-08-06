@@ -1122,3 +1122,63 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] Real CLI run `--both --body-3d` on an actual datasheet PDF (needs LLM/vision endpoints).
 - [ ] Milestone 4 long tail: BGA/grid-array + power-tab (TO-220/DPAK) templates.
 - [ ] Consider merging `feat/3d-body-model-milestone-1` to main once ground-truth gate lands.
+
+## 2026-08-06 — 3D "finish" push: full-completeness (A+B+C+D+E), parallel build
+
+### What We Did
+- ✅ **End-to-end proof (`--both --body-3d` on real PDFs).** Ran the FULL pipeline
+  (fastchat text LLM up; qwen vision 502/down, so vision-fallback dims degrade) across
+  five families: **TL072 (SOIC-8), SN74HC595 (SOIC-16), ATmega328p (DIP-28), DFN.pdf
+  (leadless), cd74hc4017**. All emit `<stem>_body.step` + `.glb`. Measured the STEP:
+  **TL072 body = span 6.000 / len 4.905 / height 1.750 / seated Z=0 — exact vs datasheet.**
+  Bodies come out `UNVALIDATED (unverified)` when A/A1 fell back to defaults — the honest
+  fail-open watermark, geometry still correct. (The integration hook in `main.py:1474` had
+  never actually run on real extracted dims before tonight — now it has.)
+- ✅ **3D ground-truth gate vs official STEP models** (`tools/run_body3d_ground_truth_eval.py`
+  + test). Centroid-normalised, sorted-extent comparison (rotation/axis-invariant) against
+  `tests/ground_truth/*/*.step`. Results: **TL072 SOIC-8 and MM74HC594M SOIC-16 match vendor
+  geometry within 0.01 mm; ATMEGA328P DIP-28 passes.** Honest FAIL: **MCP3208 PDIP-16** — the
+  SnapEDA reference keeps full **splayed uncut leads** (~10.9 mm cross-section) while our
+  `DIPTemplate` uses a fixed 3 mm stub + no splay (~7.3 mm). Real convention difference,
+  surfaced not hidden (didn't loosen tol to force a pass). Gotcha found: `BoundingBox()` on an
+  imported STEP compound returns ∞ in this OCC build — aggregate over `.solids()` instead.
+- ✅ **Extractor fidelity: `c`, `D2`, `E2`** (`text_dimensions.py`, `dimension_extractor.py`).
+  Lead thickness `c` (0.05–0.60 mm gate), exposed-pad `D2/E2` (positive, < body) added to the
+  vision prompts + text parsers + `plausible_dims`. **Optional** — not in `CRITICAL_KEYS`, so
+  absence changes nothing (regression-checked). `Body3DSpec` now carries `lead_thickness_c` +
+  `exposed_pad`; **`LeadlessTemplate` emits an `ExposedPad` node** on the underside centre when
+  D2/E2 are present.
+- ✅ **Two new templates → 5 of 7 core styles becomes 7 of 7 core + grid.**
+  - `BgaTemplate` (BGA/LGA): near-square solder-ball grid from `pin_count`+pitch, balls seat at
+    Z=0. **BGA/LGA now build instead of failing closed.**
+  - `PowerTabTemplate` (TO-220/DPAK/D2PAK): body + heat-sink tab w/ mounting hole + through-hole
+    leads. Routed from the raw package-type string (`_is_power_tab`) because the footprint-family
+    detector returns None for TO packages.
+- ✅ **Parent wiring + fail-closed preserved.** Registered both templates; `_LEAD_STYLE` maps
+  power-tab families and **`LCCC → "jlead"` (unmodelled) so J-lead carriers still refuse** rather
+  than emit a wrong gull-wing body. `validator` treats `power_tab` like `through_hole`. Repointed
+  the two "BGA fails closed" tests → LCCC/jlead (a real still-unsupported case).
+- ✅ **Parallel-subagent build again worked cleanly.** 4 background agents, each owning ONLY its
+  own new files (BGA template, power-tab template, extractor+tests, ground-truth harness); parent
+  did all shared wiring (registry/spec/validator/leadless) after they landed — zero collisions.
+- ✅ **Tests: +40 new** (bga 7, powertab 9, extractor c/D2/E2 12, ground-truth 4, integration 8).
+  **Full suite 337 passed, 1 skipped, exit 0.** Committed `8f97cf4` on
+  `feat/3d-body-model-milestone-1`.
+
+### Notes / Decisions
+- **Reachability vs capability.** Power-tab and BGA are built + registered + reachable via
+  `build_spec` and unit-tested, but full PDF→body reachability is gated UPSTREAM: `_family()`
+  doesn't recognise TO-220/DPAK and `enforce_known_package_type` would refuse them before the body
+  stage; BGA footprints are suppressed for module/grid parts. Wiring upstream package recognition
+  is the remaining Milestone-4 step — the templates are ready for it.
+- **DIP splayed-lead finding left as-is.** Chasing the MCP3208 cross-section to match SnapEDA's
+  splayed leads risks regressing ATMEGA328 (trimmed-lead reference). The gate's job is to surface
+  the difference; it does. Decide the lead-form convention before "fixing".
+- **qwen vision down (502) all session** — text-first dim extraction carried the end-to-end runs.
+
+### Next Plan
+- [ ] Merge `feat/3d-body-model-milestone-1` → main (branch is green; ground-truth gate landed).
+- [ ] Upstream package recognition for TO-220/DPAK (family detector + footprint defaults) so
+      power-tab is reachable end-to-end; unblock BGA footprint for grid parts.
+- [ ] DIP lead-form convention decision (splayed vs stub) informed by the ground-truth gate.
+- [ ] Re-run ground-truth gate when qwen vision is back (verified-confidence bodies, not just default-dim).
