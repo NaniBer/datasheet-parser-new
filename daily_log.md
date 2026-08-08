@@ -1182,3 +1182,49 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
       power-tab is reachable end-to-end; unblock BGA footprint for grid parts.
 - [ ] DIP lead-form convention decision (splayed vs stub) informed by the ground-truth gate.
 - [ ] Re-run ground-truth gate when qwen vision is back (verified-confidence bodies, not just default-dim).
+
+## 2026-08-08 — 3D follow-ups: automated e2e test, text-A1 extraction, corpus report, ST parse fix
+
+### What We Did
+- ✅ **Deterministic PDF→body end-to-end test** (`tests/test_end_to_end_body3d.py`). Drives the
+  real `--both --body-3d` pipeline on checked-in PDFs (lm358 DIP-8, MCP3208 DIP-16) with every
+  network LLM/vision seam patched to RAISE, so it passes only through the deterministic
+  table-parser + text-dimension paths — reproducible in CI despite the LLM ignoring `seed`.
+  Asserts the emitted body STEP reimports with the expected DIP geometry (leads below Z=0, span,
+  height). Committed `15c38eb`.
+- ✅ **Text extraction of standoff A1 / body A2** (`feat` `34c8826`). Root cause of "every body is
+  UNVALIDATED": the `verified` gate needs A **and** A1, but the text parser read A only — A1's
+  label lives in the drawing graphic, not the text layer, so A1 only ever came from vision.
+  Added `parse_dimension_table()`: reads A/A1/A2 from lettered "Dimension Limits" / "COMMON
+  DIMENSIONS" tables (Microchip/Atmel/ST). Proven on ATmega328P TQFP (A=1.2, A1=0.1, A2=1.0).
+  Additive + plausibility-gated; absence changes nothing.
+- ✅ **Corpus extraction report** (`tools/run_extraction_report.py`, `fix` `9cbf0d8`). Runs the
+  REAL pipeline (package + pins + dims, NO 3D build) over all 148 datasheets in isolated per-part
+  subprocesses (timeout + worker pool), fast-failing the down vision endpoint. Findings:
+  - **Package/pins: 134/148 OK (90%).** 14 fail (bridge-rectifier/discrete parts w/ no pins;
+    4 timeouts on big multi-package parts: AVR128DA48, NRF9160×2, BQ500211).
+  - **Dimensions: crippled without vision — 24/134 got any dim, 1 verified-capable.** Footprint
+    dims (e,b,D,E,L) are ~0 from text; they come almost entirely from the vision path.
+  - **75/134 are unsupported discretes** (TO-92/diodes/bridges/crystals) — no footprint/3D anyway;
+    only ~59 are supported IC families.
+  - **Conclusion: the dimension half of the pipeline is gated on the vision endpoint (qwen, 502).**
+- ✅ **ST dual-unit parse bug fix** (surfaced by the report; `9cbf0d8`). STM32L031 came back
+  `A = A1 = 0.30985` — the parser walked one fixed direction (grabbing a neighbour symbol's
+  numbers) and averaged min+max across mixed mm/inch columns ((0.0197 in + 0.600 mm)/2). Fix:
+  detect table orientation once (values-before vs symbol-then-values), drop inch-duplicate values
+  (~other/25.4), mean of in-band values (not min+max), tighten A1 cap to 0.35mm, and drop A1/A2
+  that violate the A1<A2<=A stack-up. STM32 now yields sane dims or nothing; ATmega unchanged.
+  +2 regression tests.
+
+### Notes / Decisions
+- **Vision (qwen1.ideeza.com) has been 502 the whole time**; fastchat (text) is up. No `verified`
+  body could be demonstrated end-to-end — not a code gap, an external outage. The A1 text-parser
+  reduces (does not remove) that dependence: it fires only where a lettered dimension TABLE exists.
+- **Deferred (need vision or bigger scope):** extend text extraction to the full footprint dim set
+  (e/b/D/E/L from lettered tables); upstream package recognition so TO-220/DPAK/BGA reach their
+  templates end-to-end; DIP splayed-lead fidelity (the one ground-truth-gate mismatch).
+
+### Next Plan
+- [ ] Re-run `tools/run_extraction_report.py` once qwen is back — dims columns should fill in.
+- [ ] Merge PR #17 (3D body layer) to main.
+- [ ] Optional: harvest e/b/D/E/L from lettered tables to cut vision dependence further.
