@@ -36,7 +36,15 @@ _PAGE_SIGNATURES = (
     "PACKAGE DIMENSIONS",
     "MECHANICAL DATA",
     "MECHANICAL DIMENSIONS",
+    # Lettered "Dimension Limits" tables (Microchip/Atmel packaging pages).
+    "COMMON DIMENSIONS",
+    "DIMENSION LIMITS",
+    "PACKAGING INFORMATION",
 )
+
+# Headings/markers that identify a lettered dimension-limits TABLE (as opposed
+# to a graphical TI outline). Used to gate parse_dimension_table.
+_TABLE_SIGNATURES = ("COMMON DIMENSIONS", "DIMENSION LIMITS", "PACKAGING INFORMATION")
 
 _FLOAT = r"\d+\.\d+"
 
@@ -152,6 +160,23 @@ def parse_ti_outline(text: str, pin_count: int) -> Dict[str, float]:
             if len(pair) == 2 and all(0.3 <= p <= 1.5 for p in pair):
                 dims["L"] = (pair[0] + pair[1]) / 2.0
 
+        # c = lead/frame thickness: a bare "c" label anchored to a thin
+        # MIN/MAX pair on the two preceding lines (JEDEC thickness ~0.1-0.3mm).
+        if line == "c" and i >= 2:
+            pair = _floats(" ".join(lines[i - 2:i]))
+            if len(pair) == 2 and all(0.05 <= p <= 0.60 for p in pair):
+                dims["c"] = (pair[0] + pair[1]) / 2.0
+
+        # D2/E2 = exposed thermal pad (QFN/DFN): the two floats that follow
+        # an "exposed pad" / "thermal pad" heading are its D2 then E2 sizes.
+        if re.search(r"(exposed|thermal)\s+pad", line, re.IGNORECASE):
+            following = _floats(" ".join(lines[i + 1:i + 3]))
+            if len(following) >= 2:
+                if 0 < following[0] < 60.0:
+                    dims["D2"] = following[0]
+                if 0 < following[1] < 60.0:
+                    dims["E2"] = following[1]
+
     # Cross-check pitch against the row span annotation ("2X 4.55").
     if "e" in dims:
         m = re.search(rf"\b2X\s+({_FLOAT})", text)
@@ -195,6 +220,110 @@ def parse_prose(text: str) -> Dict[str, float]:
     return dims
 
 
+# JEDEC symbols that can appear as standalone tokens in a lettered table. Used
+# only to decide table orientation (which side of a symbol its values sit on).
+_TABLE_SYMBOLS = {
+    "A", "A1", "A2", "A3", "b", "b1", "c", "c1",
+    "D", "D1", "D2", "E", "E1", "E2", "e", "L", "L1",
+}
+
+
+def _pure_float(s: str) -> bool:
+    return re.fullmatch(_FLOAT, s) is not None
+
+
+def _float_run(lines: List[str], i: int, step: int) -> List[float]:
+    """Contiguous run of pure-float lines starting adjacent to i in `step` dir."""
+    run: List[float] = []
+    j = i + step
+    while 0 <= j < len(lines) and _pure_float(lines[j]):
+        run.append(float(lines[j]))
+        j += step
+    return run
+
+
+def _table_orientation(lines: List[str]) -> int:
+    """+1 if a symbol's values FOLLOW it, -1 if they PRECEDE it (majority vote).
+
+    Lettered tables are laid out consistently: either "values then symbol"
+    (Microchip/Atmel, e.g. 0.05 / 0.15 / A1) or "symbol then values" (ST, e.g.
+    A / 0.500 / 0.550 / 0.600). Reading the wrong side grabs a neighbouring
+    symbol's numbers, so orientation is decided once for the whole table.
+    """
+    before = after = 0
+    for i, line in enumerate(lines):
+        if line not in _TABLE_SYMBOLS:
+            continue
+        if i > 0 and _pure_float(lines[i - 1]):
+            before += 1
+        if i + 1 < len(lines) and _pure_float(lines[i + 1]):
+            after += 1
+    return 1 if after > before else -1
+
+
+def _drop_inch_duplicates(vals: List[float]) -> List[float]:
+    """Drop values that are the inch equivalent (mm/25.4) of another value.
+
+    Dual-unit tables print each dimension twice (mm and inch). Mixing the two
+    corrupts any min/max/mean, so a value x is dropped when some other value in
+    the run is ~25.4x (its millimetre counterpart)."""
+    keep = [
+        x for x in vals
+        if not (x > 0 and any(
+            v != x and abs(25.4 * x - v) <= max(0.03, 0.04 * v) for v in vals
+        ))
+    ]
+    return keep or vals
+
+
+def parse_dimension_table(text: str) -> Dict[str, float]:
+    """Parse the vertical profile (A, A1, A2) from a lettered dimension table.
+
+    Microchip/Atmel/ST-style "Dimension Limits" / "COMMON DIMENSIONS" tables
+    print each JEDEC symbol with its MIN/NOM/MAX values on adjacent lines. This
+    reads the standoff A1 and body thickness A2 that the graphical TI-outline
+    parser cannot see (their labels live in the drawing, not the text layer).
+
+    Robust to the two real-world variations: table orientation (values before
+    vs after the symbol, decided once for the whole table) and dual mm/inch
+    units (the inch column is detected and dropped). Only trusted inside a
+    lettered-table context so stray "A"/"A1" tokens elsewhere cannot be mistaken
+    for dimensions.
+    """
+    up = text.upper()
+    has_table = ("SYMBOL" in up and "MIN" in up and "MAX" in up) or any(
+        sig in up for sig in _TABLE_SIGNATURES
+    )
+    if not has_table:
+        return {}
+
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    step = _table_orientation(lines)
+    dims: Dict[str, float] = {}
+    # Per-symbol plausibility: A = overall height, A1 = standoff, A2 = body.
+    # A1 is capped tight (SMD standoffs are <=~0.25mm); a larger value is a
+    # misread of the height column, not a standoff.
+    bounds = {"A": (0.3, 6.0), "A1": (0.0, 0.35), "A2": (0.2, 6.0)}
+    for i, line in enumerate(lines):
+        if line not in bounds:
+            continue
+        run = _drop_inch_duplicates(_float_run(lines, i, step))
+        lo, hi = bounds[line]
+        in_band = [v for v in run if lo <= v <= hi]
+        if not in_band:
+            continue
+        dims.setdefault(line, sum(in_band) / len(in_band))
+
+    # Ordering sanity: standoff < body thickness <= overall height. A misread
+    # that violates the physical stack-up is dropped rather than shipped.
+    a, a1, a2 = dims.get("A"), dims.get("A1"), dims.get("A2")
+    if a is not None and a1 is not None and a1 >= a:
+        dims.pop("A1", None)
+    if a is not None and a2 is not None and a2 > a + 0.05:
+        dims.pop("A2", None)
+    return dims
+
+
 def plausible_dims(dims: Dict[str, Any]) -> bool:
     """
     Sanity gate for extracted dimensions (any source — text or vision).
@@ -218,6 +347,19 @@ def plausible_dims(dims: Dict[str, Any]) -> bool:
     if a is not None and not 0.3 <= a <= 6.0:
         return False
 
+    # A1 = standoff (seating plane to body underside): a small positive gap.
+    a1 = dims.get("A1")
+    if a1 is not None and not 0.0 <= a1 <= 0.35:
+        return False
+
+    # A2 = moulded body thickness: positive, and no taller than overall A.
+    a2 = dims.get("A2")
+    if a2 is not None:
+        if not 0.2 <= a2 <= 6.0:
+            return False
+        if a is not None and a2 > a + 0.05:
+            return False
+
     for key in ("D", "E", "E1"):
         v = dims.get(key)
         if v is not None and not 1.0 <= v <= 60.0:
@@ -227,6 +369,29 @@ def plausible_dims(dims: Dict[str, Any]) -> bool:
     body = dims.get("E1") or dims.get("E")
     if body is not None and b is not None and body <= b:
         return False
+
+    # c = lead/frame thickness (JEDEC): a thin sheet, ~0.05-0.60mm.
+    c = dims.get("c")
+    if c is not None and not 0.05 <= c <= 0.60:
+        return False
+
+    # D2/E2 = exposed thermal pad (QFN/DFN): positive and smaller than the
+    # body it sits inside (D along the D axis, E1/E along the E axis).
+    d2 = dims.get("D2")
+    if d2 is not None:
+        if d2 <= 0:
+            return False
+        d_body = dims.get("D")
+        if d_body is not None and d2 >= d_body:
+            return False
+
+    e2 = dims.get("E2")
+    if e2 is not None:
+        if e2 <= 0:
+            return False
+        e_body = dims.get("E1") or dims.get("E")
+        if e_body is not None and e2 >= e_body:
+            return False
 
     return True
 
@@ -279,6 +444,12 @@ def extract_text_dimensions(
             dims = parse_ti_outline(text, pin_count)
         if not dims:
             dims = parse_prose(text)
+
+        # Supplement the vertical profile (standoff A1, body A2, and height A
+        # when missing) from a lettered dimension table on the same page. The
+        # graphical parser reads the X/Y footprint but not the Z standoff.
+        for key, val in parse_dimension_table(text).items():
+            dims.setdefault(key, val)
 
         if not dims or not plausible_dims(dims):
             continue

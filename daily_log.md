@@ -1020,3 +1020,211 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
       TDD + verify vs TPS51100 (still caught) and L4984D/L6564T (no over-trim). Not urgent.
 - [ ] Class B, INA-type: enforce the grounded ordering count (pad up missing NC to reach 10).
 - [ ] Class B, L-type + TPS51100 family→geometry; MCP101 broken-font track (unchanged).
+
+## 2026-08-03 — 3D component-body model layer (research → Milestone 1, Milestone 2 start)
+
+### What We Did
+- ✅ **Multi-agent research → architecture doc.** Ran 6 parallel subagents (pipeline audit,
+  physical-package data model, current 3D/GLB generation, OSS CAD-tool selection, package-modeling
+  conventions & reusable libraries, validation strategy), reconciled the two real tensions
+  (origin convention; generator licensing), and wrote **`docs/3d-model-generation-architecture.md`**
+  (full 12-part plan). Key findings: the system is already a cadquery/OCCT B-rep pipeline extracting
+  the JEDEC dims a body needs (A, A1, b, D, E, E1, e, L) in mm/+Z-up/origin-at-centre; **STEP export
+  is basically free** (`Assembly.export`); **`A`/`A1` were extracted but discarded** by the footprint
+  path; **stay on CadQuery** (Apache/LGPL-with-exception, no GPL); clean-room our own templates using
+  KiCad generator params as reference (their code is GPL/LGPL/AGPL).
+- ✅ **Milestone 1 — SOIC gull-wing vertical slice, committed (`fd31bf9`, branch
+  `feat/3d-body-model-milestone-1`).** New `src/model3d/` package, all test-first (TDD):
+  `spec.py` (Body3DSpec + build_spec — wires in the discarded A/A1, resolves SOIC narrow-vs-wide
+  D/DW by lead span), `templates/{base,gullwing}.py`, `registry.py` (fail-closed on unsupported
+  styles), `exporter.py` (STEP+GLB via `Assembly.export`), `validator.py` (measures in-memory B-rep
+  vs spec — lead count exact, span/length/height, seating plane), `builder.py` (`build_body_model`).
+  `main.py`: opt-in `--body-3d` flag (requires `--both`), best-effort hook after footprint success
+  that can never fail a run. **Verified on SN74HC595 SOIC-16:** STEP/GLB match the datasheet exactly
+  (span 10.325, length 9.90, height 2.50 mm, seated Z=0, 16 leads).
+- ✅ **Milestone 2 (start) — footprint↔body alignment + gull-wing breadth (uncommitted).**
+  - **Alignment check:** `validator.validate_alignment(assembly, pad_map)` compares each lead's foot
+    (`faces("<Z").val().Center()`) to the **real** footprint pad centres
+    (`PcbFootprintBuilder.pin_positions`). SOIC-16 worst-pin delta = **~1e-15 mm** (two independent
+    computations agree perfectly, incl. pin-1/CCW numbering). Wired an optional `footprint_pad_map`
+    into `build_body_model` (folds into `validated`) and into the `main.py` hook (reconstructs the
+    pad map cheaply — heavy work is in `save_glb`, not the ctor).
+  - **Breadth:** proved the gull-wing template generalizes with **zero new geometry** — TSSOP-20,
+    SSOP-16, MSOP-8 all build + validate end-to-end (guards the "general parser, not corpus-tuned"
+    principle).
+- ✅ **Tests:** 19 new tests in `tests/test_model3d.py` (spec, template, exporter, validator,
+  alignment, breadth, builder, pipeline hook). Full suite green (exit 0), no regressions.
+
+### Notes / Decisions
+- **Origin:** align the body to the footprint's own origin (component centre, Z=0) for internal
+  consistency; KiCad datum + WRL 1/2.54 scale is a separate optional export mode, not baked into
+  templates.
+- **Validation is two-tier:** tight (±0.02–0.05 mm) for our own build fidelity; loose
+  (±0.35 placement) for alignment. `A` is treated as one-sided max.
+- Demo artifacts (gitignored) in `eval_output/body3d_demo_2026-08-03/`.
+
+### Next Plan
+- [ ] Commit the Milestone-2 increment (alignment + breadth) on the feature branch.
+- [ ] Milestone 2 breadth — new templates: **leadless** (QFN/DFN/WSON/SON, + exposed pad D2/E2),
+      **quad gull-wing** (QFP/TQFP/LQFP), **chip** passives (R/C/L), **through-hole** DIP.
+- [ ] Add a small 3D ground-truth gate: compare generated bodies' bounding boxes to official KiCad
+      STEP models, centroid-normalized, within tolerance.
+- [ ] Extractor: add **`c`** (lead thickness) and **`D2/E2`** (exposed pad) — needed for faithful
+      leadless/gull-wing bodies (currently defaulted).
+- [ ] Real CLI run `--both --body-3d` on an actual SOIC datasheet PDF (needs LLM/vision endpoints).
+
+## 2026-08-05 — Milestone 2 breadth: four package-body templates (parallel build)
+
+### What We Did
+- ✅ **Committed the Milestone-2 start increment (`cf23c4d`)** — footprint↔body alignment check
+  + gull-wing breadth (TSSOP-20/SSOP-16/MSOP-8), the work left uncommitted on 08-03.
+- ✅ **Built the four remaining core body templates in parallel**, one background subagent each,
+  under strict guardrails (each creates ONLY its own template + test file; do NOT touch the shared
+  registry/spec/validator; strict TDD). This kept them collision-free — all four landed green with
+  no merge conflicts. Committed together as **`11309f9`** on branch
+  `feat/3d-body-model-milestone-1`:
+  - `templates/quad_gullwing.py` — **QuadGullwingTemplate** (QFP/TQFP/LQFP). 4-sided gull-wing;
+    derives the Y-axis body edge as `D − (E − E1)` (same overhang as the E axis). 4 tests.
+  - `templates/leadless.py` — **LeadlessTemplate** (QFN/DFN/WSON/SON). Flush bottom terminals on
+    the seating plane; handles dual-row (DFN/SON) and quad (QFN) off `pins_per_side`. Exposed
+    thermal pad D2/E2 **deferred** (extractor doesn't emit it yet). 3 tests.
+  - `templates/chip.py` — **ChipTemplate** (R/C/L, 0201–1206). Two wrap-around end caps; band
+    width = `L` or default `0.25·D`. 5 tests.
+  - `templates/dip.py` — **DIPTemplate** (DIP/PDIP/CDIP). Straight through-hole leads running
+    **below the board** to Z=−3.0; body sits above on its standoff. 5 tests.
+- ✅ **Integration pass (parent, after all four landed):**
+  - `spec.py`: `_LEAD_STYLE` remaps QFP-family → `"quad_gullwing"`, adds chip families
+    (R/C/L/RES/CAP/IND → `"chip"`) and `BGA/LGA → "bga"` (no template ⇒ **fail closed**). New
+    `_pins_per_side()` computes a quad `[L,R,T,B]` split for QFP/QFN (remainder onto first sides).
+  - `registry.py` + `templates/__init__.py`: registered all four.
+  - `validator.py`: `validate_body` is now **through-hole-aware** — for `lead_style=="through_hole"`
+    it measures the lead-**foot** span (blades overshoot the bbox) and validates the Body child's
+    top (A) + underside standoff (A1), instead of demanding the whole assembly seat at Z=0.
+  - Repointed two existing fail-closed assertions from QFN/leadless (now supported) → BGA.
+- ✅ **Tests:** +17 across 4 standalone template suites. **Full suite 297 passed, 1 skipped**
+  (was 280), exit 0, no regressions.
+
+### Notes / Decisions
+- **Template coverage now 5 of ~7 core styles** (dual + quad gull-wing, leadless, chip, DIP) —
+  covers the large majority of real parts. Left for Milestone 4 long tail: BGA/grid, power-tab
+  (TO-220/DPAK). BGA deliberately skips (fail-closed) rather than emit a wrong shape.
+- **Parallel-subagent pattern worked:** geometry files are independent; the ONLY collision risk was
+  the shared wiring (registry/spec/validator/shared test), so that was reserved for the parent. Good
+  template for future fan-out work.
+- **Still validated against own dimensional spec only** (bbox + seating), NOT yet against official
+  KiCad reference STEP models — the 3D ground-truth gate remains open.
+
+### Next Plan
+- [ ] 3D ground-truth gate: compare generated bodies' bounding boxes to official KiCad STEP models,
+      centroid-normalized, within tolerance.
+- [ ] Extractor: add **`c`** (lead thickness) and **`D2/E2`** (exposed pad) → then add the QFN/DFN
+      center thermal pad to LeadlessTemplate.
+- [ ] Real CLI run `--both --body-3d` on an actual datasheet PDF (needs LLM/vision endpoints).
+- [ ] Milestone 4 long tail: BGA/grid-array + power-tab (TO-220/DPAK) templates.
+- [ ] Consider merging `feat/3d-body-model-milestone-1` to main once ground-truth gate lands.
+
+## 2026-08-06 — 3D "finish" push: full-completeness (A+B+C+D+E), parallel build
+
+### What We Did
+- ✅ **End-to-end proof (`--both --body-3d` on real PDFs).** Ran the FULL pipeline
+  (fastchat text LLM up; qwen vision 502/down, so vision-fallback dims degrade) across
+  five families: **TL072 (SOIC-8), SN74HC595 (SOIC-16), ATmega328p (DIP-28), DFN.pdf
+  (leadless), cd74hc4017**. All emit `<stem>_body.step` + `.glb`. Measured the STEP:
+  **TL072 body = span 6.000 / len 4.905 / height 1.750 / seated Z=0 — exact vs datasheet.**
+  Bodies come out `UNVALIDATED (unverified)` when A/A1 fell back to defaults — the honest
+  fail-open watermark, geometry still correct. (The integration hook in `main.py:1474` had
+  never actually run on real extracted dims before tonight — now it has.)
+- ✅ **3D ground-truth gate vs official STEP models** (`tools/run_body3d_ground_truth_eval.py`
+  + test). Centroid-normalised, sorted-extent comparison (rotation/axis-invariant) against
+  `tests/ground_truth/*/*.step`. Results: **TL072 SOIC-8 and MM74HC594M SOIC-16 match vendor
+  geometry within 0.01 mm; ATMEGA328P DIP-28 passes.** Honest FAIL: **MCP3208 PDIP-16** — the
+  SnapEDA reference keeps full **splayed uncut leads** (~10.9 mm cross-section) while our
+  `DIPTemplate` uses a fixed 3 mm stub + no splay (~7.3 mm). Real convention difference,
+  surfaced not hidden (didn't loosen tol to force a pass). Gotcha found: `BoundingBox()` on an
+  imported STEP compound returns ∞ in this OCC build — aggregate over `.solids()` instead.
+- ✅ **Extractor fidelity: `c`, `D2`, `E2`** (`text_dimensions.py`, `dimension_extractor.py`).
+  Lead thickness `c` (0.05–0.60 mm gate), exposed-pad `D2/E2` (positive, < body) added to the
+  vision prompts + text parsers + `plausible_dims`. **Optional** — not in `CRITICAL_KEYS`, so
+  absence changes nothing (regression-checked). `Body3DSpec` now carries `lead_thickness_c` +
+  `exposed_pad`; **`LeadlessTemplate` emits an `ExposedPad` node** on the underside centre when
+  D2/E2 are present.
+- ✅ **Two new templates → 5 of 7 core styles becomes 7 of 7 core + grid.**
+  - `BgaTemplate` (BGA/LGA): near-square solder-ball grid from `pin_count`+pitch, balls seat at
+    Z=0. **BGA/LGA now build instead of failing closed.**
+  - `PowerTabTemplate` (TO-220/DPAK/D2PAK): body + heat-sink tab w/ mounting hole + through-hole
+    leads. Routed from the raw package-type string (`_is_power_tab`) because the footprint-family
+    detector returns None for TO packages.
+- ✅ **Parent wiring + fail-closed preserved.** Registered both templates; `_LEAD_STYLE` maps
+  power-tab families and **`LCCC → "jlead"` (unmodelled) so J-lead carriers still refuse** rather
+  than emit a wrong gull-wing body. `validator` treats `power_tab` like `through_hole`. Repointed
+  the two "BGA fails closed" tests → LCCC/jlead (a real still-unsupported case).
+- ✅ **Parallel-subagent build again worked cleanly.** 4 background agents, each owning ONLY its
+  own new files (BGA template, power-tab template, extractor+tests, ground-truth harness); parent
+  did all shared wiring (registry/spec/validator/leadless) after they landed — zero collisions.
+- ✅ **Tests: +40 new** (bga 7, powertab 9, extractor c/D2/E2 12, ground-truth 4, integration 8).
+  **Full suite 337 passed, 1 skipped, exit 0.** Committed `8f97cf4` on
+  `feat/3d-body-model-milestone-1`.
+
+### Notes / Decisions
+- **Reachability vs capability.** Power-tab and BGA are built + registered + reachable via
+  `build_spec` and unit-tested, but full PDF→body reachability is gated UPSTREAM: `_family()`
+  doesn't recognise TO-220/DPAK and `enforce_known_package_type` would refuse them before the body
+  stage; BGA footprints are suppressed for module/grid parts. Wiring upstream package recognition
+  is the remaining Milestone-4 step — the templates are ready for it.
+- **DIP splayed-lead finding left as-is.** Chasing the MCP3208 cross-section to match SnapEDA's
+  splayed leads risks regressing ATMEGA328 (trimmed-lead reference). The gate's job is to surface
+  the difference; it does. Decide the lead-form convention before "fixing".
+- **qwen vision down (502) all session** — text-first dim extraction carried the end-to-end runs.
+
+### Next Plan
+- [ ] Merge `feat/3d-body-model-milestone-1` → main (branch is green; ground-truth gate landed).
+- [ ] Upstream package recognition for TO-220/DPAK (family detector + footprint defaults) so
+      power-tab is reachable end-to-end; unblock BGA footprint for grid parts.
+- [ ] DIP lead-form convention decision (splayed vs stub) informed by the ground-truth gate.
+- [ ] Re-run ground-truth gate when qwen vision is back (verified-confidence bodies, not just default-dim).
+
+## 2026-08-08 — 3D follow-ups: automated e2e test, text-A1 extraction, corpus report, ST parse fix
+
+### What We Did
+- ✅ **Deterministic PDF→body end-to-end test** (`tests/test_end_to_end_body3d.py`). Drives the
+  real `--both --body-3d` pipeline on checked-in PDFs (lm358 DIP-8, MCP3208 DIP-16) with every
+  network LLM/vision seam patched to RAISE, so it passes only through the deterministic
+  table-parser + text-dimension paths — reproducible in CI despite the LLM ignoring `seed`.
+  Asserts the emitted body STEP reimports with the expected DIP geometry (leads below Z=0, span,
+  height). Committed `15c38eb`.
+- ✅ **Text extraction of standoff A1 / body A2** (`feat` `34c8826`). Root cause of "every body is
+  UNVALIDATED": the `verified` gate needs A **and** A1, but the text parser read A only — A1's
+  label lives in the drawing graphic, not the text layer, so A1 only ever came from vision.
+  Added `parse_dimension_table()`: reads A/A1/A2 from lettered "Dimension Limits" / "COMMON
+  DIMENSIONS" tables (Microchip/Atmel/ST). Proven on ATmega328P TQFP (A=1.2, A1=0.1, A2=1.0).
+  Additive + plausibility-gated; absence changes nothing.
+- ✅ **Corpus extraction report** (`tools/run_extraction_report.py`, `fix` `9cbf0d8`). Runs the
+  REAL pipeline (package + pins + dims, NO 3D build) over all 148 datasheets in isolated per-part
+  subprocesses (timeout + worker pool), fast-failing the down vision endpoint. Findings:
+  - **Package/pins: 134/148 OK (90%).** 14 fail (bridge-rectifier/discrete parts w/ no pins;
+    4 timeouts on big multi-package parts: AVR128DA48, NRF9160×2, BQ500211).
+  - **Dimensions: crippled without vision — 24/134 got any dim, 1 verified-capable.** Footprint
+    dims (e,b,D,E,L) are ~0 from text; they come almost entirely from the vision path.
+  - **75/134 are unsupported discretes** (TO-92/diodes/bridges/crystals) — no footprint/3D anyway;
+    only ~59 are supported IC families.
+  - **Conclusion: the dimension half of the pipeline is gated on the vision endpoint (qwen, 502).**
+- ✅ **ST dual-unit parse bug fix** (surfaced by the report; `9cbf0d8`). STM32L031 came back
+  `A = A1 = 0.30985` — the parser walked one fixed direction (grabbing a neighbour symbol's
+  numbers) and averaged min+max across mixed mm/inch columns ((0.0197 in + 0.600 mm)/2). Fix:
+  detect table orientation once (values-before vs symbol-then-values), drop inch-duplicate values
+  (~other/25.4), mean of in-band values (not min+max), tighten A1 cap to 0.35mm, and drop A1/A2
+  that violate the A1<A2<=A stack-up. STM32 now yields sane dims or nothing; ATmega unchanged.
+  +2 regression tests.
+
+### Notes / Decisions
+- **Vision (qwen1.ideeza.com) has been 502 the whole time**; fastchat (text) is up. No `verified`
+  body could be demonstrated end-to-end — not a code gap, an external outage. The A1 text-parser
+  reduces (does not remove) that dependence: it fires only where a lettered dimension TABLE exists.
+- **Deferred (need vision or bigger scope):** extend text extraction to the full footprint dim set
+  (e/b/D/E/L from lettered tables); upstream package recognition so TO-220/DPAK/BGA reach their
+  templates end-to-end; DIP splayed-lead fidelity (the one ground-truth-gate mismatch).
+
+### Next Plan
+- [ ] Re-run `tools/run_extraction_report.py` once qwen is back — dims columns should fill in.
+- [ ] Merge PR #17 (3D body layer) to main.
+- [ ] Optional: harvest e/b/D/E/L from lettered tables to cut vision dependence further.
