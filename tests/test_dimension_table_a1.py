@@ -61,6 +61,45 @@ class TestParseDimensionTable:
         assert "A1" not in parse_dimension_table(table)
 
 
+class TestDualUnitAndOrientation:
+    """Regression: dual-unit (mm+inch), symbol-then-values tables must not mix
+    units or grab a neighbouring symbol's numbers (the STM32L031 A=A1=0.30985
+    bug: averaging an inch value with a mm max)."""
+
+    # ST-style: symbol then [mm min, mm typ, mm max, inch max]; inch column is
+    # the mm value / 25.4 and must be dropped, not averaged in.
+    ST_DUAL_UNIT = """\
+Symbol
+Min
+Typ
+Max
+Max
+A
+0.500
+0.550
+0.600
+0.0236
+A1
+0.000
+0.020
+0.050
+0.0020
+"""
+
+    def test_does_not_average_mm_with_inch(self):
+        dims = parse_dimension_table(self.ST_DUAL_UNIT)
+        # A ~ mm column (not (0.0236 + 0.600)/2 = 0.31), A1 ~ small standoff.
+        assert 0.45 <= dims["A"] <= 0.62
+        assert dims["A1"] < 0.1
+        # The old bug produced A == A1 == 0.30985.
+        assert dims["A"] != dims.get("A1")
+
+    def test_height_not_mislabelled_as_standoff(self):
+        # A standoff column that misreads the ~0.55 height must be rejected,
+        # not stored as A1 (A1 cap is 0.35mm).
+        assert parse_dimension_table(self.ST_DUAL_UNIT).get("A1", 0) < 0.35
+
+
 class TestPlausibilityA1A2:
     def test_accepts_valid_vertical_profile(self):
         assert plausible_dims({"A": 1.2, "A1": 0.1, "A2": 1.0}) is True

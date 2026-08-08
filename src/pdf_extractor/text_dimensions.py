@@ -220,39 +220,75 @@ def parse_prose(text: str) -> Dict[str, float]:
     return dims
 
 
-def _adjacent_floats(lines: List[str], i: int) -> List[float]:
-    """Floats on the run of pure-float lines immediately before (else after) i.
+# JEDEC symbols that can appear as standalone tokens in a lettered table. Used
+# only to decide table orientation (which side of a symbol its values sit on).
+_TABLE_SYMBOLS = {
+    "A", "A1", "A2", "A3", "b", "b1", "c", "c1",
+    "D", "D1", "D2", "E", "E1", "E2", "e", "L", "L1",
+}
 
-    In a two-column dimension table the PDF text flow splits each row into a
-    symbol token and its numeric values on separate lines; the values sit in a
-    contiguous run directly adjacent to the symbol. Prefer the preceding run
-    (Microchip/Atmel order is values-then-symbol) and fall back to the following
-    run so symbol-then-values tables also work.
+
+def _pure_float(s: str) -> bool:
+    return re.fullmatch(_FLOAT, s) is not None
+
+
+def _float_run(lines: List[str], i: int, step: int) -> List[float]:
+    """Contiguous run of pure-float lines starting adjacent to i in `step` dir."""
+    run: List[float] = []
+    j = i + step
+    while 0 <= j < len(lines) and _pure_float(lines[j]):
+        run.append(float(lines[j]))
+        j += step
+    return run
+
+
+def _table_orientation(lines: List[str]) -> int:
+    """+1 if a symbol's values FOLLOW it, -1 if they PRECEDE it (majority vote).
+
+    Lettered tables are laid out consistently: either "values then symbol"
+    (Microchip/Atmel, e.g. 0.05 / 0.15 / A1) or "symbol then values" (ST, e.g.
+    A / 0.500 / 0.550 / 0.600). Reading the wrong side grabs a neighbouring
+    symbol's numbers, so orientation is decided once for the whole table.
     """
-    back: List[float] = []
-    j = i - 1
-    while j >= 0 and re.fullmatch(_FLOAT, lines[j]):
-        back.append(float(lines[j]))
-        j -= 1
-    if back:
-        return sorted(back)
-    fwd: List[float] = []
-    j = i + 1
-    while j < len(lines) and re.fullmatch(_FLOAT, lines[j]):
-        fwd.append(float(lines[j]))
-        j += 1
-    return sorted(fwd)
+    before = after = 0
+    for i, line in enumerate(lines):
+        if line not in _TABLE_SYMBOLS:
+            continue
+        if i > 0 and _pure_float(lines[i - 1]):
+            before += 1
+        if i + 1 < len(lines) and _pure_float(lines[i + 1]):
+            after += 1
+    return 1 if after > before else -1
+
+
+def _drop_inch_duplicates(vals: List[float]) -> List[float]:
+    """Drop values that are the inch equivalent (mm/25.4) of another value.
+
+    Dual-unit tables print each dimension twice (mm and inch). Mixing the two
+    corrupts any min/max/mean, so a value x is dropped when some other value in
+    the run is ~25.4x (its millimetre counterpart)."""
+    keep = [
+        x for x in vals
+        if not (x > 0 and any(
+            v != x and abs(25.4 * x - v) <= max(0.03, 0.04 * v) for v in vals
+        ))
+    ]
+    return keep or vals
 
 
 def parse_dimension_table(text: str) -> Dict[str, float]:
     """Parse the vertical profile (A, A1, A2) from a lettered dimension table.
 
-    Microchip/Atmel-style "Dimension Limits" / "COMMON DIMENSIONS" tables print
-    each JEDEC symbol with its MIN/NOM/MAX values on adjacent lines. This reads
-    the standoff A1 and body thickness A2 that the graphical TI-outline parser
-    cannot see (their labels live in the drawing, not the text layer). Only
-    trusted inside a lettered-table context so stray "A"/"A1" tokens elsewhere
-    cannot be mistaken for dimensions.
+    Microchip/Atmel/ST-style "Dimension Limits" / "COMMON DIMENSIONS" tables
+    print each JEDEC symbol with its MIN/NOM/MAX values on adjacent lines. This
+    reads the standoff A1 and body thickness A2 that the graphical TI-outline
+    parser cannot see (their labels live in the drawing, not the text layer).
+
+    Robust to the two real-world variations: table orientation (values before
+    vs after the symbol, decided once for the whole table) and dual mm/inch
+    units (the inch column is detected and dropped). Only trusted inside a
+    lettered-table context so stray "A"/"A1" tokens elsewhere cannot be mistaken
+    for dimensions.
     """
     up = text.upper()
     has_table = ("SYMBOL" in up and "MIN" in up and "MAX" in up) or any(
@@ -262,19 +298,29 @@ def parse_dimension_table(text: str) -> Dict[str, float]:
         return {}
 
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+    step = _table_orientation(lines)
     dims: Dict[str, float] = {}
     # Per-symbol plausibility: A = overall height, A1 = standoff, A2 = body.
-    bounds = {"A": (0.3, 6.0), "A1": (0.0, 0.6), "A2": (0.2, 6.0)}
+    # A1 is capped tight (SMD standoffs are <=~0.25mm); a larger value is a
+    # misread of the height column, not a standoff.
+    bounds = {"A": (0.3, 6.0), "A1": (0.0, 0.35), "A2": (0.2, 6.0)}
     for i, line in enumerate(lines):
         if line not in bounds:
             continue
-        vals = _adjacent_floats(lines, i)
-        if not vals:
-            continue
-        mid = (vals[0] + vals[-1]) / 2.0
+        run = _drop_inch_duplicates(_float_run(lines, i, step))
         lo, hi = bounds[line]
-        if lo <= mid <= hi:
-            dims.setdefault(line, mid)
+        in_band = [v for v in run if lo <= v <= hi]
+        if not in_band:
+            continue
+        dims.setdefault(line, sum(in_band) / len(in_band))
+
+    # Ordering sanity: standoff < body thickness <= overall height. A misread
+    # that violates the physical stack-up is dropped rather than shipped.
+    a, a1, a2 = dims.get("A"), dims.get("A1"), dims.get("A2")
+    if a is not None and a1 is not None and a1 >= a:
+        dims.pop("A1", None)
+    if a is not None and a2 is not None and a2 > a + 0.05:
+        dims.pop("A2", None)
     return dims
 
 
@@ -303,7 +349,7 @@ def plausible_dims(dims: Dict[str, Any]) -> bool:
 
     # A1 = standoff (seating plane to body underside): a small positive gap.
     a1 = dims.get("A1")
-    if a1 is not None and not 0.0 <= a1 <= 0.6:
+    if a1 is not None and not 0.0 <= a1 <= 0.35:
         return False
 
     # A2 = moulded body thickness: positive, and no taller than overall A.
