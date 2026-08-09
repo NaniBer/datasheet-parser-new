@@ -1228,3 +1228,52 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] Re-run `tools/run_extraction_report.py` once qwen is back — dims columns should fill in.
 - [ ] Merge PR #17 (3D body layer) to main.
 - [ ] Optional: harvest e/b/D/E/L from lettered tables to cut vision dependence further.
+
+## 2026-08-09 — Vision endpoint fix + text-dim breadth → FIRST verified 3D body
+
+### What We Did
+- ✅ **Root-caused the vision outage: wrong host.** The layout OCR client
+  (`image_ocr_client.py`) pointed at `qwen1.ideeza.com/describe_image_llm` — **502 (dead)** —
+  while the dimension extractor already used `qwen.ideeza.com/describe_image/`, which is **UP**.
+  Direct probe of the live endpoint returned a full dim set for the ATmega TQFP page (incl.
+  A1=0.05–0.15). So "vision down" all along was partly a stale endpoint in one client.
+- ✅ **Fixed `image_ocr_client.py`** → `https://qwen.ideeza.com/describe_image/`, and switched its
+  payload from `{system_prompt,user_prompt}` to the endpoint's `{file, text}` contract (matching
+  the working dimension_extractor call). No old-URL references remain.
+- ✅ **Extended the lettered-table text parser** (`parse_dimension_table`, parallel agent) to
+  harvest the FULL footprint set — e/b/D/E/E1/L (+ combined D/E, D1/E1 tokens) — not just A/A1/A2.
+  Reuses the orientation + inch-drop + in-band-mean machinery; snaps `e` to STANDARD_PITCHES.
+  ATmega TQFP now yields a complete dim set **from text alone**.
+- ✅ **🎉 FIRST `[verified]` 3D body, end-to-end.** `ATmega328P --both --body-3d
+  --part-number ATMEGA328P-AU` → TQFP-32 body tagged **verified** (dims_source=text: A=1.2 A1=0.1
+  A2=1.0 e=0.8 b=0.375 L=0.6 D=9.0 E1=7.0). STEP measures X=9.00 Y=9.00 Z=1.20, seated Z=0 — exact.
+  Notably this needed **no vision** — the lettered-table text parse now covers it.
+- ✅ **Upstream power-tab recognition** (parallel agent): `_family()` now classifies
+  TO-220→TO220, TO-252/DPAK→DPAK, TO-263/D2PAK→D2PAK, TO-247→TO247; `get_footprint_defaults`
+  still returns None for them (no fabricated footprint). **Parent wiring:** added those tokens to
+  `spec.py::_LEAD_STYLE → power_tab` (the agent's integration note — the old `_is_power_tab`
+  fallback stopped firing once `_family` returned non-None). All TO/DPAK now route to power_tab
+  and build (Tab + leads).
+- ✅ **DIP splayed-lead fidelity** (parallel agent): `DIPTemplate` leads now exit at the body wall
+  (E1), step outward through a shoulder to the seated row spacing (E), and drop below-board by the
+  datasheet `L` when plausible (else 3.0mm default). Feet still land exactly at `lead_span_E` so
+  `validate_body` passes; ATmega DIP-28 still passes (height delta improved 0.33→0.03). Honest
+  note kept: MCP3208's vendor STEP is in an over-splayed manufactured state (rows 9.14 > E) —
+  matching that would violate the seated-row contract / overfit, so left as a documented
+  convention difference.
+
+### Notes / Decisions
+- **Parallel-agent pattern again clean:** 3 agents on separate files (text_dimensions /
+  footprint_defaults / dip.py + their tests); parent kept the shared spec.py wiring and the
+  live end-to-end verification. Only real integration seam was spec.py `_LEAD_STYLE`.
+- **Verified bodies no longer strictly require vision** for datasheets with a lettered dimension
+  table (Microchip/Atmel/ST). Vision remains the path for graphical-only outlines (TI etc.).
+- Full suite green (exit 0). Tests: +stream1 (13), +power_tab_family (24), +dip splay tests.
+
+### Next Plan
+- [ ] Extractor page-matching: graphical-outline parts (tl072 SOIC) still fall back to text-only
+      (D/E1) — vision candidates get filtered by the family/designator/plausibility chain on
+      messy multi-package datasheets. Worth a focused look for verified bodies on TI-style parts.
+- [ ] Pin extraction still misidentifies multi-package parts (ATmega needed --part-number to pick
+      TQFP over DIP) — package-selection accuracy is the next lever for hands-free verified bodies.
+- [ ] PR this branch; re-run the corpus extraction report (dims columns should fill in now).
