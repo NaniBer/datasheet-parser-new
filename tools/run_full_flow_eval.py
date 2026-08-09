@@ -20,11 +20,14 @@ Deliberate expectations:
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +41,12 @@ except ImportError:  # pragma: no cover - fitz is a hard dep elsewhere
 PDF_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("pdfs")
 OUT_DIR = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("/tmp/flow_eval")
 REPORT = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("eval_output/flow_eval_report.json")
+
+# Parallelism + watchdog (override via env). Capped low to avoid starving the
+# shared LLM endpoint / local CPU; the per-part timeout kills stalls (the
+# corpus has a few parts whose LLM call hangs, e.g. AVR128DA48/NRF9160).
+WORKERS = int(os.environ.get("FLOW_EVAL_WORKERS", "4"))
+PART_TIMEOUT = int(os.environ.get("FLOW_EVAL_TIMEOUT", "360"))
 
 # Part-number hints where the datasheet covers several variants.
 PART_HINTS = {
@@ -348,9 +357,9 @@ def run_one(pdf: Path) -> dict:
 
     t0 = time.time()
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=PART_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return {"pdf": pdf.name, "status": "TIMEOUT", "seconds": 900}
+        return {"pdf": pdf.name, "status": "TIMEOUT", "seconds": PART_TIMEOUT}
 
     res = {
         "pdf": pdf.name,
@@ -457,6 +466,8 @@ def main():
     skip = intake["skip"]
 
     results = []
+    lock = threading.Lock()
+    to_run = []
     for pdf in pdfs:
         reason = skip.get(pdf.name)
         if reason:
@@ -464,17 +475,32 @@ def main():
             # run (saves LLM calls) and exclude from PASS/FAIL scoring.
             r = {"pdf": pdf.name, **reason, "scored": False}
             results.append(r)
-            print(f"=== {pdf.name} (skipped: {reason['status']}) ===",
-                  flush=True)
-            print(json.dumps(r, indent=None), flush=True)
-            _write_report(intake, results)
-            continue
-        print(f"=== {pdf.name} ===", flush=True)
-        r = run_one(pdf)
-        r["scored"] = True
-        results.append(r)
-        print(json.dumps(r, indent=None), flush=True)
-        _write_report(intake, results)
+            print(f"=== {pdf.name} (skipped: {reason['status']}) ===", flush=True)
+        else:
+            to_run.append(pdf)
+    _write_report(intake, results)
+
+    done = 0
+    total = len(to_run)
+    print(f"=== running {total} parts, {WORKERS} workers, "
+          f"{PART_TIMEOUT}s/part ===", flush=True)
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        futs = {ex.submit(run_one, pdf): pdf for pdf in to_run}
+        for fut in as_completed(futs):
+            r = fut.result()
+            r["scored"] = True
+            with lock:
+                results.append(r)
+                done += 1
+                n = done
+                _write_report(intake, results)
+            wv = r.get("wrong_variant", "")
+            print(f"[{n:3}/{total}] {r['pdf']:<34} {r.get('status','?'):<9} "
+                  f"{wv}", flush=True)
+
+    # Deterministic order in the persisted report regardless of finish order.
+    results.sort(key=lambda x: x["pdf"].lower())
+    _write_report(intake, results)
 
     scored = [r for r in results if r.get("scored")]
     n_pass = sum(1 for r in scored if r["status"] == "PASS")
