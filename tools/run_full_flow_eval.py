@@ -394,6 +394,15 @@ def run_one(pdf: Path) -> dict:
         except Exception as exc:
             res["schematic_error"] = str(exc)
 
+    # The pipeline's own module detector declined a chip footprint (module /
+    # SiP / grid-array). Its pin table describes the module, not a chip package,
+    # so grading pin count against a chip expectation is apples-to-oranges:
+    # report it but exclude from PASS/FAIL (like duplicates / non-datasheets).
+    if "Footprint skipped (schematic only)" in proc.stdout:
+        res["status"] = "MODULE_SCHEMATIC_ONLY"
+        res["scored"] = False
+        return res
+
     footprint_refused_ok = (
         stem in EXPECT_NO_FOOTPRINT and not res["footprint"] and res["schematic"]
     )
@@ -488,7 +497,7 @@ def main():
         futs = {ex.submit(run_one, pdf): pdf for pdf in to_run}
         for fut in as_completed(futs):
             r = fut.result()
-            r["scored"] = True
+            r.setdefault("scored", True)  # run_one may exclude modules
             with lock:
                 results.append(r)
                 done += 1
@@ -507,10 +516,12 @@ def main():
     n_ok_fail = sum(1 for r in scored if r["status"] == "FAIL_OK")
     n_dup = sum(1 for r in results if r.get("status") == "DUP_SKIPPED")
     n_nds = sum(1 for r in results if r.get("status") == "EXCLUDED_NON_DATASHEET")
+    n_mod = sum(1 for r in results if r.get("status") == "MODULE_SCHEMATIC_ONLY")
+    pct = f"{100 * n_pass / len(scored):.0f}%" if scored else "n/a"
     print(f"\n{n_pass} PASS, {n_ok_fail} expected-fail OK, "
-          f"{len(scored) - n_pass - n_ok_fail} FAIL of {len(scored)} scored "
-          f"({n_dup} duplicate, {n_nds} non-datasheet excluded; "
-          f"{len(results)} inputs total)")
+          f"{len(scored) - n_pass - n_ok_fail} FAIL of {len(scored)} scored = {pct} "
+          f"({n_dup} duplicate, {n_nds} non-datasheet, {n_mod} module "
+          f"schematic-only excluded; {len(results)} inputs total)")
 
 
 def _write_report(intake: dict, results: list) -> None:
