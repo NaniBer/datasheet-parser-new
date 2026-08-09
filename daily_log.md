@@ -1277,3 +1277,43 @@ The log was not maintained for five weeks; this entry is reconstructed from git 
 - [ ] Pin extraction still misidentifies multi-package parts (ATmega needed --part-number to pick
       TQFP over DIP) — package-selection accuracy is the next lever for hands-free verified bodies.
 - [ ] PR this branch; re-run the corpus extraction report (dims columns should fill in now).
+
+## 2026-08-09 (later) — Parallelized the accuracy harness + full 148 baseline
+
+### What We Did
+- ✅ **Hardened `tools/run_full_flow_eval.py`**: capped parallel workers
+  (`FLOW_EVAL_WORKERS`, default 4) via a ThreadPoolExecutor + a tighter per-part
+  watchdog (`FLOW_EVAL_TIMEOUT`, default 360s, was a flat 900s). Report is written
+  incrementally under a lock and sorted deterministically at the end. Grading logic
+  (`run_one`) unchanged. Cuts a full-corpus run from ~stall/60-90min sequential to
+  ~20-30min, and a hung LLM call (AVR128DA48/NRF9160) no longer blocks the run.
+- ✅ **First complete pin-count baseline over the whole `datasheets/` corpus (127 scored,
+  21 dup + 1 non-datasheet excluded):** **66% (84/127) PASS**, 41 FAIL, 2 TIMEOUT.
+  Report at `eval_output/flow_eval_148_report.json` (gitignored).
+
+### Failure taxonomy (Phase-1 work queue)
+- **A. Discretes/diodes/bridges/transistors/crystals (~14)** — VS-KBPC, DB102, BD135,
+  BD441, MJL3281, 1N4001/1N4148/STTH (off-by-one 2→3), MA-506, ACS773, BSD235, PB86.
+  Arguably out of core IC scope.
+- **B. Modules/SiP/ref-design (~8)** — UC200, MAXREFDES117, ESP32-WROOM×2, MAX-M10S,
+  CAM-M8Q, NRF9160. System already flags these footprint-unsupported.
+- **C. Wrong package variant (~6, cleanest fix)** — MCP1700 3→6, W25Q128 8→16,
+  TPS23751 reads TPS23752 (16→20), STM32L031 25→20, PIC16F871 reads PIC16F870;
+  **PIC16F1512 = wrong PDF in corpus (actually MCP9701) — data bug**.
+- **D. Small-IC over-count 10→14 (~4, likely one root cause)** — AD636, AD537, LM2673, INA238.
+- **E. Tab/exposed-pad off-by-one (~4)** — ADXRS645 15→16, BD9778 7→8, TDA7850 25→20,
+  BQ25570 20→16.
+- **F. Big MCUs under-read / timeout (~5)** — AVR128DA48 & dsPIC33 timeouts, MKL17/43/46
+  badly under-read (64→13, 121→13), ATTINY13A 10→8.
+
+### Notes / Decisions
+- **~22 of 43 failures (A+B) are discretes/modules** — arguably outside the core IC
+  footprint/3D use case; excluding them lifts core-IC accuracy well above 66%. Scope
+  (in/out for discretes+modules) is an open product decision that reframes the target.
+- This harness is now the repeatable **Phase-4 validation gate**: re-run it to confirm
+  every Phase-1 fix against the full corpus (trust multi-run, not single noisy runs).
+
+### Next Plan
+- [ ] Confirm scope (discretes/modules in or out) → sets the accuracy target.
+- [ ] Phase 1: start with class C (wrong-variant, suffix→variant selection), then D, then E.
+- [ ] Replace the wrong `52_PIC16F1512` corpus PDF (it's an MCP9701 datasheet).
