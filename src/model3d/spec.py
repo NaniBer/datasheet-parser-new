@@ -33,6 +33,9 @@ _LEAD_STYLE = {
     "QFN": "leadless", "DFN": "leadless", "WSON": "leadless", "SON": "leadless",
     # Through-hole
     "DIP": "through_hole", "PDIP": "through_hole", "CDIP": "through_hole",
+    # Power-tab (now recognised upstream by _family): TO-220/DPAK/D2PAK/TO-247.
+    "TO220": "power_tab", "DPAK": "power_tab", "D2PAK": "power_tab",
+    "TO247": "power_tab", "TO252": "power_tab", "TO263": "power_tab",
     # Chip passives (routes here once the pipeline recognises passive families)
     "R": "chip", "C": "chip", "L": "chip",
     "RES": "chip", "CAP": "chip", "IND": "chip",

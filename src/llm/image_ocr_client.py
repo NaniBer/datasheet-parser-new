@@ -1,8 +1,9 @@
 """
 AI API client for image-based pinout extraction from datasheets.
 
-This module integrates with the qwen.ideeza.com vision API to extract
-pinout information from PDF page images.
+This module integrates with the qwen.ideeza.com vision API
+(POST /describe_image/, multipart: file + text) to extract pinout information
+from PDF page images.
 """
 
 import base64
@@ -51,7 +52,7 @@ class ImageOCRClient:
     """
 
     # API configuration
-    API_URL = "https://qwen1.ideeza.com/describe_image_llm"
+    API_URL = "https://qwen.ideeza.com/describe_image/"
     DEFAULT_OUTPUT_TOKEN = 4096
     DEFAULT_TIMEOUT = 120
 
@@ -212,17 +213,11 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
         user_prompt_text = prompt or self._build_user_prompt(part_number)
         system_prompt_text = self._build_system_prompt()
 
-        # Create multipart form data
-        # The API expects:
+        # Create multipart form data. The qwen.ideeza.com endpoint expects:
         # - file: image file upload
-        # - system_prompt: system prompt string
-        # - user_prompt: user prompt string
-
+        # - text: a single combined prompt string
         files = {"file": ("image.png", io.BytesIO(image_data), "image/png")}
-        data = {
-            "system_prompt": system_prompt_text,
-            "user_prompt": user_prompt_text,
-        }
+        data = {"text": f"{system_prompt_text}\n\n{user_prompt_text}"}
 
         try:
             # Call API
@@ -572,12 +567,9 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
         user_prompt_text = prompt or self._build_table_extraction_prompt()
         system_prompt_text = "You are an expert at reading electronic component pinout tables from datasheet images. You extract structured table data."
 
-        # Create multipart form data
+        # Create multipart form data (file + single combined text prompt).
         files = {"file": ("image.png", io.BytesIO(image_data), "image/png")}
-        data = {
-            "system_prompt": system_prompt_text,
-            "user_prompt": user_prompt_text,
-        }
+        data = {"text": f"{system_prompt_text}\n\n{user_prompt_text}"}
 
         try:
             # Call API

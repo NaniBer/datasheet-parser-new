@@ -36,6 +36,17 @@ C
 b
 0.80 TYP.
 e
+0.75
+0.45
+L
+7.10
+6.90
+7.00
+D1/E1
+9.00
+9.25
+8.75
+D/E
 """
 
 
@@ -46,10 +57,28 @@ class TestParseDimensionTable:
         assert dims["A2"] == 1.00        # (0.95 + 1.05) / 2
         assert dims["A"] == 1.20
 
+    def test_extracts_footprint_set_from_lettered_table(self):
+        dims = parse_dimension_table(LETTERED_TABLE)
+        assert dims["e"] == 0.80             # "0.80 TYP." snapped to standard
+        assert dims["b"] == 0.375            # (0.30 + 0.45) / 2
+        assert dims["L"] == 0.60             # (0.45 + 0.75) / 2
+        assert dims["D"] == 9.00             # combined "D/E" -> (8.75+9.00+9.25)/3
+        assert dims["E"] == 9.00
+        assert dims["E1"] == 7.00            # combined "D1/E1" -> (6.90+7.00+7.10)/3
+        # Vertical profile still intact alongside the new keys.
+        assert dims["A"] == 1.20
+        assert dims["A1"] == 0.10
+        assert dims["A2"] == 1.00
+
     def test_requires_table_context(self):
         # Same symbol/number pattern but no table markers -> nothing trusted.
         stray = "A1\n0.05\n0.15\nsome prose about pin A1 of the connector\n"
         assert parse_dimension_table(stray) == {}
+
+    def test_non_table_text_returns_empty(self):
+        # Prose that names symbols but carries no table markers -> {}.
+        prose = "The device has an e pad and b leads described in the text.\n"
+        assert parse_dimension_table(prose) == {}
 
     def test_symbol_then_values_order_also_works(self):
         table = "Symbol MIN MAX\nA1\n0.05\n0.15\n"
@@ -98,6 +127,39 @@ A1
         # A standoff column that misreads the ~0.55 height must be rejected,
         # not stored as A1 (A1 cap is 0.35mm).
         assert parse_dimension_table(self.ST_DUAL_UNIT).get("A1", 0) < 0.35
+
+    # Symbol-then-values dual-unit footprint table: each dim carries its mm
+    # value(s) then the inch equivalent (mm / 25.4), which must be dropped, not
+    # averaged in, for the new footprint keys just as it is for A/A1.
+    DUAL_UNIT_FOOTPRINT = """\
+Symbol
+Min
+Max
+Max
+e
+0.65
+0.0256
+b
+0.40
+0.0157
+L
+0.60
+0.0236
+D
+9.00
+0.3543
+E1
+7.00
+0.2756
+"""
+
+    def test_footprint_keys_drop_inch_column(self):
+        dims = parse_dimension_table(self.DUAL_UNIT_FOOTPRINT)
+        assert dims["e"] == 0.65     # snapped standard pitch, inch 0.0256 dropped
+        assert dims["b"] == 0.40     # not (0.40 + 0.0157) / 2
+        assert dims["L"] == 0.60     # not (0.60 + 0.0236) / 2
+        assert dims["D"] == 9.00     # not (9.00 + 0.3543) / 2
+        assert dims["E1"] == 7.00    # not (7.00 + 0.2756) / 2
 
 
 class TestPlausibilityA1A2:

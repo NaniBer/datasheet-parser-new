@@ -37,6 +37,26 @@ _QFN_BODY = {12: 3.0, 16: 3.0, 20: 4.0, 24: 4.0, 28: 5.0, 32: 5.0, 40: 6.0, 48: 
 _QFP_PITCH = {32: 0.8, 44: 0.8, 48: 0.5, 52: 0.65, 64: 0.5, 80: 0.5, 100: 0.5, 144: 0.5}
 _DFN_PITCH = {6: 0.65, 8: 0.65, 10: 0.5, 12: 0.5}
 
+# Power-tab / through-hole tab families (TO-220, DPAK/TO-252, D2PAK/TO-263,
+# TO-247). These are recognised for *classification only* so the upstream
+# family detector no longer returns None and the 3D body layer can route them
+# to its power-tab template. They deliberately have NO entry in
+# get_footprint_defaults (it returns None for them) — a TO-220-style tab does
+# not fit the SMD/DIP pad grids modelled here, so fabricating defaults would
+# make the footprint builder emit a wrong pad layout.
+#
+# Keys are separator-stripped aliases; values are the canonical family token.
+# TO-252 is the JEDEC name for DPAK and TO-263 for D2PAK, so they collapse to a
+# single token each.
+_POWER_TAB_ALIASES = {
+    "TO220": "TO220",
+    "TO247": "TO247",
+    "TO252": "DPAK",
+    "DPAK": "DPAK",
+    "TO263": "D2PAK",
+    "D2PAK": "D2PAK",
+}
+
 
 def _family(package_type: str) -> Optional[str]:
     """
@@ -52,12 +72,17 @@ def _family(package_type: str) -> Optional[str]:
     normalized = _strip(package_type or "")
     # Longest alias prefix wins so "TSSOP16" matches TSSOP, not SSOP/SOP.
     # A letter right after the alias disqualifies it ("SOJ" is not "SO").
+    # (stripped_alias, canonical_family_token) pairs; for the geometry aliases
+    # the family token is the alias itself, for power-tab it is the mapped token.
     matches = []
     for alias in PACKAGE_TYPE_ALIASES:
         stripped = _strip(alias)
         if normalized.startswith(stripped) and not normalized[len(stripped):len(stripped) + 1].isalpha():
-            matches.append(stripped)
-    return max(matches, key=len) if matches else None
+            matches.append((stripped, stripped))
+    for stripped, canonical in _POWER_TAB_ALIASES.items():
+        if normalized.startswith(stripped) and not normalized[len(stripped):len(stripped) + 1].isalpha():
+            matches.append((stripped, canonical))
+    return max(matches, key=lambda m: len(m[0]))[1] if matches else None
 
 
 def _dual_row_body_length(pin_count: int, pitch: float, margin: float = 0.5) -> float:

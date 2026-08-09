@@ -276,13 +276,21 @@ def _drop_inch_duplicates(vals: List[float]) -> List[float]:
     return keep or vals
 
 
+# Combined tokens some tables print for a shared min/max (e.g. Atmel TQFP's
+# "D/E" span and "D1/E1" body): the one run of values applies to BOTH keys.
+_COMBINED_SYMBOLS = {"D/E": ("D", "E"), "D1/E1": ("D1", "E1")}
+
+
 def parse_dimension_table(text: str) -> Dict[str, float]:
-    """Parse the vertical profile (A, A1, A2) from a lettered dimension table.
+    """Parse the footprint dimension set from a lettered dimension table.
 
     Microchip/Atmel/ST-style "Dimension Limits" / "COMMON DIMENSIONS" tables
     print each JEDEC symbol with its MIN/NOM/MAX values on adjacent lines. This
-    reads the standoff A1 and body thickness A2 that the graphical TI-outline
-    parser cannot see (their labels live in the drawing, not the text layer).
+    reads the vertical profile (overall height A, standoff A1, body thickness
+    A2) that the graphical TI-outline parser cannot see (their labels live in
+    the drawing, not the text layer), and — additively — the planar footprint
+    set: lead pitch e, lead width b, lead foot L, body length D, and overall
+    span / body width E / E1.
 
     Robust to the two real-world variations: table orientation (values before
     vs after the symbol, decided once for the whole table) and dual mm/inch
@@ -300,19 +308,43 @@ def parse_dimension_table(text: str) -> Dict[str, float]:
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     step = _table_orientation(lines)
     dims: Dict[str, float] = {}
-    # Per-symbol plausibility: A = overall height, A1 = standoff, A2 = body.
-    # A1 is capped tight (SMD standoffs are <=~0.25mm); a larger value is a
-    # misread of the height column, not a standoff.
-    bounds = {"A": (0.3, 6.0), "A1": (0.0, 0.35), "A2": (0.2, 6.0)}
+    # Per-symbol plausibility. Vertical profile: A = overall height, A1 =
+    # standoff, A2 = body. A1 is capped tight (SMD standoffs are <=~0.25mm); a
+    # larger value is a misread of the height column, not a standoff. Planar
+    # footprint set: e = lead pitch, b = lead width, L = lead foot (all lead
+    # features, same values-vs-symbol layout as A1); D/E/E1/D1 = body extents.
+    bounds = {
+        "A": (0.3, 6.0), "A1": (0.0, 0.35), "A2": (0.2, 6.0),
+        "e": (0.3, 3.0), "b": (0.1, 1.6), "L": (0.2, 1.5),
+        "D": (1.0, 60.0), "D1": (1.0, 60.0),
+        "E": (1.0, 60.0), "E1": (1.0, 60.0),
+    }
     for i, line in enumerate(lines):
-        if line not in bounds:
+        # A combined "D/E"/"D1/E1" token feeds its one run to both keys.
+        keys = _COMBINED_SYMBOLS.get(line, (line,)) if line in bounds \
+            or line in _COMBINED_SYMBOLS else None
+        if keys is None:
             continue
         run = _drop_inch_duplicates(_float_run(lines, i, step))
-        lo, hi = bounds[line]
-        in_band = [v for v in run if lo <= v <= hi]
-        if not in_band:
-            continue
-        dims.setdefault(line, sum(in_band) / len(in_band))
+        # Pitch is often a lone annotation ("0.80 TYP.") rather than a pure-float
+        # MIN/NOM/MAX trio, so _float_run comes up empty; read the float out of
+        # the single adjacent (orientation-side) line instead.
+        if line == "e" and not run and 0 <= i + step < len(lines):
+            run = _floats(lines[i + step])
+        for key in keys:
+            lo, hi = bounds[key]
+            in_band = [v for v in run if lo <= v <= hi]
+            if in_band:
+                dims.setdefault(key, sum(in_band) / len(in_band))
+
+    # Pitch is quantised: snap to a standard value when close, matching the
+    # STANDARD_PITCHES/PITCH_TOLERANCE convention used by plausible_dims. This
+    # also selects the NOM pitch cleanly (a lone TYP value snaps to itself).
+    if "e" in dims:
+        for p in STANDARD_PITCHES:
+            if abs(dims["e"] - p) <= PITCH_TOLERANCE:
+                dims["e"] = p
+                break
 
     # Ordering sanity: standoff < body thickness <= overall height. A misread
     # that violates the physical stack-up is dropped rather than shipped.
