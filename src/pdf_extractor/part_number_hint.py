@@ -54,6 +54,21 @@ def _normalize_token(token: str) -> str:
     return cleaned.upper()
 
 
+# Package/case labels are NOT part numbers. On a pin-configuration page these
+# (e.g. "DFN-6", "SOIC-8", "TO-92", "SOT-23", "QFN-32") can out-score the real
+# part number in the token ranking, so a datasheet whose ordered part number is
+# absent from the extracted text would otherwise be identified by its package.
+_PKG_LABEL_FAMILIES = (
+    "HVSSOP", "VSSOP", "TSSOP", "HTSSOP", "WLCSP", "LQFP", "TQFP", "PDIP",
+    "CDIP", "WSON", "D2PAK", "SSOP", "QSOP", "MSOP", "SOIC", "LCCC", "PLCC",
+    "DPAK", "MELF", "TSOP", "SOD", "SMA", "SMB", "SMC", "QFN", "DFN", "QFP",
+    "BGA", "LGA", "SON", "SOP", "SOT", "DIP", "TO", "DO", "SC", "SO",
+)
+_PKG_LABEL_RE = re.compile(
+    r"^(?:" + "|".join(_PKG_LABEL_FAMILIES) + r")-?\d{1,4}[A-Z]{0,3}$"
+)
+
+
 def _token_is_plausible(token: str) -> bool:
     """Return True when a token looks like a part number."""
     if not token or token in _STOPWORDS:
@@ -69,6 +84,11 @@ def _token_is_plausible(token: str) -> bool:
         return False
 
     if "/" in token:
+        return False
+
+    # A bare package/case label (DFN-6, SOIC-8, TO-92, QFN-32) is never a part
+    # number — reject so it can't be mistaken for one.
+    if _PKG_LABEL_RE.match(token):
         return False
 
     if token in {"I2C", "SPI", "UART", "USB", "GPIO", "PWM", "ADC", "DAC"}:
