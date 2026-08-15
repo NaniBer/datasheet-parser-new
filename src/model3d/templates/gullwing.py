@@ -129,47 +129,59 @@ class GullwingTemplate(PackageTemplate):
         s: float, y: float, E: float, E1: float, L: float, b: float,
         c: float, A1: float, A2: float,
     ) -> cq.Workplane:
-        """One gull-wing lead: shoulder (at body) -> riser -> foot (on board)."""
-        tip = s * (E / 2.0)
+        """One gull-wing lead: shoulder (at body) -> riser -> foot (on board).
+
+        Built as a single constant-thickness (c) ribbon profile drawn in the X-Z
+        plane and extruded along Y by the lead width b, then the two gull-wing
+        bends are rounded. Modelling the lead as one clean prism (instead of a
+        union of three boxes) keeps the B-rep face set minimal and identical on
+        both columns -- a box union left OCCT to resolve the fillet differently
+        per side (14 faces one side, 32 the other). This mirrors the reference
+        3d.glb, whose leads are ~14 faces of a clean rounded gull-wing.
+        """
         knee = s * (E / 2.0 - L)
-        body_edge = s * (E1 / 2.0)
         shoulder_z = A1 + A2 * 0.5           # lead exits the body mid-height
 
-        # Foot: flat on the seating plane, from knee out to the tip.
-        foot = (
-            cq.Workplane("XY")
-            .box(L, b, c)
-            .translate((s * (E / 2.0 - L / 2.0), y, c / 2.0))
+        # Closed ribbon outline in X-Z (thickness c), walked outer then inner:
+        # foot tip -> foot top -> up the riser -> shoulder top -> body end cap ->
+        # shoulder bottom -> down the riser -> foot bottom. `o` offsets the riser
+        # faces so its wall thickness is c on the correct (outboard) side.
+        o = c / 2.0 if s > 0 else -c / 2.0
+        tip = s * (E / 2.0)
+        body_edge = s * (E1 / 2.0)
+        outline = [
+            (tip, 0.0),                          # foot tip, bottom
+            (tip, c),                            # foot tip, top
+            (knee + o, c),                       # foot top -> riser (outboard)
+            (knee + o, shoulder_z + c / 2.0),    # up riser -> shoulder top
+            (body_edge, shoulder_z + c / 2.0),   # shoulder top -> body
+            (body_edge, shoulder_z - c / 2.0),   # body end cap
+            (knee - o, shoulder_z - c / 2.0),    # shoulder bottom -> riser (inboard)
+            (knee - o, 0.0),                     # down riser -> foot bottom
+        ]
+
+        # The XZ workplane's normal is -Y, so extrude(b) spans Y in [-b, 0];
+        # shift by y + b/2 to centre the lead width on the pin row at y.
+        lead = (
+            cq.Workplane("XZ")
+            .polyline(outline)
+            .close()
+            .extrude(b)
+            .translate((0, y + b / 2.0, 0))
         )
-        lead = foot
 
-        # Riser: vertical run at the knee, from the foot up to shoulder height.
-        riser_h = shoulder_z - c
-        if riser_h > 0:
-            riser = (
-                cq.Workplane("XY")
-                .box(c, b, riser_h)
-                .translate((knee, y, c + riser_h / 2.0))
-            )
-            lead = lead.union(riser)
-
-        # Shoulder: horizontal from the body side out to the knee.
-        shoulder_len = abs(knee - body_edge)
-        if shoulder_len > 1e-6:
-            shoulder = (
-                cq.Workplane("XY")
-                .box(shoulder_len, b, c)
-                .translate(((knee + body_edge) / 2.0, y, shoulder_z))
-            )
-            lead = lead.union(shoulder)
-
-        # Round the gull-wing profile: fillet the edges running along Y (the two
-        # bends, the foot tip and the shoulder root). Fail-open -> sharp lead.
+        # Round the two gull-wing bends: the Y-parallel edges clustered at the
+        # riser (x ~ knee), leaving the foot tip and the body root square. On a
+        # clean prism this resolves identically on both columns. Fail-open.
         radius = min(LEAD_FILLET, 0.4 * c, 0.3 * b)
         if radius > 0.01:
             try:
-                lead = lead.edges("|Y").fillet(radius)
-            except Exception:  # OCCT fillet failure -> keep the sharp union
-                logger.debug("lead fillet skipped", exc_info=True)
+                bend = lead.edges("|Y").filter(
+                    lambda e: abs(e.Center().x - knee) < 0.6 * abs(L)
+                )
+                if bend.objects:
+                    lead = lead.newObject(bend.objects).fillet(radius)
+            except Exception:  # OCCT fillet failure -> keep the sharp prism
+                logger.debug("lead bend fillet skipped", exc_info=True)
 
         return lead
