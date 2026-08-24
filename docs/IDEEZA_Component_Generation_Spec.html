@@ -1,0 +1,1703 @@
+<title>Component Generation Spec</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper:#f6f4f1; --panel:#ffffff; --panel-sunk:#faf8f5;
+    --ink:#17150f; --ink-soft:#453f34; --muted:#6d6558; --faint:#9a9184;
+    --line:#e2ddd4; --line-soft:#eeeae3;
+    --copper:#a85c32; --copper-ink:#7a3f1f; --copper-bg:#fbeee5;
+    --fail:#b3342c; --fail-bg:#fbe8e6; --fail-line:#f0c7c3;
+    --warn:#92650a; --warn-bg:#fbf1d9; --warn-line:#ecd9a6;
+    --pass:#2c6e4b; --pass-bg:#e6f3ec; --pass-line:#bfe0cd;
+    --font-display:"Archivo","Segoe UI",system-ui,sans-serif;
+    --font-body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:#14120f; --panel:#1c1a16; --panel-sunk:#211e1a;
+      --ink:#f0ece5; --ink-soft:#d3cdc2; --muted:#a09789; --faint:#7d7568;
+      --line:#322e28; --line-soft:#2a2620;
+      --copper:#d68b5c; --copper-ink:#f0b48b; --copper-bg:#2e211a;
+      --fail:#e8867c; --fail-bg:#33201e; --fail-line:#4d2a26;
+      --warn:#d9b05c; --warn-bg:#2e2617; --warn-line:#453820;
+      --pass:#7cc79a; --pass-bg:#1a2e22; --pass-line:#274536;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#14120f; --panel:#1c1a16; --panel-sunk:#211e1a;
+    --ink:#f0ece5; --ink-soft:#d3cdc2; --muted:#a09789; --faint:#7d7568;
+    --line:#322e28; --line-soft:#2a2620;
+    --copper:#d68b5c; --copper-ink:#f0b48b; --copper-bg:#2e211a;
+    --fail:#e8867c; --fail-bg:#33201e; --fail-line:#4d2a26;
+    --warn:#d9b05c; --warn-bg:#2e2617; --warn-line:#453820;
+    --pass:#7cc79a; --pass-bg:#1a2e22; --pass-line:#274536;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--font-body); font-size:16px; line-height:1.62; padding:0 0 6rem;
+  }
+  .wrap { max-width:940px; margin:0 auto; padding:0 1.5rem; }
+
+  header.masthead { padding:3.5rem 0 2rem; }
+  .eyebrow {
+    font-family:var(--font-mono); font-size:0.72rem; font-weight:600;
+    letter-spacing:0.16em; text-transform:uppercase; color:var(--copper); margin:0 0 0.75rem;
+  }
+  h1 {
+    font-family:var(--font-display); font-weight:800;
+    font-size:clamp(2rem,4.6vw,2.95rem); line-height:1.08;
+    letter-spacing:-0.022em; margin:0 0 0.9rem; text-wrap:balance;
+  }
+  .standfirst { font-size:1.08rem; color:var(--ink-soft); max-width:64ch; margin:0 0 1.4rem; }
+  .sources {
+    display:grid; gap:0.5rem; margin:0 0 1.4rem; padding:1rem 1.1rem;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+  }
+  .sources p { margin:0; font-size:0.89rem; color:var(--ink-soft); }
+  .sources .slabel {
+    font-family:var(--font-mono); font-size:0.68rem; font-weight:700;
+    text-transform:uppercase; letter-spacing:0.07em; color:var(--copper);
+  }
+  .basis { display:flex; flex-wrap:wrap; gap:0.45rem; }
+  .basis-chip {
+    font-family:var(--font-mono); font-size:0.73rem; font-weight:500;
+    background:var(--panel); border:1px solid var(--line); border-radius:999px;
+    padding:0.3rem 0.7rem; color:var(--muted);
+  }
+  .basis-chip b { color:var(--ink); font-weight:600; }
+
+  nav.jump {
+    position:sticky; top:0; z-index:20; background:var(--paper);
+    border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-bottom:2.5rem;
+  }
+  .jump-inner {
+    max-width:940px; margin:0 auto; padding:0.6rem 1.5rem;
+    display:flex; flex-wrap:wrap; gap:0.3rem; align-items:center;
+  }
+  .jump a {
+    font-family:var(--font-mono); font-size:0.74rem; font-weight:500;
+    color:var(--muted); text-decoration:none; padding:0.3rem 0.6rem;
+    border-radius:7px; border:1px solid transparent;
+  }
+  .jump a:hover, .jump a:focus-visible {
+    color:var(--copper-ink); background:var(--copper-bg); border-color:var(--line); outline:none;
+  }
+  .jump .sep { color:var(--faint); font-size:0.7rem; }
+
+  .defects {
+    border:1px solid var(--fail-line); background:var(--fail-bg);
+    border-radius:12px; padding:1.4rem 1.5rem; margin-bottom:3rem;
+  }
+  .defects h2 {
+    font-family:var(--font-display); font-size:1.05rem; font-weight:700;
+    margin:0 0 0.3rem; color:var(--fail);
+  }
+  .defects > p.lead { margin:0 0 1.1rem; font-size:0.92rem; color:var(--ink-soft); }
+  .defect-row {
+    display:grid; grid-template-columns:auto 1fr; gap:0.6rem 0.9rem;
+    padding:0.85rem 0; border-top:1px solid var(--fail-line);
+  }
+  .defect-row:last-child { padding-bottom:0; }
+  .defect-tag {
+    font-family:var(--font-mono); font-size:0.7rem; font-weight:700;
+    background:var(--panel); border:1px solid var(--fail-line); color:var(--fail);
+    border-radius:5px; padding:0.15rem 0.45rem; white-space:nowrap; height:fit-content;
+  }
+  .defect-row .what { font-weight:600; font-size:0.95rem; margin:0 0 0.15rem; }
+  .defect-row .fix { margin:0; font-size:0.9rem; color:var(--ink-soft); }
+  .defect-row .fix + .fix { margin-top:0.5rem; }
+  code {
+    font-family:var(--font-mono); font-size:0.86em; background:var(--panel);
+    border:1px solid var(--line); border-radius:4px; padding:0.08rem 0.32rem;
+  }
+
+  section.part { margin-bottom:4rem; scroll-margin-top:4.5rem; }
+  .part-head { border-bottom:2px solid var(--ink); padding-bottom:0.7rem; margin-bottom:0.5rem; }
+  .part-index {
+    font-family:var(--font-mono); font-size:0.74rem; font-weight:600;
+    color:var(--copper); letter-spacing:0.1em; text-transform:uppercase;
+  }
+  .part-head h2 {
+    font-family:var(--font-display); font-weight:800;
+    font-size:clamp(1.5rem,3vw,1.95rem); letter-spacing:-0.018em; margin:0.2rem 0 0;
+  }
+  .part-intro { color:var(--muted); font-size:0.95rem; margin:0.85rem 0 2rem; max-width:66ch; }
+
+  .rule {
+    display:grid; grid-template-columns:5.6rem 1fr; gap:1.2rem;
+    padding:1.35rem 0; border-bottom:1px solid var(--line-soft);
+  }
+  .rule:last-of-type { border-bottom:none; }
+  .rule-id {
+    font-family:var(--font-mono); font-size:0.78rem; font-weight:700;
+    color:var(--copper-ink); background:var(--copper-bg);
+    border:1px solid var(--line); border-radius:6px; padding:0.2rem 0.4rem;
+    height:fit-content; text-align:center;
+  }
+  .rule-title {
+    font-family:var(--font-display); font-weight:700; font-size:1.02rem;
+    margin:0 0 0.35rem; line-height:1.35;
+  }
+  .rule-body { margin:0; font-size:0.95rem; color:var(--ink-soft); }
+  .rule-body + .rule-body { margin-top:0.6rem; }
+  .rule-why {
+    margin:0.6rem 0 0; font-size:0.87rem; color:var(--muted);
+    padding-left:0.8rem; border-left:2px solid var(--line);
+  }
+  .rule-why b { color:var(--ink-soft); font-weight:600; }
+  ul.tight { margin:0.5rem 0 0; padding-left:1.15rem; font-size:0.93rem; color:var(--ink-soft); }
+  ul.tight li + li { margin-top:0.22rem; }
+
+  .tier {
+    display:inline-block; font-family:var(--font-mono); font-size:0.66rem;
+    font-weight:700; letter-spacing:0.06em; text-transform:uppercase;
+    border-radius:4px; padding:0.1rem 0.4rem; margin-left:0.5rem; vertical-align:0.12em;
+  }
+  .tier.must { background:var(--fail-bg); color:var(--fail); border:1px solid var(--fail-line); }
+  .tier.should { background:var(--warn-bg); color:var(--warn); border:1px solid var(--warn-line); }
+
+  .tbl-wrap { overflow-x:auto; margin:0.9rem 0 0; border:1px solid var(--line); border-radius:9px; }
+  table { width:100%; border-collapse:collapse; min-width:460px; }
+  thead th {
+    text-align:left; font-family:var(--font-mono); font-size:0.7rem; font-weight:600;
+    text-transform:uppercase; letter-spacing:0.05em; color:var(--muted);
+    background:var(--panel-sunk); padding:0.55rem 0.8rem;
+    border-bottom:1px solid var(--line); white-space:nowrap;
+  }
+  tbody td {
+    padding:0.55rem 0.8rem; font-size:0.88rem;
+    border-bottom:1px solid var(--line-soft); background:var(--panel);
+  }
+  tbody tr:last-child td { border-bottom:none; }
+  td.num { font-family:var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  td.name { font-weight:600; }
+  .dflt { color:var(--copper-ink); font-weight:700; }
+
+  figure.fig { margin:1.1rem 0 0; }
+  figure.fig svg { display:block; max-width:100%; height:auto; }
+  figure.fig figcaption {
+    font-size:0.83rem; color:var(--muted); margin-top:0.55rem;
+    padding-left:0.8rem; border-left:2px solid var(--line);
+  }
+  .svg-card {
+    background:var(--panel-sunk); border:1px solid var(--line);
+    border-radius:10px; padding:1rem;
+  }
+
+  pre.code {
+    font-family:var(--font-mono); font-size:0.82rem; line-height:1.55;
+    background:var(--panel-sunk); border:1px solid var(--line); border-radius:9px;
+    padding:1rem 1.1rem; margin:0.9rem 0 0; overflow-x:auto; color:var(--ink-soft);
+  }
+  pre.code b { color:var(--copper-ink); font-weight:700; }
+
+  .checklist {
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; padding:1.5rem 1.6rem;
+  }
+  .checklist h3 { font-family:var(--font-display); font-size:1.05rem; font-weight:700; margin:0 0 0.3rem; }
+  .checklist > p { margin:0 0 1.15rem; font-size:0.9rem; color:var(--muted); }
+  .check-group + .check-group { margin-top:1.3rem; }
+  .check-group > .cg-label {
+    font-family:var(--font-mono); font-size:0.7rem; font-weight:600;
+    text-transform:uppercase; letter-spacing:0.07em; color:var(--copper); margin:0 0 0.55rem;
+  }
+  .check-item {
+    display:grid; grid-template-columns:auto 1fr; gap:0.65rem;
+    align-items:start; padding:0.32rem 0; font-size:0.91rem;
+  }
+  .check-item input { margin-top:0.35rem; accent-color:var(--copper); }
+  .check-item label { cursor:pointer; color:var(--ink-soft); }
+  .check-item .rid { font-family:var(--font-mono); font-size:0.75rem; color:var(--faint); margin-left:0.35rem; }
+
+  footer.notes {
+    margin-top:3.5rem; padding-top:1.5rem; border-top:1px solid var(--line);
+    color:var(--muted); font-size:0.86rem;
+  }
+  footer.notes p { margin:0 0 0.6rem; max-width:70ch; }
+
+  a { color:var(--copper-ink); }
+  :focus-visible { outline:2px solid var(--copper); outline-offset:2px; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } }
+  @media (max-width:620px) {
+    .rule { grid-template-columns:1fr; gap:0.5rem; }
+    .rule-id { justify-self:start; }
+    .defect-row { grid-template-columns:1fr; }
+  }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">IDEEZA · component library engineering</p>
+    <h1>Component generation spec: symbol, land pattern, and 3D model from a datasheet</h1>
+    <p class="standfirst">The pipeline, the layer data model, and the complete ruleset for the AI engineer that turns a datasheet into library artifacts. Every rule is a checkable condition with a numeric value, so it can be enforced in code rather than eyeballed. It assumes no prior EDA knowledge — the conventions an experienced librarian applies silently are written out.</p>
+    <div class="sources">
+      <p class="slabel">Combines two inputs</p>
+      <p><b>Component Generation &amp; Footprint Architecture</b> — the pipeline, input-data contract, layer architecture, component linking, validation gates, and UI flow. Sections 1–5 and 8 below derive from it.</p>
+      <p><b>IPC standards review</b> — the numeric geometry rules, tolerance handling, and the two reported output defects. Sections 6–7 below derive from it.</p>
+    </div>
+    <div class="basis">
+      <span class="basis-chip"><b>IPC-7351B</b> SMT land patterns</span>
+      <span class="basis-chip"><b>IPC-7251</b> THT land patterns</span>
+      <span class="basis-chip"><b>IPC-2221B</b> generic PCB design</span>
+      <span class="basis-chip"><b>IPC-7093</b> bottom-termination</span>
+      <span class="basis-chip"><b>IPC-4761</b> via protection</span>
+      <span class="basis-chip"><b>IPC-2612</b> schematic documentation</span>
+      <span class="basis-chip"><b>IEEE 315</b> graphic symbols</span>
+      <span class="basis-chip"><b>ISO 10303</b> STEP AP242</span>
+    </div>
+  </header>
+</div>
+
+<nav class="jump">
+  <div class="jump-inner">
+    <a href="#defects">Defects</a>
+    <span class="sep">/</span>
+    <a href="#pipeline">1 Pipeline</a>
+    <a href="#inputs">2 Inputs</a>
+    <a href="#foundations">3 Foundations</a>
+    <a href="#layers">4 Layers</a>
+    <a href="#footprint">5 Land pattern</a>
+    <a href="#symbol">6 Symbol</a>
+    <a href="#model">7 3D model</a>
+    <a href="#validate">8 Validation</a>
+    <span class="sep">/</span>
+    <a href="#preflight">Checklist</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <!-- ============ DEFECTS ============ -->
+  <section id="defects" class="defects">
+    <h2>The two defects currently in output</h2>
+    <p class="lead">Both are deterministic failures a checker can catch before publication. Note that the first has <em>two</em> independent root causes — one geometric, one in the editor's data model.</p>
+
+    <div class="defect-row">
+      <span class="defect-tag">FP-07<br>LAY-02</span>
+      <div>
+        <p class="what">Copper layer is intersecting the silkscreen layer.</p>
+        <p class="fix"><b>Geometric cause.</b> The generator is drawing the <em>body outline</em> as silkscreen. On most chip packages the body is narrower than the land span, so the body's own edges land directly on the pads. Every pad must be an exclusion zone: clip all silkscreen within <code>0.20&nbsp;mm</code> of any pad — see <code>FP-07</code>.</p>
+        <p class="fix"><b>Data-model cause.</b> If silkscreen and copper are not independent objects each owning its own <code>layerId</code>, geometry at the same coordinates gets merged, co-selected, or co-edited — which produces "intersecting layers" even when the clipping maths is right. See <code>LAY-01</code>–<code>LAY-04</code>.</p>
+      </div>
+    </div>
+
+    <div class="defect-row">
+      <span class="defect-tag">SYM-02<br>SYM-04</span>
+      <div>
+        <p class="what">Symbol pins are scattered — no grid, no grouping, no consistent spacing.</p>
+        <p class="fix">Pins are being placed in datasheet pin-number order at arbitrary coordinates. They must snap to a <code>2.54&nbsp;mm</code> grid with no exceptions, and be grouped by <em>electrical function</em> — inputs left, outputs right, power top, ground bottom — regardless of physical package order. See the diagram under <code>SYM-04</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 1. PIPELINE ============ -->
+  <section id="pipeline" class="part">
+    <div class="part-head">
+      <p class="part-index">Section 1</p>
+      <h2>Generation pipeline</h2>
+    </div>
+    <p class="part-intro">The three artifacts are siblings generated from one structured extraction — not a chain where the footprint comes first and the rest are derived from it. Getting this order wrong is what makes symbol and footprint drift apart.</p>
+
+    <figure class="fig">
+      <div class="svg-card">
+        <svg viewBox="0 0 700 420" role="img" aria-label="Pipeline flowchart. A datasheet feeds an extraction step, which splits into pin data, package data, and mechanical data. These feed the schematic symbol, the 2D footprint, and the 3D model in parallel. All three converge into component linking, then validation, then the published library component.">
+          <defs>
+            <marker id="pa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <g font-family="var(--font-mono)" font-size="11.5" text-anchor="middle">
+            <!-- datasheet -->
+            <rect x="255" y="14" width="190" height="34" rx="6" fill="var(--panel)" stroke="var(--copper)" stroke-width="1.6"/>
+            <text x="350" y="36" fill="var(--copper-ink)" font-weight="700">Datasheet / mfr data</text>
+            <line x1="350" y1="48" x2="350" y2="70" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+
+            <!-- extract -->
+            <rect x="235" y="70" width="230" height="34" rx="6" fill="var(--panel)" stroke="currentColor" stroke-width="1.4"/>
+            <text x="350" y="92" fill="currentColor" font-weight="600">Extract structured data</text>
+
+            <!-- fan out -->
+            <line x1="350" y1="104" x2="350" y2="120" stroke="currentColor" stroke-width="1.4"/>
+            <line x1="120" y1="120" x2="580" y2="120" stroke="currentColor" stroke-width="1.4"/>
+            <line x1="120" y1="120" x2="120" y2="140" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+            <line x1="350" y1="120" x2="350" y2="140" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+            <line x1="580" y1="120" x2="580" y2="140" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+
+            <!-- data buckets -->
+            <rect x="46" y="140" width="148" height="30" rx="5" fill="var(--panel-sunk)" stroke="currentColor" stroke-width="1"/>
+            <text x="120" y="160" fill="currentColor">Pin / logic data</text>
+            <rect x="276" y="140" width="148" height="30" rx="5" fill="var(--panel-sunk)" stroke="currentColor" stroke-width="1"/>
+            <text x="350" y="160" fill="currentColor">Package data</text>
+            <rect x="506" y="140" width="148" height="30" rx="5" fill="var(--panel-sunk)" stroke="currentColor" stroke-width="1"/>
+            <text x="580" y="160" fill="currentColor">Mechanical data</text>
+
+            <line x1="120" y1="170" x2="120" y2="196" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+            <line x1="350" y1="170" x2="350" y2="196" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+            <line x1="580" y1="170" x2="580" y2="196" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+
+            <!-- artifacts -->
+            <rect x="46" y="196" width="148" height="38" rx="6" fill="var(--copper-bg)" stroke="var(--copper)" stroke-width="1.5"/>
+            <text x="120" y="220" fill="var(--copper-ink)" font-weight="700">Schematic symbol</text>
+            <rect x="276" y="196" width="148" height="38" rx="6" fill="var(--copper-bg)" stroke="var(--copper)" stroke-width="1.5"/>
+            <text x="350" y="220" fill="var(--copper-ink)" font-weight="700">2D footprint</text>
+            <rect x="506" y="196" width="148" height="38" rx="6" fill="var(--copper-bg)" stroke="var(--copper)" stroke-width="1.5"/>
+            <text x="580" y="220" fill="var(--copper-ink)" font-weight="700">3D model</text>
+
+            <!-- fan in -->
+            <line x1="120" y1="234" x2="120" y2="256" stroke="currentColor" stroke-width="1.4"/>
+            <line x1="350" y1="234" x2="350" y2="256" stroke="currentColor" stroke-width="1.4"/>
+            <line x1="580" y1="234" x2="580" y2="256" stroke="currentColor" stroke-width="1.4"/>
+            <line x1="120" y1="256" x2="580" y2="256" stroke="currentColor" stroke-width="1.4"/>
+            <line x1="350" y1="256" x2="350" y2="278" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+
+            <!-- link -->
+            <rect x="255" y="278" width="190" height="32" rx="6" fill="var(--panel)" stroke="currentColor" stroke-width="1.4"/>
+            <text x="350" y="299" fill="currentColor" font-weight="600">Component linking</text>
+            <line x1="350" y1="310" x2="350" y2="332" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+
+            <!-- validate -->
+            <rect x="235" y="332" width="230" height="32" rx="6" fill="var(--panel)" stroke="var(--fail)" stroke-width="1.6"/>
+            <text x="350" y="353" fill="var(--fail)" font-weight="700">Validation / QA gate</text>
+            <line x1="350" y1="364" x2="350" y2="386" stroke="currentColor" stroke-width="1.4" marker-end="url(#pa)"/>
+
+            <!-- library -->
+            <rect x="255" y="386" width="190" height="32" rx="6" fill="var(--pass-bg)" stroke="var(--pass)" stroke-width="1.6"/>
+            <text x="350" y="407" fill="var(--pass)" font-weight="700">Library component</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>The three artifacts are generated <b>in parallel from one extraction</b>, then linked and validated together. The footprint is not the parent of the other two.</figcaption>
+    </figure>
+
+    <div class="rule">
+      <span class="rule-id">PL-01</span>
+      <div>
+        <h3 class="rule-title">Extract once, generate three times<span class="tier must">must</span></h3>
+        <p class="rule-body">Parse the datasheet into a single structured component record (Section 2), then generate symbol, footprint, and model independently from it. Never derive the symbol from the footprint or vice versa — a shared source record is what keeps pin numbering consistent, and a derivation chain is what lets it drift.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">PL-02</span>
+      <div>
+        <h3 class="rule-title">Link the three artifacts by ID, not by name matching<span class="tier must">must</span></h3>
+        <p class="rule-body">A component record holds explicit <code>symbolId</code>, <code>footprintId</code>, and <code>modelId</code> references. Never resolve the relationship by string-matching filenames at load time.</p>
+        <pre class="code"><b>Component</b> STM32F103C8T6
+  ├─ symbolId    → SYM_STM32F103_LQFP48
+  ├─ footprintId → FP_LQFP48_7X7_P050
+  └─ modelId     → 3D_LQFP48_7X7X140</pre>
+        <p class="rule-why"><b>Why it matters:</b> name matching silently attaches the wrong footprint when two packages share a naming stem, and breaks entirely when a file is renamed.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">PL-03</span>
+      <div>
+        <h3 class="rule-title">Do not save before validating<span class="tier must">must</span></h3>
+        <p class="rule-body">Generation output goes to a staging state, runs the full validation battery (Section 8), and only persists to the library on a pass. A part that failed validation must never exist in the library in any state.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">PL-04</span>
+      <div>
+        <h3 class="rule-title">Follow the source-priority order — the datasheet always wins<span class="tier must">must</span></h3>
+        <p class="rule-body">When more than one source could define the land pattern, use them in this order and record which one was used:</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Source</th><th>Use when</th></tr></thead>
+            <tbody>
+              <tr><td class="num">1</td><td class="name dflt">Manufacturer's recommended land pattern</td><td>The datasheet gives one — always prefer it</td></tr>
+              <tr><td class="num">2</td><td class="name">IPC-7351B calculation</td><td>No recommended pattern published</td></tr>
+              <tr><td class="num">3</td><td class="name">Assembly-house DFM rules</td><td>Overlay on 1 or 2 where the house is stricter</td></tr>
+              <tr><td class="num">4</td><td class="name">Generic package template</td><td>Last resort — flag for human review</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="rule-body">The generator must never reason "this is QFN-24, therefore use the QFN-24 template." Even standardised package names carry manufacturer-specific dimensions. Always: identify package → extract this datasheet's actual dimensions → determine land pattern → apply manufacturing rules.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">PL-05</span>
+      <div>
+        <h3 class="rule-title">Expose the pipeline as a stepped wizard with previews<span class="tier should">should</span></h3>
+        <p class="rule-body">Component info → symbol (with pin table + preview) → footprint (dimensions, IPC calculation, pad generation, layer generation, 2D preview) → 3D (dimensions, generate, preview) → link → validate (electrical, mechanical, 3D, DRC, DFM) → save. Each step's output must be reviewable before the next runs; a single opaque "generate" button gives the reviewer nothing to check.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2. INPUTS ============ -->
+  <section id="inputs" class="part">
+    <div class="part-head">
+      <p class="part-index">Section 2</p>
+      <h2>Input data contract</h2>
+    </div>
+    <p class="part-intro">Nothing is generated until these fields are collected. A missing field is a blocked part, not a defaulted one.</p>
+
+    <div class="rule">
+      <span class="rule-id">IN-01</span>
+      <div>
+        <h3 class="rule-title">Identification fields<span class="tier must">must</span></h3>
+        <ul class="tight">
+          <li>Manufacturer, manufacturer part number, description</li>
+          <li>Component category, package name</li>
+          <li>Datasheet URL, datasheet revision/date, manufacturer URL</li>
+          <li>Distributor references (LCSC / DigiKey / Mouser) where available</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">IN-02</span>
+      <div>
+        <h3 class="rule-title">Per-pin electrical fields — drives the symbol<span class="tier must">must</span></h3>
+        <p class="rule-body">Every pin needs a complete row. The <code>function</code> field is what makes functional grouping (<code>SYM-04</code>) possible, so it cannot be left blank.</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Field</th><th>Example</th><th>Drives</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Pin number</td><td class="num">1</td><td>Pad mapping (X-02)</td></tr>
+              <tr><td class="name">Pin name</td><td class="num">GND</td><td>Symbol label</td></tr>
+              <tr><td class="name">Electrical type</td><td class="num">Power Input</td><td>ERC (SYM-07)</td></tr>
+              <tr><td class="name">Pin function</td><td class="num">Ground</td><td>Grouping (SYM-04)</td></tr>
+              <tr><td class="name">Side / position</td><td class="num">Bottom</td><td>Placement</td></tr>
+              <tr><td class="name">Length &amp; orientation</td><td class="num">2.54 mm, right</td><td>Geometry (SYM-02)</td></tr>
+              <tr><td class="name">Active low</td><td class="num">No</td><td>Notation (SYM-08)</td></tr>
+              <tr><td class="name">Hidden</td><td class="num">No — always</td><td>See SYM-05</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">IN-03</span>
+      <div>
+        <h3 class="rule-title">Mechanical fields — drives footprint and model<span class="tier must">must</span></h3>
+        <p class="rule-body">Capture every dimension <em>with its tolerance</em>. Nominal-only capture makes the tolerance rules in <code>F-03</code> impossible to apply.</p>
+        <ul class="tight">
+          <li>Package type, pin count, lead pitch</li>
+          <li>Body length / width / height — each with min, nominal, max</li>
+          <li>Lead length / width / span — each with min, nominal, max</li>
+          <li>Pin-to-pin spacing, standoff / seating height</li>
+          <li>Thermal pad dimensions, mounting hole positions and diameters</li>
+          <li>Manufacturer's recommended land pattern, if the datasheet publishes one (<code>PL-04</code>)</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3. FOUNDATIONS ============ -->
+  <section id="foundations" class="part">
+    <div class="part-head">
+      <p class="part-index">Section 3</p>
+      <h2>Foundations</h2>
+    </div>
+    <p class="part-intro">These apply to all three artifacts. They encode what an experienced librarian never states out loud — which is exactly why an automated generator gets them wrong.</p>
+
+    <div class="rule">
+      <span class="rule-id">F-01</span>
+      <div>
+        <h3 class="rule-title">Never invent a dimension. Flag and stop.<span class="tier must">must</span></h3>
+        <p class="rule-body">If a dimension needed for a rule is absent, ambiguous, or unreadable, do <em>not</em> interpolate it, estimate it from a drawing, or borrow it from a similar part. Emit the part as <code>BLOCKED</code>, naming the specific missing dimension, and route to human review.</p>
+        <p class="rule-why"><b>Why it matters:</b> the highest-risk rule for an automated generator. A guessed dimension produces an artifact that passes every geometric check and is silently wrong — only discovered on assembled hardware.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">F-02</span>
+      <div>
+        <h3 class="rule-title">Work in millimetres throughout<span class="tier must">must</span></h3>
+        <p class="rule-body">Millimetres are primary for all three artifacts. Convert inches/mils once at ingest, record both, carry mm forward. Never mix units inside one artifact. The schematic grid is the deliberate exception: defined in both (<code>2.54&nbsp;mm</code> = <code>100&nbsp;mil</code>) because the imperial value is the historical convention.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">F-03</span>
+      <div>
+        <h3 class="rule-title">Apply tolerance extremes in the direction that is safe<span class="tier must">must</span></h3>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Using it for</th><th>Take</th><th>Because</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Pad size / fillet calculation</td><td class="num">max lead span, min lead length</td><td>Worst case for joint formation</td></tr>
+              <tr><td class="name">Courtyard / keep-out</td><td class="num">maximum body</td><td>Largest part must still fit</td></tr>
+              <tr><td class="name">Assembly outline &amp; 3D body</td><td class="num">nominal</td><td>Represents a typical part</td></tr>
+              <tr><td class="name">Hole diameter</td><td class="num">maximum lead diameter</td><td>Largest lead must insert</td></tr>
+              <tr><td class="name">Clearance verification</td><td class="num">maximum envelope</td><td>Collision check must be worst case</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">F-04</span>
+      <div>
+        <h3 class="rule-title">Record datasheet provenance on every artifact<span class="tier must">must</span></h3>
+        <p class="rule-body">Each artifact carries manufacturer, MPN, datasheet URL, revision/date, the page and table the dimensions came from, and generation timestamp. All three artifacts for one part must cite the <em>same</em> revision.</p>
+        <p class="rule-why"><b>Why it matters:</b> package dimensions change between datasheet revisions without the part number changing. Provenance is the only way to diff a library part against a newer datasheet.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">F-05</span>
+      <div>
+        <h3 class="rule-title">Pass through the IDEEZA review gate before publication<span class="tier must">must</span></h3>
+        <p class="rule-body">Generated parts enter as <code>PENDING REVIEW</code>, never published. Sequence: manufacturer submits part data → IDEEZA engineering reviews → on approval the symbol, footprint, and 3D model are generated and verified → part is published and linked to the submitting manufacturer's inventory. Rejection returns a specific reason to the submitter.</p>
+        <p class="rule-body">A part must never be orderable or RFQ-matchable while in <code>PENDING REVIEW</code>.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">F-06</span>
+      <div>
+        <h3 class="rule-title">Name all three artifacts from one canonical key<span class="tier should">should</span></h3>
+        <p class="rule-body">Derive filenames from the same package identifier so they sort together and a missing member is obvious. Never name a footprint after the part number — many part numbers share one package, and the footprint should be reused, not duplicated.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">F-07</span>
+      <div>
+        <h3 class="rule-title">Version, never overwrite<span class="tier must">must</span></h3>
+        <p class="rule-body">A published artifact is immutable. Corrections create a new version with a changelog entry; boards already referencing the old version keep referencing it until deliberately migrated. Silent in-place edits can invalidate a board that already passed review.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">F-08</span>
+      <div>
+        <h3 class="rule-title">Default to IPC-2221 Class 2 unless told otherwise<span class="tier must">must</span></h3>
+        <p class="rule-body">Performance class sets minimum annular ring, conductor spacing, and acceptance criteria. Class 1 general electronic, Class 2 dedicated service (commercial default), Class 3 high-reliability. Record the class; never mix classes within one board's library.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4. LAYERS ============ -->
+  <section id="layers" class="part">
+    <div class="part-head">
+      <p class="part-index">Section 4</p>
+      <h2>Layer architecture &amp; independence</h2>
+    </div>
+    <p class="part-intro">This is the data model behind the reported copper/silkscreen defect. Layers legitimately occupy the same X/Y space — copper, mask, paste, and courtyard all sit on top of each other by design. What must never happen is those coincident geometries behaving as one object.</p>
+
+    <div class="rule">
+      <span class="rule-id">LAY-01</span>
+      <div>
+        <h3 class="rule-title">Generate the full layer tree, top and bottom<span class="tier must">must</span></h3>
+        <pre class="code"><b>FOOTPRINT</b>
+├─ <b>TOP</b>
+│   ├─ Top Copper          pads, plated features
+│   ├─ Top Solder Mask     derived from copper (FP-15)
+│   ├─ Top Paste           derived from copper (FP-15)
+│   ├─ Top Silkscreen      legend, clipped clear of copper (FP-07)
+│   ├─ Top Assembly        nominal body outline
+│   ├─ Top Fabrication     dimensions, centre mark, mechanical detail
+│   └─ Top Courtyard       placement keep-out (FP-01)
+├─ <b>BOTTOM</b>
+│   └─ … same seven layers, mirrored
+└─ <b>OTHER</b>
+    ├─ Mechanical
+    ├─ Keepout
+    ├─ Milling
+    └─ Documentation</pre>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">LAY-02</span>
+      <div>
+        <h3 class="rule-title">Every object owns its <code>layerId</code> — never infer it from geometry<span class="tier must">must</span></h3>
+        <p class="rule-body">Layer membership is a property of the object, not something computed from its shape, position, or line width at render time. Two objects at identical coordinates on different layers are two objects.</p>
+        <pre class="code"><b>Object</b> {
+  id          unique
+  <b>layerId</b>     ← owned by the object, authoritative
+  geometry    line | rect | arc | polygon | pad
+  position    x, y
+  rotation
+  lineWidth
+  fill
+  visibility
+  selectable
+  locked
+}</pre>
+        <p class="rule-why"><b>Why it matters:</b> inferring layer from geometry is the direct cause of "layers intersecting each other." Once two coincident objects are treated as one, editing the silkscreen edits the copper — and no amount of correct clipping maths will hold.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">LAY-03</span>
+      <div>
+        <h3 class="rule-title">Coincident geometry is legal; merged geometry is not<span class="tier must">must</span></h3>
+        <p class="rule-body">Different layers may occupy the same X/Y coordinate space — that is normal and correct. They must remain independent geometry objects.</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 260" role="img" aria-label="Left: five layer bars stacked at the same coordinates fused into a single merged object, marked wrong. Right: the same five bars shown as separate independent objects each with its own layer identifier, marked right.">
+              <g font-family="var(--font-mono)" font-size="10.5">
+                <!-- WRONG -->
+                <text x="20" y="24" font-size="12" font-weight="700" fill="var(--fail)">WRONG — merged into one object</text>
+                <rect x="40" y="48" width="250" height="128" rx="4" fill="var(--fail-bg)" stroke="var(--fail)" stroke-width="2.5"/>
+                <text x="165" y="118" text-anchor="middle" fill="var(--fail)" font-weight="700" font-size="12">1 object</text>
+                <text x="165" y="138" text-anchor="middle" fill="var(--fail)" font-size="10">layer inferred at render</text>
+                <text x="40" y="200" fill="var(--fail)">edit silk → copper moves too</text>
+                <text x="40" y="216" fill="var(--fail)">hide silk → copper disappears</text>
+                <text x="40" y="232" fill="var(--fail)">delete silk → copper deleted</text>
+
+                <line x1="350" y1="40" x2="350" y2="240" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+
+                <!-- RIGHT -->
+                <text x="404" y="24" font-size="12" font-weight="700" fill="var(--pass)">RIGHT — five independent objects</text>
+                <rect x="410" y="48" width="250" height="20" rx="3" fill="var(--copper)" opacity="0.85"/>
+                <text x="668" y="62" fill="currentColor">TopCopper</text>
+                <rect x="410" y="72" width="250" height="20" rx="3" fill="currentColor" opacity="0.22"/>
+                <text x="668" y="86" fill="currentColor">TopMask</text>
+                <rect x="410" y="96" width="250" height="20" rx="3" fill="currentColor" opacity="0.14"/>
+                <text x="668" y="110" fill="currentColor">TopPaste</text>
+                <rect x="410" y="120" width="250" height="20" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
+                <text x="668" y="134" fill="currentColor">TopSilk</text>
+                <rect x="410" y="144" width="250" height="20" rx="3" fill="none" stroke="var(--copper)" stroke-width="1.6" stroke-dasharray="6 4"/>
+                <text x="668" y="158" fill="currentColor">TopCourtyard</text>
+                <text x="410" y="200" fill="var(--pass)">same X/Y — independent objects</text>
+                <text x="410" y="216" fill="var(--pass)">each carries its own layerId</text>
+                <text x="410" y="232" fill="var(--pass)">select / hide / edit / export in isolation</text>
+              </g>
+            </svg>
+          </div>
+          <figcaption>Spatial overlap between layers is expected. The requirement is <b>logical independence</b>: same coordinates, separate objects.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">LAY-04</span>
+      <div>
+        <h3 class="rule-title">Implement these layer interactions exactly<span class="tier must">must</span></h3>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Action</th><th>Required behaviour</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Hide Top Silk</td><td>Only Top Silk disappears</td></tr>
+              <tr><td class="name">Hide Top Copper</td><td>Only Top Copper disappears</td></tr>
+              <tr><td class="name">Select Top Silk</td><td>Only silk objects selected</td></tr>
+              <tr><td class="name">Delete Top Silk</td><td>Copper remains</td></tr>
+              <tr><td class="name">Move Top Silk</td><td>Copper remains in place</td></tr>
+              <tr><td class="name">Move Top Copper</td><td>Silk remains in place</td></tr>
+              <tr><td class="name">Lock Courtyard</td><td>Courtyard cannot be edited</td></tr>
+              <tr><td class="name">Lock Assembly</td><td>Assembly cannot be edited</td></tr>
+              <tr><td class="name">Single-layer mode</td><td>Only the selected layer visible</td></tr>
+              <tr><td class="name">Export Top Silk</td><td>Only Top Silk geometry exported</td></tr>
+              <tr><td class="name">Change object's layer</td><td>Layer changes, geometry unchanged</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">LAY-05</span>
+      <div>
+        <h3 class="rule-title">Associate through-hole pads with all layers they occupy<span class="tier must">must</span></h3>
+        <p class="rule-body">A plated through-hole pad is a multi-layer object: top copper, bottom copper, and the plated barrel between them, plus mask on both sides. Emit it as one pad object with a multi-layer association and an explicit drill, not as two unrelated single-layer pads.</p>
+        <pre class="code">Pad {
+  layers = MultiLayer
+  drill  = 1.00 mm      ← finished hole (FP-10)
+  pad    = 1.80 mm      ← leaves ≥ 0.05 mm ring
+}</pre>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">LAY-06</span>
+      <div>
+        <h3 class="rule-title">Run a silkscreen-to-copper collision check as a pipeline stage<span class="tier must">must</span></h3>
+        <p class="rule-body">Do not rely on the generator getting clipping right. After layer generation, run an explicit check: for every silkscreen object, test against every copper object on the same side; any violation of <code>FP-07</code>'s <code>0.20&nbsp;mm</code> raises a blocking error naming both objects. This is the automated backstop for the reported defect.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">LAY-07</span>
+      <div>
+        <h3 class="rule-title">Keep courtyard and assembly out of the manufacturing output<span class="tier must">must</span></h3>
+        <p class="rule-body">Courtyard, assembly, fabrication, and documentation layers are design-time only and must be excluded from Gerber/ODB++ manufacturing exports. Only copper, mask, paste, silkscreen, and drill data reach the fabricator.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5. FOOTPRINT ============ -->
+  <section id="footprint" class="part">
+    <div class="part-head">
+      <p class="part-index">Section 5</p>
+      <h2>Land pattern &amp; footprint geometry</h2>
+    </div>
+    <p class="part-intro">IPC-7351B for surface-mount, IPC-7251 for through-hole, clearances from IPC-2221B — applied only after the source-priority check in <code>PL-04</code>. This is the artifact most likely to cause a physical manufacturing failure.</p>
+
+    <div class="rule">
+      <span class="rule-id">FP-01</span>
+      <div>
+        <h3 class="rule-title">Use IPC-7351B Density Level B by default<span class="tier must">must</span></h3>
+        <p class="rule-body">Nominal (median) land protrusion unless the part is explicitly flagged. Level A only for hand-assembled or rework-heavy boards; Level C only when space-constrained <em>and</em> the assembler has confirmed fine-pitch capability.</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Density level</th><th>IPC name</th><th>Courtyard excess</th><th>Use when</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Level A</td><td>Most material</td><td class="num">0.50 mm</td><td>Hand soldering, rework, low density</td></tr>
+              <tr><td class="name dflt">Level B — default</td><td>Nominal</td><td class="num">0.25 mm</td><td>General commercial assembly</td></tr>
+              <tr><td class="name">Level C</td><td>Least material</td><td class="num">0.10 mm</td><td>High density, verified fine-pitch process</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-02</span>
+      <div>
+        <h3 class="rule-title">Compute the land from toe, heel, and side fillet goals<span class="tier must">must</span></h3>
+        <p class="rule-body">Where no manufacturer land pattern exists (<code>PL-04</code>), derive pad size per IPC-7351B from the lead's maximum span and minimum length plus the fillet targets for the density level. Never copy from a "close enough" package — a nominally identical body can carry different lead pitch or standoff.</p>
+        <p class="rule-body">Conceptually: component dimensions + manufacturing tolerance + placement tolerance + solder joint requirement + density level → pad dimensions. Implement the formulas from the applicable IPC-7351 revision rather than inventing a universal one.</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 220" role="img" aria-label="Cross-section of a gull-wing lead on a pad showing the toe fillet extending beyond the lead tip and the heel fillet extending behind the lead bend.">
+              <defs>
+                <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0 0 L10 5 L0 10 z" fill="var(--copper)"/>
+                </marker>
+              </defs>
+              <rect x="150" y="130" width="330" height="18" fill="var(--copper)" opacity="0.9"/>
+              <text x="150" y="176" font-family="var(--font-mono)" font-size="11" fill="currentColor">pad (land)</text>
+              <path d="M300 60 L300 105 Q300 118 315 118 L430 118 L430 130 L300 130 Q288 130 288 118 L288 60 z" fill="currentColor" opacity="0.55"/>
+              <text x="240" y="52" font-family="var(--font-mono)" font-size="11" fill="currentColor">lead</text>
+              <line x1="430" y1="100" x2="478" y2="100" stroke="var(--copper)" stroke-width="1.5" marker-end="url(#ar2)"/>
+              <line x1="430" y1="92" x2="430" y2="130" stroke="var(--copper)" stroke-width="1" stroke-dasharray="3 3"/>
+              <line x1="480" y1="92" x2="480" y2="130" stroke="var(--copper)" stroke-width="1" stroke-dasharray="3 3"/>
+              <text x="497" y="104" font-family="var(--font-mono)" font-size="12" fill="var(--copper)" font-weight="600">toe</text>
+              <line x1="288" y1="100" x2="152" y2="100" stroke="var(--copper)" stroke-width="1.5" marker-end="url(#ar2)"/>
+              <line x1="288" y1="92" x2="288" y2="130" stroke="var(--copper)" stroke-width="1" stroke-dasharray="3 3"/>
+              <line x1="150" y1="92" x2="150" y2="130" stroke="var(--copper)" stroke-width="1" stroke-dasharray="3 3"/>
+              <text x="196" y="88" font-family="var(--font-mono)" font-size="12" fill="var(--copper)" font-weight="600">heel</text>
+              <text x="150" y="205" font-family="var(--font-mono)" font-size="11" fill="currentColor" opacity="0.75">side fillet runs perpendicular to this view, along the lead edge</text>
+            </svg>
+          </div>
+          <figcaption>The three fillet goals that size a land: <b>toe</b> past the lead tip, <b>heel</b> behind the bend, <b>side</b> along the lead edge. Density level (FP-01) sets all three.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-03</span>
+      <div>
+        <h3 class="rule-title">Place the origin at the component centroid<span class="tier must">must</span></h3>
+        <p class="rule-body">The origin sits at the body's geometric centre — the point a pick-and-place nozzle targets — not at pin 1, not at a corner. For asymmetric bodies use the centroid of the body outline. Must equal the 3D model origin (<code>3D-02</code>).</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 200" role="img" aria-label="Two footprints. Left: origin crosshair incorrectly at pin 1 in the corner. Right: origin crosshair correctly at the body centroid with centre lines.">
+              <text x="20" y="24" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--fail)">WRONG — origin at pin 1</text>
+              <rect x="60" y="55" width="200" height="100" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
+              <g fill="var(--copper)">
+                <rect x="48" y="68" width="26" height="16"/><rect x="48" y="102" width="26" height="16"/><rect x="48" y="128" width="26" height="16"/>
+                <rect x="246" y="68" width="26" height="16"/><rect x="246" y="102" width="26" height="16"/><rect x="246" y="128" width="26" height="16"/>
+              </g>
+              <circle cx="61" cy="76" r="7" fill="none" stroke="var(--fail)" stroke-width="2.5"/>
+              <line x1="52" y1="76" x2="70" y2="76" stroke="var(--fail)" stroke-width="2"/>
+              <line x1="61" y1="67" x2="61" y2="85" stroke="var(--fail)" stroke-width="2"/>
+              <text x="60" y="182" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">every placement offset by ½ package</text>
+
+              <text x="400" y="24" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--pass)">RIGHT — origin at centroid</text>
+              <rect x="440" y="55" width="200" height="100" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
+              <g fill="var(--copper)">
+                <rect x="428" y="68" width="26" height="16"/><rect x="428" y="102" width="26" height="16"/><rect x="428" y="128" width="26" height="16"/>
+                <rect x="626" y="68" width="26" height="16"/><rect x="626" y="102" width="26" height="16"/><rect x="626" y="128" width="26" height="16"/>
+              </g>
+              <line x1="440" y1="105" x2="640" y2="105" stroke="var(--pass)" stroke-width="0.8" stroke-dasharray="4 4" opacity="0.6"/>
+              <line x1="540" y1="55" x2="540" y2="155" stroke="var(--pass)" stroke-width="0.8" stroke-dasharray="4 4" opacity="0.6"/>
+              <circle cx="540" cy="105" r="7" fill="none" stroke="var(--pass)" stroke-width="2.5"/>
+              <line x1="531" y1="105" x2="549" y2="105" stroke="var(--pass)" stroke-width="2"/>
+              <line x1="540" y1="96" x2="540" y2="114" stroke="var(--pass)" stroke-width="2"/>
+              <text x="462" y="182" font-family="var(--font-mono)" font-size="11" fill="var(--pass)">nozzle target = body centre</text>
+            </svg>
+          </div>
+          <figcaption>Assembly machines read this origin straight from the centroid file. An origin at pin 1 offsets every placement by half the package — and nothing in the artwork looks wrong.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-04</span>
+      <div>
+        <h3 class="rule-title">Number pads counter-clockwise from pin 1, viewed from the top<span class="tier must">must</span></h3>
+        <p class="rule-body">Pin 1 at top-left, numbering counter-clockwise as seen from <em>above</em> the board. For BGAs use the row-letter / column-number grid, omitting <code>I</code>, <code>O</code>, <code>Q</code>, <code>S</code>, <code>X</code>, <code>Z</code>. Thermal pads take the next number after the last signal pin unless the datasheet assigns one. Pad numbering must match symbol pin numbering exactly (<code>X-02</code>).</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 210" role="img" aria-label="Top view of an eight-pad footprint with pin 1 at top left, pads 1 to 4 down the left side, 5 to 8 up the right side, and a curved arrow showing counter-clockwise direction.">
+              <rect x="250" y="40" width="200" height="130" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
+              <circle cx="268" cy="58" r="5" fill="var(--copper)"/>
+              <text x="282" y="62" font-family="var(--font-mono)" font-size="10" fill="var(--copper)">pin 1 marker</text>
+              <g fill="var(--copper)">
+                <rect x="222" y="52" width="26" height="14"/><rect x="222" y="82" width="26" height="14"/>
+                <rect x="222" y="112" width="26" height="14"/><rect x="222" y="142" width="26" height="14"/>
+                <rect x="452" y="142" width="26" height="14"/><rect x="452" y="112" width="26" height="14"/>
+                <rect x="452" y="82" width="26" height="14"/><rect x="452" y="52" width="26" height="14"/>
+              </g>
+              <g font-family="var(--font-mono)" font-size="12" fill="currentColor">
+                <text x="200" y="63">1</text><text x="200" y="93">2</text><text x="200" y="123">3</text><text x="200" y="153">4</text>
+                <text x="488" y="153">5</text><text x="488" y="123">6</text><text x="488" y="93">7</text><text x="488" y="63">8</text>
+              </g>
+              <path d="M300 150 Q350 178 400 150" fill="none" stroke="var(--copper)" stroke-width="1.6"/>
+              <path d="M400 150 l-4 -9 l10 3 z" fill="var(--copper)"/>
+              <text x="298" y="196" font-family="var(--font-mono)" font-size="11" fill="var(--copper)">counter-clockwise, viewed from above</text>
+            </svg>
+          </div>
+          <figcaption>Viewing from the bottom reverses the direction — a common and completely silent way to mirror a footprint.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-05</span>
+      <div>
+        <h3 class="rule-title">Name land patterns to the IPC-7351B convention<span class="tier should">should</span></h3>
+        <p class="rule-body">Encode package type, body dimensions in hundredths of a millimetre, height, pin count, density level — <code>RESC1608X55N</code> (chip resistor, 1.60 × 0.80 mm, 0.55 mm high, Nominal) or <code>SOIC127P600X175-8N</code>. The name is the only place density level survives into the library.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-06</span>
+      <div>
+        <h3 class="rule-title">Courtyard, assembly, and silkscreen are three different things<span class="tier must">must</span></h3>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 230" role="img" aria-label="A footprint with three nested outlines: outer dashed courtyard, middle solid assembly body outline, and silkscreen reduced to two horizontal runs that stop clear of the two copper pads.">
+              <rect x="120" y="40" width="360" height="150" fill="none" stroke="var(--copper)" stroke-width="1.4" stroke-dasharray="7 5"/>
+              <text x="120" y="32" font-family="var(--font-mono)" font-size="11" fill="var(--copper)" font-weight="600">courtyard — placement DRC keep-out</text>
+              <rect x="190" y="78" width="220" height="74" fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.75"/>
+              <text x="497" y="90" font-family="var(--font-mono)" font-size="11" fill="currentColor" opacity="0.85">assembly — nominal body</text>
+              <line x1="410" y1="86" x2="492" y2="86" stroke="currentColor" stroke-width="0.8" opacity="0.5"/>
+              <rect x="160" y="95" width="58" height="40" fill="var(--copper)" opacity="0.9"/>
+              <rect x="382" y="95" width="58" height="40" fill="var(--copper)" opacity="0.9"/>
+              <line x1="228" y1="68" x2="372" y2="68" stroke="currentColor" stroke-width="3"/>
+              <line x1="228" y1="162" x2="372" y2="162" stroke="currentColor" stroke-width="3"/>
+              <text x="497" y="168" font-family="var(--font-mono)" font-size="11" fill="currentColor" opacity="0.85">silkscreen — clipped clear of pads</text>
+              <line x1="372" y1="162" x2="492" y2="162" stroke="currentColor" stroke-width="0.8" opacity="0.5"/>
+              <circle cx="140" cy="60" r="5" fill="currentColor"/>
+              <text x="106" y="212" font-family="var(--font-mono)" font-size="11" fill="currentColor" opacity="0.7">pin-1 dot outside the courtyard so clipping can never erase it (FP-08)</text>
+            </svg>
+          </div>
+          <figcaption>Three layers, three jobs. Using silkscreen as the courtyard makes placement DRC pass on parts that physically collide — because silkscreen has been trimmed away from the pads.</figcaption>
+        </figure>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Layer</th><th>Represents</th><th>Geometry</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Courtyard</td><td>Placement DRC keep-out</td><td class="num">max body + lands + excess (FP-01)</td></tr>
+              <tr><td class="name">Assembly</td><td>True body for docs / 3D</td><td class="num">nominal body dimensions</td></tr>
+              <tr><td class="name">Fabrication</td><td>Mechanical documentation</td><td class="num">outline, centre, pin 1, dimensions</td></tr>
+              <tr><td class="name">Silkscreen</td><td>Printed legend</td><td class="num">body outline, clipped per FP-07</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-07</span>
+      <div>
+        <h3 class="rule-title">Keep silkscreen clear of every solderable surface — 0.20&nbsp;mm minimum<span class="tier must">must</span></h3>
+        <p class="rule-body">This is the reported defect. Silkscreen must never overlap or approach within <code>0.20&nbsp;mm</code> of any SMD pad, through-hole annular ring, test point, or fiducial. Where an outline would cross a pad, clip it at the clearance boundary and leave a gap — a broken outline is correct output, not a flaw. Backed by the pipeline check in <code>LAY-06</code>.</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 250" role="img" aria-label="Left: a body outline rectangle drawn straight through two copper pads with the intersections circled in red. Right: the same footprint with silkscreen reduced to two horizontal runs above and below the pads and a labelled 0.20 millimetre gap.">
+              <text x="20" y="22" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--fail)">WRONG — body outline drawn over pads</text>
+              <rect x="60" y="95" width="56" height="60" fill="var(--copper)" opacity="0.9"/>
+              <rect x="204" y="95" width="56" height="60" fill="var(--copper)" opacity="0.9"/>
+              <rect x="90" y="80" width="140" height="90" fill="none" stroke="currentColor" stroke-width="3"/>
+              <circle cx="90" cy="125" r="17" fill="none" stroke="var(--fail)" stroke-width="2.5"/>
+              <circle cx="230" cy="125" r="17" fill="none" stroke="var(--fail)" stroke-width="2.5"/>
+              <text x="60" y="182" font-family="var(--font-mono)" font-size="10" fill="currentColor" opacity="0.6">body is narrower than the land span</text>
+              <text x="34" y="205" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">ink on pad → poor wetting,</text>
+              <text x="34" y="221" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">insufficient solder, tombstoning</text>
+
+              <line x1="350" y1="40" x2="350" y2="215" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+
+              <text x="400" y="22" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--pass)">RIGHT — clipped, pads fully clear</text>
+              <rect x="440" y="95" width="56" height="60" fill="var(--copper)" opacity="0.9"/>
+              <rect x="584" y="95" width="56" height="60" fill="var(--copper)" opacity="0.9"/>
+              <line x1="470" y1="80" x2="610" y2="80" stroke="currentColor" stroke-width="3"/>
+              <line x1="470" y1="170" x2="610" y2="170" stroke="currentColor" stroke-width="3"/>
+              <line x1="655" y1="80" x2="655" y2="95" stroke="var(--pass)" stroke-width="1.5"/>
+              <line x1="649" y1="80" x2="661" y2="80" stroke="var(--pass)" stroke-width="1.5"/>
+              <line x1="649" y1="95" x2="661" y2="95" stroke="var(--pass)" stroke-width="1.5"/>
+              <text x="666" y="92" font-family="var(--font-mono)" font-size="11" fill="var(--pass)" font-weight="600">≥ 0.20</text>
+              <text x="414" y="205" font-family="var(--font-mono)" font-size="11" fill="var(--pass)">outline broken where it would</text>
+              <text x="414" y="221" font-family="var(--font-mono)" font-size="11" fill="var(--pass)">cross a pad — this is correct</text>
+            </svg>
+          </div>
+          <figcaption>The root cause: on most chip packages the body outline is <em>narrower</em> than the land span, so drawing the body as silkscreen puts its edges directly on the pads. Clipping is mandatory and leaves the outline visibly broken.</figcaption>
+        </figure>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Silkscreen parameter</th><th>Minimum</th><th>Note</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Clearance to solderable copper</td><td class="num dflt">0.20 mm</td><td>Auto-clip; never overlap</td></tr>
+              <tr><td class="name">Line width</td><td class="num">0.15 mm</td><td>Thinner may not print</td></tr>
+              <tr><td class="name">Text cap height</td><td class="num">0.80 mm</td><td>Below this, illegible after fab</td></tr>
+              <tr><td class="name">Silk-to-silk spacing</td><td class="num">0.15 mm</td><td>Prevents ink bridging</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-08</span>
+      <div>
+        <h3 class="rule-title">Mark pin 1 and polarity outside the courtyard<span class="tier must">must</span></h3>
+        <p class="rule-body">Every orientation-sensitive part needs a pin-1 or polarity indicator on both silkscreen <em>and</em> assembly layers. Place the silkscreen marker outside the courtyard so <code>FP-07</code> clipping can never erase it. A chamfered corner or adjacent dot both work; a marker reduced to a stub by clipping does not.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-09</span>
+      <div>
+        <h3 class="rule-title">Place the reference designator so it survives assembly<span class="tier should">should</span></h3>
+        <p class="rule-body">Silkscreen designator: minimum <code>0.80&nbsp;mm</code> cap height, readable left-to-right or bottom-to-top only, outside the courtyard, never overlapping a pad, another designator, or a via. Keep a duplicate on the assembly layer at the component centre for documentation.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-10</span>
+      <div>
+        <h3 class="rule-title">Size through-hole pads from lead diameter, respecting minimum annular ring<span class="tier must">must</span></h3>
+        <p class="rule-body">Per IPC-7251: finished hole = maximum lead diameter + <code>0.25&nbsp;mm</code> at nominal density. Pad diameter must leave at least the minimum annular ring on every side — <code>0.05&nbsp;mm</code> external for IPC-2221 Class 2. For square or rectangular leads use the diagonal, not the edge.</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 210" role="img" aria-label="Top view of a through-hole pad showing the outer pad circle, the inner drilled hole, and the annular ring band between them with a labelled minimum width.">
+              <circle cx="200" cy="105" r="72" fill="var(--copper)" opacity="0.9"/>
+              <circle cx="200" cy="105" r="40" fill="var(--paper)"/>
+              <circle cx="200" cy="105" r="40" fill="none" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+              <line x1="160" y1="105" x2="240" y2="105" stroke="currentColor" stroke-width="1.2"/>
+              <text x="186" y="98" font-family="var(--font-mono)" font-size="11" fill="currentColor">hole</text>
+              <line x1="240" y1="105" x2="272" y2="105" stroke="var(--pass)" stroke-width="2"/>
+              <line x1="240" y1="97" x2="240" y2="113" stroke="var(--pass)" stroke-width="1.5"/>
+              <line x1="272" y1="97" x2="272" y2="113" stroke="var(--pass)" stroke-width="1.5"/>
+              <text x="292" y="102" font-family="var(--font-mono)" font-size="12" fill="var(--pass)" font-weight="600">annular ring ≥ 0.05 mm</text>
+              <text x="292" y="122" font-family="var(--font-mono)" font-size="11" fill="currentColor" opacity="0.7">on every side, after drill tolerance</text>
+              <text x="292" y="60" font-family="var(--font-mono)" font-size="12" fill="currentColor">hole = max lead Ø + 0.25 mm</text>
+              <text x="292" y="80" font-family="var(--font-mono)" font-size="12" fill="currentColor">pad  = hole + 2 × ring</text>
+              <text x="120" y="196" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">a ring below minimum can break out during drilling — invisible on the artwork</text>
+            </svg>
+          </div>
+          <figcaption>Drill registration tolerance eats into the ring, so the minimum must hold <em>after</em> tolerance, not before.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-11</span>
+      <div>
+        <h3 class="rule-title">Make pin 1 visually distinct on through-hole parts<span class="tier should">should</span></h3>
+        <p class="rule-body">Give pin 1 a rectangular or square pad while other pins are round or oval. This survives silkscreen loss and is readable on a bare board.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-12</span>
+      <div>
+        <h3 class="rule-title">Segment thermal-pad paste for bottom-terminated parts<span class="tier must">must</span></h3>
+        <p class="rule-body">For QFN, DFN, and any exposed-pad package, do not emit a single flood aperture. Specify paste coverage as a segmented array — typically 50–75% of pad area — plus any thermal via pattern, per IPC-7093.</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 200" role="img" aria-label="Left: a thermal pad with one full-area paste deposit, marked wrong. Right: the same pad with a grid of smaller paste apertures and thermal vias, marked right.">
+              <text x="20" y="22" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--fail)">WRONG — one flood aperture</text>
+              <rect x="70" y="45" width="180" height="110" fill="var(--copper)" opacity="0.35" stroke="var(--copper)" stroke-width="1.5"/>
+              <rect x="78" y="53" width="164" height="94" fill="var(--copper)" opacity="0.85"/>
+              <text x="34" y="182" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">paste outgasses → part floats and tilts</text>
+
+              <line x1="350" y1="40" x2="350" y2="165" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+
+              <text x="400" y="22" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--pass)">RIGHT — segmented paste + vias</text>
+              <rect x="450" y="45" width="180" height="110" fill="var(--copper)" opacity="0.35" stroke="var(--copper)" stroke-width="1.5"/>
+              <g fill="var(--copper)" opacity="0.9">
+                <rect x="464" y="57" width="34" height="20"/><rect x="506" y="57" width="34" height="20"/>
+                <rect x="548" y="57" width="34" height="20"/><rect x="590" y="57" width="28" height="20"/>
+                <rect x="464" y="90" width="34" height="20"/><rect x="506" y="90" width="34" height="20"/>
+                <rect x="548" y="90" width="34" height="20"/><rect x="590" y="90" width="28" height="20"/>
+                <rect x="464" y="123" width="34" height="20"/><rect x="506" y="123" width="34" height="20"/>
+                <rect x="548" y="123" width="34" height="20"/><rect x="590" y="123" width="28" height="20"/>
+              </g>
+              <g fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.7">
+                <circle cx="502" cy="100" r="5"/><circle cx="544" cy="100" r="5"/>
+                <circle cx="502" cy="67" r="5"/><circle cx="544" cy="67" r="5"/>
+              </g>
+              <text x="414" y="182" font-family="var(--font-mono)" font-size="11" fill="var(--pass)">controlled volume, vias carry heat out</text>
+            </svg>
+          </div>
+          <figcaption>A full-area paste deposit on a large thermal pad outgasses during reflow and floats the part, tilting it and opening the perimeter joints.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-13</span>
+      <div>
+        <h3 class="rule-title">Never place a via inside a pad unless explicitly specified<span class="tier must">must</span></h3>
+        <p class="rule-body">Via-in-pad wicks solder away from the joint. Where thermal performance requires it, the via must be filled-and-capped per IPC-4761 and flagged on the part so the fabricator quotes the extra process.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-14</span>
+      <div>
+        <h3 class="rule-title">Maintain minimum copper-to-copper clearance between adjacent pads<span class="tier must">must</span></h3>
+        <p class="rule-body">Adjacent pads within one footprint must respect minimum copper spacing — commonly <code>0.15&nbsp;mm</code> for standard commercial fabrication, more where working voltage requires it per the IPC-2221B spacing tables. On fine-pitch parts, reduce pad width before violating spacing.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-15</span>
+      <div>
+        <h3 class="rule-title">Derive mask and paste from copper, never hand-draw them<span class="tier must">must</span></h3>
+        <p class="rule-body">Generate mask openings by expanding each pad by one configurable value, and paste apertures by contracting or segmenting it. Independent geometry drifts out of sync with the pad on the next revision.</p>
+        <pre class="code">Copper pad   0.60 × 0.80 mm
+    ↓ mask expansion  +0.05 mm per side   ← configurable, not hard-coded
+Mask opening 0.70 × 0.90 mm
+
+Paste aperture = 1:1, or reduced / segmented per package (FP-12)</pre>
+        <p class="rule-why"><b>Why it matters:</b> <code>0.05&nbsp;mm</code> per side is a common house value, not a universal PCB rule — fabrication capabilities vary, so it must be a configurable process parameter.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-16</span>
+      <div>
+        <h3 class="rule-title">Mark plated vs non-plated holes distinctly<span class="tier must">must</span></h3>
+        <p class="rule-body">Mechanical mounting holes are usually non-plated with no annular ring and no net; component leads are plated. Emit these as different object types — a non-plated hole rendered as a plated pad appears in the netlist and can short to a plane.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-17</span>
+      <div>
+        <h3 class="rule-title">Record component height and body envelope on the footprint<span class="tier must">must</span></h3>
+        <p class="rule-body">Maximum height above the board is a first-class field, not implied by the 3D model. Enclosure clearance and keep-out checks read it directly, and a board may be reviewed before models are attached.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-18</span>
+      <div>
+        <h3 class="rule-title">Set the pick-and-place zero-rotation orientation per IPC-7351<span class="tier must">must</span></h3>
+        <p class="rule-body">IPC-7351B defines a zero-degree orientation per package family — for two-pin chip parts, pin 1 to the left; for most ICs, pin 1 at top-left. Store rotation as an explicit field. An inconsistent zero orientation rotates parts by 90° or 180° on the assembly line with nothing wrong in the artwork.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-19</span>
+      <div>
+        <h3 class="rule-title">Flag parts needing board-edge or keep-out treatment<span class="tier should">should</span></h3>
+        <p class="rule-body">Edge connectors, antennas, castellated modules, and press-fit parts have constraints beyond the courtyard — board-edge offset, ground keep-out, panel rail clearance. Record as named constraints on the part rather than assuming a designer will know.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">FP-20</span>
+      <div>
+        <h3 class="rule-title">Provide test-point access for parts with no other probe point<span class="tier should">should</span></h3>
+        <p class="rule-body">Where a net terminates only under a BGA or QFN thermal pad, flag it — the board will need a dedicated test pad. This is a property of the package, so it belongs on the part.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 6. SYMBOL ============ -->
+  <section id="symbol" class="part">
+    <div class="part-head">
+      <p class="part-index">Section 6</p>
+      <h2>Schematic symbol</h2>
+    </div>
+    <p class="part-intro">IPC-2612 for diagram documentation, IEEE 315 for graphic symbols. The symbol represents electrical behaviour, not physical appearance — it may be a simple shape provided its pins correspond correctly to the footprint pads. A bad symbol won't scrap a board; it will cause a design error that reaches one.</p>
+
+    <div class="rule">
+      <span class="rule-id">SYM-01</span>
+      <div>
+        <h3 class="rule-title">Never reproduce the physical pin order<span class="tier must">must</span></h3>
+        <p class="rule-body">The package's pin sequence is an artifact of silicon layout and moulding, carrying no schematic meaning. Reading pins 1..N off the datasheet and placing them clockwise around a rectangle is the root cause of the scattered-pin defect. Group by function first (<code>SYM-04</code>), then attach whatever pin numbers those functions happen to have.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-02</span>
+      <div>
+        <h3 class="rule-title">Snap every pin to a 2.54&nbsp;mm grid — no exceptions<span class="tier must">must</span></h3>
+        <p class="rule-body">All pin endpoints land exactly on a <code>2.54&nbsp;mm</code> (100&nbsp;mil) grid. Pin length uniform across the symbol: <code>2.54&nbsp;mm</code> or <code>5.08&nbsp;mm</code>, chosen once per library, never mixed within one symbol. Body outline edges on grid too.</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 190" role="img" aria-label="A dot grid. Left: an off-grid pin endpoint where a wire visually touches but does not connect, circled in red. Right: an on-grid endpoint with a solid junction dot.">
+              <g fill="currentColor" opacity="0.28">
+                <circle cx="80" cy="60" r="2"/><circle cx="120" cy="60" r="2"/><circle cx="160" cy="60" r="2"/><circle cx="200" cy="60" r="2"/><circle cx="240" cy="60" r="2"/>
+                <circle cx="80" cy="100" r="2"/><circle cx="120" cy="100" r="2"/><circle cx="160" cy="100" r="2"/><circle cx="200" cy="100" r="2"/><circle cx="240" cy="100" r="2"/>
+                <circle cx="80" cy="140" r="2"/><circle cx="120" cy="140" r="2"/><circle cx="160" cy="140" r="2"/><circle cx="200" cy="140" r="2"/><circle cx="240" cy="140" r="2"/>
+                <circle cx="460" cy="60" r="2"/><circle cx="500" cy="60" r="2"/><circle cx="540" cy="60" r="2"/><circle cx="580" cy="60" r="2"/><circle cx="620" cy="60" r="2"/>
+                <circle cx="460" cy="100" r="2"/><circle cx="500" cy="100" r="2"/><circle cx="540" cy="100" r="2"/><circle cx="580" cy="100" r="2"/><circle cx="620" cy="100" r="2"/>
+                <circle cx="460" cy="140" r="2"/><circle cx="500" cy="140" r="2"/><circle cx="540" cy="140" r="2"/><circle cx="580" cy="140" r="2"/><circle cx="620" cy="140" r="2"/>
+              </g>
+              <text x="20" y="28" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--fail)">WRONG — pin endpoint off grid</text>
+              <line x1="80" y1="107" x2="160" y2="107" stroke="var(--copper)" stroke-width="2.5"/>
+              <line x1="160" y1="100" x2="240" y2="100" stroke="currentColor" stroke-width="2"/>
+              <circle cx="160" cy="103" r="9" fill="none" stroke="var(--fail)" stroke-width="2.5"/>
+              <text x="34" y="172" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">looks connected · netlist records nothing</text>
+              <line x1="350" y1="40" x2="350" y2="160" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+              <text x="400" y="28" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--pass)">RIGHT — endpoint on grid</text>
+              <line x1="460" y1="100" x2="540" y2="100" stroke="var(--copper)" stroke-width="2.5"/>
+              <line x1="540" y1="100" x2="620" y2="100" stroke="currentColor" stroke-width="2"/>
+              <circle cx="540" cy="100" r="4.5" fill="var(--pass)"/>
+              <text x="414" y="172" font-family="var(--font-mono)" font-size="11" fill="var(--pass)">junction forms · net is real</text>
+            </svg>
+          </div>
+          <figcaption>An off-grid pin cannot be connected by a wire drawn on grid. The wire appears to touch while the netlist records no connection — a silent, invisible open circuit.</figcaption>
+        </figure>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Parameter</th><th>Value</th><th>Tolerance</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Pin pitch / grid</td><td class="num dflt">2.54 mm (100 mil)</td><td class="num">exact — zero offset</td></tr>
+              <tr><td class="name">Pin length</td><td class="num">2.54 or 5.08 mm</td><td class="num">uniform per symbol</td></tr>
+              <tr><td class="name">Pin name text</td><td class="num">1.27 mm</td><td class="num">min cap height</td></tr>
+              <tr><td class="name">Text rotation</td><td class="num">0° or 90° CCW only</td><td class="num">never 180° / 270°</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-03</span>
+      <div>
+        <h3 class="rule-title">Size the body to the pin count, with margin<span class="tier should">should</span></h3>
+        <p class="rule-body">The body must be tall enough that every pin sits on its own grid step with at least one blank step between functional groups, and wide enough that the longest pin name plus the designator fits inside without touching the outline or another label. Never overlap text with text, text with outline, or pin with pin.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-04</span>
+      <div>
+        <h3 class="rule-title">Group pins by electrical function, in reading order<span class="tier must">must</span></h3>
+        <p class="rule-body">Signal flows left to right. Within each side, order pins into contiguous functional blocks separated by one blank grid step — never interleave unrelated signals.</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 300" role="img" aria-label="Left: a symbol with power, ground and signal pins interleaved on both sides in datasheet numeric order. Right: the same part with power on top, ground on bottom, reset and clock inputs on the left, and port outputs grouped on the right.">
+              <text x="20" y="24" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--fail)">WRONG — datasheet numeric order</text>
+              <rect x="110" y="60" width="120" height="180" fill="none" stroke="currentColor" stroke-width="1.8"/>
+              <g stroke="currentColor" stroke-width="1.8">
+                <line x1="70" y1="90" x2="110" y2="90"/><line x1="70" y1="130" x2="110" y2="130"/>
+                <line x1="70" y1="170" x2="110" y2="170"/><line x1="70" y1="210" x2="110" y2="210"/>
+                <line x1="230" y1="90" x2="270" y2="90"/><line x1="230" y1="130" x2="270" y2="130"/>
+                <line x1="230" y1="170" x2="270" y2="170"/><line x1="230" y1="210" x2="270" y2="210"/>
+              </g>
+              <g font-family="var(--font-mono)" font-size="11" fill="currentColor">
+                <text x="118" y="94">PA0</text><text x="118" y="134" fill="var(--fail)">VCC</text>
+                <text x="118" y="174">PA1</text><text x="118" y="214" fill="var(--fail)">GND</text>
+                <text x="222" y="94" text-anchor="end" fill="var(--fail)">GND</text><text x="222" y="134" text-anchor="end">PA3</text>
+                <text x="222" y="174" text-anchor="end">RST</text><text x="222" y="214" text-anchor="end">PA2</text>
+              </g>
+              <g font-family="var(--font-mono)" font-size="10" fill="currentColor" opacity="0.6">
+                <text x="60" y="86" text-anchor="end">1</text><text x="60" y="126" text-anchor="end">2</text>
+                <text x="60" y="166" text-anchor="end">3</text><text x="60" y="206" text-anchor="end">4</text>
+                <text x="278" y="86">8</text><text x="278" y="126">7</text>
+                <text x="278" y="166">6</text><text x="278" y="206">5</text>
+              </g>
+              <text x="34" y="270" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">power, ground and signals interleaved</text>
+              <text x="34" y="286" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">on every side — unreadable</text>
+
+              <line x1="350" y1="45" x2="350" y2="260" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+
+              <text x="400" y="24" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--pass)">RIGHT — grouped by function</text>
+              <rect x="480" y="90" width="130" height="130" fill="none" stroke="currentColor" stroke-width="1.8"/>
+              <line x1="545" y1="50" x2="545" y2="90" stroke="currentColor" stroke-width="1.8"/>
+              <text x="545" y="44" font-family="var(--font-mono)" font-size="11" fill="var(--copper)" text-anchor="middle">VCC (2)</text>
+              <line x1="545" y1="220" x2="545" y2="258" stroke="currentColor" stroke-width="1.8"/>
+              <text x="545" y="276" font-family="var(--font-mono)" font-size="11" fill="var(--copper)" text-anchor="middle">GND (4)</text>
+              <g stroke="currentColor" stroke-width="1.8">
+                <line x1="440" y1="115" x2="480" y2="115"/><line x1="440" y1="140" x2="480" y2="140"/>
+              </g>
+              <g font-family="var(--font-mono)" font-size="11" fill="currentColor">
+                <text x="488" y="119">RST</text><text x="488" y="144">CLK</text>
+              </g>
+              <g font-family="var(--font-mono)" font-size="10" fill="currentColor" opacity="0.6">
+                <text x="432" y="111" text-anchor="end">6</text><text x="432" y="136" text-anchor="end">3</text>
+              </g>
+              <g stroke="currentColor" stroke-width="1.8">
+                <line x1="610" y1="155" x2="650" y2="155"/><line x1="610" y1="177" x2="650" y2="177"/>
+                <line x1="610" y1="199" x2="650" y2="199"/>
+              </g>
+              <g font-family="var(--font-mono)" font-size="11" fill="currentColor">
+                <text x="602" y="159" text-anchor="end">PA0</text><text x="602" y="181" text-anchor="end">PA1</text>
+                <text x="602" y="203" text-anchor="end">PA2</text>
+              </g>
+              <g font-family="var(--font-mono)" font-size="10" fill="currentColor" opacity="0.6">
+                <text x="658" y="151">1</text><text x="658" y="173">5</text><text x="658" y="195">7</text>
+              </g>
+              <line x1="618" y1="140" x2="640" y2="140" stroke="var(--pass)" stroke-width="1" stroke-dasharray="3 3"/>
+              <text x="666" y="144" font-family="var(--font-mono)" font-size="9" fill="var(--pass)">gap</text>
+            </svg>
+          </div>
+          <figcaption>Pin numbers become incidental annotations — note they run 6, 3 down the left and 1, 5, 7 down the right. That is correct: function determines position, numbering follows.</figcaption>
+        </figure>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Side</th><th>Pin classes</th><th>Ordering within side</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Left</td><td>Inputs, control, clocks, address, reset</td><td>Group by bus / function, MSB→LSB</td></tr>
+              <tr><td class="name">Right</td><td>Outputs, status, bidirectional I/O</td><td>Group by bus / function, MSB→LSB</td></tr>
+              <tr><td class="name">Top</td><td>Power rails (VCC, VDD, VBAT, AVDD)</td><td>Highest voltage leftmost</td></tr>
+              <tr><td class="name">Bottom</td><td>Grounds (GND, AGND, DGND), thermal pad</td><td>Digital, analog, then thermal</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-05</span>
+      <div>
+        <h3 class="rule-title">Make power and ground pins visible<span class="tier must">must</span></h3>
+        <p class="rule-body">Do not emit hidden or auto-connected power pins. Every supply and return appears on the symbol and is wired explicitly. Where a part has multiple internally-common supply pins, show each — the board still needs a decoupling capacitor at each.</p>
+        <p class="rule-why"><b>Why it matters:</b> hidden power pins connect by name silently. A part expecting 1.8&nbsp;V on a pin named <code>VCC</code> attaches to a 3.3&nbsp;V net with no error and no visible wire.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-06</span>
+      <div>
+        <h3 class="rule-title">Split large parts into functional banks<span class="tier should">should</span></h3>
+        <p class="rule-body">Above roughly 40 pins, or wherever a part contains independent blocks, emit a multi-unit symbol with suffixed units (<code>U1A</code>, <code>U1B</code>, …). Keep power/ground in their own unit or repeat per unit — choose one convention library-wide.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-07</span>
+      <div>
+        <h3 class="rule-title">Set electrical pin types truthfully<span class="tier must">must</span></h3>
+        <p class="rule-body">Assign each pin its real type — input, output, bidirectional, power in, power out, passive, open collector, open emitter, tri-state, NC. Do not default everything to passive or bidirectional to silence warnings.</p>
+        <p class="rule-why"><b>Why it matters:</b> ERC only catches driver conflicts, unpowered inputs, and shorted outputs when pin types are honest. Blanket-passive disables the check entirely.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-08</span>
+      <div>
+        <h3 class="rule-title">Indicate active-low with one consistent notation<span class="tier must">must</span></h3>
+        <p class="rule-body">Use an overbar where the renderer supports it, otherwise one chosen prefix (<code>~RESET</code> or <code>!RESET</code>) applied uniformly. Never mix <code>nRESET</code>, <code>RESET#</code>, <code>/RESET</code>, <code>RESET_N</code> in one library. Carry datasheet inversion bubbles through per IEEE 315.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-09</span>
+      <div>
+        <h3 class="rule-title">Use the conventional graphic form for standard devices<span class="tier should">should</span></h3>
+        <p class="rule-body">Resistors, capacitors, inductors, diodes, transistors, op-amps, and logic gates all have established IEEE 315 shapes — use them. A passive drawn as a labelled rectangle is technically valid and practically unreadable. Reserve the plain rectangle for ICs with no conventional form.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-10</span>
+      <div>
+        <h3 class="rule-title">Assign the correct reference designator prefix<span class="tier must">must</span></h3>
+        <p class="rule-body">Prefix comes from device class: <code>R</code> resistor, <code>C</code> capacitor, <code>L</code> inductor, <code>D</code> diode/LED, <code>Q</code> transistor, <code>U</code> IC, <code>J</code> jack, <code>P</code> plug, <code>SW</code> switch, <code>Y</code> crystal, <code>F</code> fuse, <code>TP</code> test point, <code>FB</code> ferrite bead. Never emit a bare <code>U</code> for everything.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-11</span>
+      <div>
+        <h3 class="rule-title">Handle no-connect pins explicitly<span class="tier must">must</span></h3>
+        <p class="rule-body">Pins marked NC, DNC, or reserved must appear on the symbol with the correct type — and the datasheet's instruction preserved. "Do not connect" and "connect to ground" are different requirements that both get abbreviated to NC; carry the actual wording into the pin description.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-12</span>
+      <div>
+        <h3 class="rule-title">Never duplicate or skip a pin number<span class="tier must">must</span></h3>
+        <p class="rule-body">Each pin number appears exactly once across all units, and the set matches the package exactly with no gaps. Where a package ties multiple pads to one function, emit each pad as its own pin — do not collapse them.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-13</span>
+      <div>
+        <h3 class="rule-title">Place pin names inside the body, pin numbers outside<span class="tier should">should</span></h3>
+        <p class="rule-body">The functional name sits inside the outline adjacent to its pin; the package pin number sits outside, above or beside the pin line. Swapping them mid-library makes every schematic ambiguous.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-14</span>
+      <div>
+        <h3 class="rule-title">Populate the symbol fields that outlive the symbol<span class="tier must">must</span></h3>
+        <p class="rule-body">At minimum: reference, value, part number, description, datasheet, manufacturer, footprint link, and the datasheet revision generated from. A symbol with no footprint association gets one assigned by hand later — which is exactly how mismatched parts reach a board.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-15</span>
+      <div>
+        <h3 class="rule-title">Set the symbol anchor at a predictable point<span class="tier should">should</span></h3>
+        <p class="rule-body">Place the symbol origin on grid at the body's top-left corner or centre — one convention library-wide. An arbitrary anchor makes symbols jump when placed and breaks alignment when arrayed.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">SYM-16</span>
+      <div>
+        <h3 class="rule-title">Carry ratings that constrain the design<span class="tier should">should</span></h3>
+        <p class="rule-body">Voltage rating, current rating, tolerance, dielectric, power rating, and temperature range belong in symbol fields. These are design constraints a reviewer checks against the schematic, not just procurement data.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 7. 3D MODEL ============ -->
+  <section id="model" class="part">
+    <div class="part-head">
+      <p class="part-index">Section 7</p>
+      <h2>3D model</h2>
+    </div>
+    <p class="part-intro">Generated from mechanical package dimensions, never from the schematic. IPC does not specify 3D geometry; the governing standard is ISO 10303 (STEP), with alignment inherited from the land pattern. The model's job is mechanical verification, so dimensional truth beats visual fidelity.</p>
+
+    <div class="rule">
+      <span class="rule-id">3D-01</span>
+      <div>
+        <h3 class="rule-title">Deliver STEP (AP242, or AP214) as the primary format<span class="tier must">must</span></h3>
+        <p class="rule-body">Emit a neutral parametric-solid STEP file. Mesh formats (STL, OBJ, WRL) may be generated <em>from</em> the STEP as secondary renders but must never be the source of truth — they carry no units, no assembly structure, and no reliable origin.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-02</span>
+      <div>
+        <h3 class="rule-title">Align the model origin to the footprint origin, Z=0 at the seating plane<span class="tier must">must</span></h3>
+        <p class="rule-body">Model origin is the same centroid as <code>FP-03</code>. <code>Z&nbsp;=&nbsp;0</code> is the PCB surface the part sits on, body extending in <code>+Z</code>. Pin 1 falls on the same side as pin 1 in the land pattern, with no extra rotation baked in. Define the coordinate system once: X = width, Y = length, Z = height.</p>
+        <figure class="fig">
+          <div class="svg-card">
+            <svg viewBox="0 0 700 250" role="img" aria-label="Two side-view cross sections. Left: Z equals zero at the body centre so the component is sunk halfway into the PCB. Right: Z equals zero at the PCB top surface with the body above the board and only leads touching.">
+              <text x="20" y="24" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--fail)">WRONG — Z=0 at body centre</text>
+              <rect x="40" y="150" width="270" height="26" fill="currentColor" opacity="0.2"/>
+              <text x="40" y="196" font-family="var(--font-mono)" font-size="10" fill="currentColor" opacity="0.7">PCB</text>
+              <rect x="120" y="112" width="110" height="76" fill="currentColor" opacity="0.5"/>
+              <rect x="120" y="150" width="110" height="38" fill="var(--fail)" opacity="0.28"/>
+              <line x1="30" y1="150" x2="330" y2="150" stroke="var(--fail)" stroke-width="1.6" stroke-dasharray="6 4"/>
+              <text x="336" y="146" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">Z=0</text>
+              <text x="34" y="228" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">body sunk into the board — every</text>
+              <text x="34" y="243" font-family="var(--font-mono)" font-size="11" fill="var(--fail)">clearance check invalid</text>
+
+              <line x1="360" y1="40" x2="360" y2="215" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+
+              <text x="404" y="24" font-family="var(--font-mono)" font-size="12" font-weight="700" fill="var(--pass)">RIGHT — Z=0 at seating plane</text>
+              <rect x="410" y="150" width="260" height="26" fill="currentColor" opacity="0.2"/>
+              <text x="410" y="196" font-family="var(--font-mono)" font-size="10" fill="currentColor" opacity="0.7">PCB</text>
+              <rect x="490" y="80" width="110" height="62" fill="currentColor" opacity="0.5"/>
+              <rect x="490" y="142" width="18" height="8" fill="var(--copper)"/>
+              <rect x="582" y="142" width="18" height="8" fill="var(--copper)"/>
+              <line x1="400" y1="150" x2="686" y2="150" stroke="var(--pass)" stroke-width="1.6" stroke-dasharray="6 4"/>
+              <text x="628" y="166" font-family="var(--font-mono)" font-size="11" fill="var(--pass)">Z=0</text>
+              <line x1="545" y1="76" x2="545" y2="50" stroke="var(--pass)" stroke-width="1.6"/>
+              <path d="M545 46 l-4 9 l8 0 z" fill="var(--pass)"/>
+              <text x="556" y="52" font-family="var(--font-mono)" font-size="11" fill="var(--pass)">+Z</text>
+              <text x="404" y="228" font-family="var(--font-mono)" font-size="11" fill="var(--pass)">standoff modelled, body above board,</text>
+              <text x="404" y="243" font-family="var(--font-mono)" font-size="11" fill="var(--pass)">only leads touching Z=0</text>
+            </svg>
+          </div>
+          <figcaption>Every downstream mechanical check — enclosure clearance, connector mating, heatsink fit — is computed from this transform. A wrong datum silently invalidates all of them.</figcaption>
+        </figure>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Axis / datum</th><th>Definition</th><th>Common failure</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Origin XY</td><td class="num">body centroid (= FP-03)</td><td>Origin at pin 1 or a corner</td></tr>
+              <tr><td class="name">Z = 0</td><td class="num">PCB seating plane</td><td>Z=0 at body centre → part sunk in board</td></tr>
+              <tr><td class="name">+Z direction</td><td class="num">away from board</td><td>Model mirrored below the board</td></tr>
+              <tr><td class="name">Rotation</td><td class="num">pin 1 matches footprint</td><td>90° / 180° offset vs. land pattern</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-03</span>
+      <div>
+        <h3 class="rule-title">Generate leads per-pin with numbering that matches the footprint<span class="tier must">must</span></h3>
+        <p class="rule-body">Each physical lead is generated with its own number, X/Y/Z position, length, width, height, and rotation, and those numbers must correspond to the footprint pad numbering. The chain <code>symbol pin 1 → footprint pad 1 → 3D lead 1</code> is a hard requirement, verified in <code>X-03</code>.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-04</span>
+      <div>
+        <h3 class="rule-title">Model nominal dimensions; verify clearance against maximum<span class="tier must">must</span></h3>
+        <p class="rule-body">Build the body at datasheet nominal so the model represents a typical part. Separately record the maximum envelope — max body, max height, max lead span — in metadata so collision and keep-out checks run worst case.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-05</span>
+      <div>
+        <h3 class="rule-title">Model the standoff — do not rest the body on the board<span class="tier must">must</span></h3>
+        <p class="rule-body">Where the datasheet specifies a standoff or seating height, the body sits at that height above <code>Z=0</code>, with only intended contact features touching the plane.</p>
+        <p class="rule-why"><b>Why it matters:</b> zero standoff hides real interference — an underfill gap or a low-profile trace routed beneath the part reads as clear when it isn't.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-06</span>
+      <div>
+        <h3 class="rule-title">Emit clean, closed, watertight solids<span class="tier must">must</span></h3>
+        <p class="rule-body">Every solid is a valid closed manifold: no self-intersecting faces, no zero-thickness sheets, no duplicate coincident bodies, no stray construction geometry. Validate before publishing — an invalid solid fails import in mechanical CAD, often without a clear error.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-07</span>
+      <div>
+        <h3 class="rule-title">Simplify aggressively — model the envelope, not the part<span class="tier should">should</span></h3>
+        <p class="rule-body">Omit internal structure, fine text, decorative fillets, and sub-<code>0.1&nbsp;mm</code> surface detail. Keep what carries mechanical meaning: envelope, lead geometry, standoff, connector openings, mounting holes, pin-1 indicator.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-08</span>
+      <div>
+        <h3 class="rule-title">Assign materials and colours by convention<span class="tier should">should</span></h3>
+        <p class="rule-body">Dark grey/black moulding compound, tin-silver for leads and terminations, gold for plated contacts, appropriate body colours for LEDs and connectors. Colour is how a reviewer spots a lead modelled as body, or a connector modelled inside-out.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-09</span>
+      <div>
+        <h3 class="rule-title">State units explicitly as millimetres<span class="tier must">must</span></h3>
+        <p class="rule-body">Write the unit declaration into the STEP header rather than relying on importer defaults. A model silently arriving in inches is off by 25.4× — obvious in isolation, easy to miss inside a full board assembly.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-10</span>
+      <div>
+        <h3 class="rule-title">Do not include the PCB, pads, or solder in the model<span class="tier must">must</span></h3>
+        <p class="rule-body">The model is the component only. Board substrate, copper pads, solder fillets, and neighbouring parts belong to the board assembly. A model carrying its own PCB fragment collides with the real board on import.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-11</span>
+      <div>
+        <h3 class="rule-title">Keep the model's footprint within the footprint's courtyard<span class="tier must">must</span></h3>
+        <p class="rule-body">Project the model's maximum XY envelope onto the board plane and verify it fits inside the courtyard from <code>FP-06</code>. A mismatch means one artifact is wrong — this single test catches scaling errors, wrong-package substitutions, and rotation mistakes.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-12</span>
+      <div>
+        <h3 class="rule-title">Model moving and mating features in their neutral state<span class="tier should">should</span></h3>
+        <p class="rule-body">Connectors, sockets, switches, and hinged parts are modelled unmated and at rest, with mating clearance and travel recorded as metadata. Where insertion or actuation sweeps a volume, record that envelope so the enclosure designer can reserve it.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-13</span>
+      <div>
+        <h3 class="rule-title">Use one body per material, grouped as an assembly<span class="tier should">should</span></h3>
+        <p class="rule-body">Merge coplanar faces and consolidate: one solid for the moulding, one for the lead frame, one per distinct material. Hundreds of tiny bodies slow every downstream operation and make material assignment unreliable.</p>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">3D-14</span>
+      <div>
+        <h3 class="rule-title">Round coordinates to a sane precision<span class="tier should">should</span></h3>
+        <p class="rule-body">Emit vertex coordinates at <code>0.001&nbsp;mm</code> resolution. Floating-point noise inflates file size, defeats deduplication, and produces spurious validation warnings on faces meant to be coincident.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 8. VALIDATION ============ -->
+  <section id="validate" class="part">
+    <div class="part-head">
+      <p class="part-index">Section 8</p>
+      <h2>Validation gates</h2>
+    </div>
+    <p class="part-intro">Four batteries run in sequence after generation and before save. These catch what per-artifact rules cannot see, because they compare artifacts against each other.</p>
+
+    <div class="rule">
+      <span class="rule-id">V-01</span>
+      <div>
+        <h3 class="rule-title">Electrical validation — symbol against footprint<span class="tier must">must</span></h3>
+        <ul class="tight">
+          <li>Pin count equals pad count, thermal pads and shields included</li>
+          <li>Pin numbers map 1:1 as a <em>set</em>, not just by count — an off-by-one that swaps two numbers has a matching count and produces a board wired backwards</li>
+          <li>No duplicate pin numbers, no missing pin numbers</li>
+          <li>Every datasheet pin exists on the symbol</li>
+          <li>Pin names match the datasheet; electrical types assigned and plausible</li>
+          <li>All pin connection points on grid (<code>SYM-02</code>)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">V-02</span>
+      <div>
+        <h3 class="rule-title">Mechanical validation — footprint against datasheet<span class="tier must">must</span></h3>
+        <ul class="tight">
+          <li>Body size and pad positions match the extracted dimensions</li>
+          <li>Pitch correct across every pad row</li>
+          <li>Package orientation and pin-1 position correct</li>
+          <li>Hole and annular-ring dimensions within <code>FP-10</code></li>
+          <li>Courtyard present, sized per density level, on its own layer</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">V-03</span>
+      <div>
+        <h3 class="rule-title">3D validation — model against footprint<span class="tier must">must</span></h3>
+        <ul class="tight">
+          <li>Body centred on the footprint origin; correct origin and rotation</li>
+          <li>Leads aligned to pads, lead numbering matching pad numbering</li>
+          <li>Pin 1 aligned across all three artifacts</li>
+          <li>Height matches the footprint's recorded height field (<code>FP-17</code>)</li>
+          <li>XY envelope inside the courtyard (<code>3D-11</code>)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">V-04</span>
+      <div>
+        <h3 class="rule-title">Manufacturing validation — DRC / DFM<span class="tier must">must</span></h3>
+        <ul class="tight">
+          <li>Pad-to-pad clearance (<code>FP-14</code>)</li>
+          <li>Solder-mask clearance and paste dimensions (<code>FP-15</code>)</li>
+          <li><b>Silkscreen-to-pad clearance (<code>FP-07</code>, <code>LAY-06</code>)</b> — the reported defect's automated backstop</li>
+          <li>Courtyard clearance</li>
+          <li>Hole and annular-ring requirements</li>
+          <li>House DFM rules from the assembly partner</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rule">
+      <span class="rule-id">V-05</span>
+      <div>
+        <h3 class="rule-title">Emit a machine-readable validation report per part<span class="tier must">must</span></h3>
+        <p class="rule-body">Every generated part carries a report listing each rule checked, its result, and the measured value where numeric. A part with unrun checks is not a passing part — it is an unverified one, and must not publish. All three artifacts must also cite the same datasheet revision (<code>F-04</code>).</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CHECKLIST ============ -->
+  <section id="preflight" class="part">
+    <div class="part-head">
+      <p class="part-index">Before publishing</p>
+      <h2>Pre-flight checklist</h2>
+    </div>
+    <p class="part-intro">Run on every generated part before it enters review. Any unchecked MUST item blocks publication.</p>
+
+    <div class="checklist">
+      <h3>Part verification gate</h3>
+      <p>Each item maps to a rule above. Tick state is local to your browser only.</p>
+
+      <div class="check-group">
+        <p class="cg-label">Pipeline &amp; inputs</p>
+        <div class="check-item"><input type="checkbox" id="p1"><label for="p1">Symbol, footprint, and model generated in parallel from one extraction <span class="rid">PL-01</span></label></div>
+        <div class="check-item"><input type="checkbox" id="p2"><label for="p2">Artifacts linked by explicit ID, not filename matching <span class="rid">PL-02</span></label></div>
+        <div class="check-item"><input type="checkbox" id="p3"><label for="p3">Manufacturer's recommended land pattern used where the datasheet gives one <span class="rid">PL-04</span></label></div>
+        <div class="check-item"><input type="checkbox" id="p4"><label for="p4">Every mechanical dimension captured with its tolerance, not nominal-only <span class="rid">IN-03</span></label></div>
+        <div class="check-item"><input type="checkbox" id="p5"><label for="p5">No dimension inferred, estimated, or borrowed from a similar part <span class="rid">F-01</span></label></div>
+        <div class="check-item"><input type="checkbox" id="p6"><label for="p6">Datasheet URL, revision, page and table recorded on all three artifacts <span class="rid">F-04</span></label></div>
+        <div class="check-item"><input type="checkbox" id="p7"><label for="p7">Part is PENDING REVIEW — not orderable, not RFQ-matchable <span class="rid">F-05</span></label></div>
+      </div>
+
+      <div class="check-group">
+        <p class="cg-label">Layer architecture</p>
+        <div class="check-item"><input type="checkbox" id="l1"><label for="l1">Full layer tree generated, top and bottom <span class="rid">LAY-01</span></label></div>
+        <div class="check-item"><input type="checkbox" id="l2"><label for="l2">Every object owns its layerId — never inferred from geometry <span class="rid">LAY-02</span></label></div>
+        <div class="check-item"><input type="checkbox" id="l3"><label for="l3">Coincident geometry stays as independent objects <span class="rid">LAY-03</span></label></div>
+        <div class="check-item"><input type="checkbox" id="l4"><label for="l4">Hide / select / delete / move / lock / export isolate correctly per layer <span class="rid">LAY-04</span></label></div>
+        <div class="check-item"><input type="checkbox" id="l5"><label for="l5">THT pads emitted as multi-layer objects with explicit drill <span class="rid">LAY-05</span></label></div>
+        <div class="check-item"><input type="checkbox" id="l6"><label for="l6">Silk-to-copper collision check ran as a pipeline stage <span class="rid">LAY-06</span></label></div>
+        <div class="check-item"><input type="checkbox" id="l7"><label for="l7">Courtyard / assembly / fab excluded from manufacturing export <span class="rid">LAY-07</span></label></div>
+      </div>
+
+      <div class="check-group">
+        <p class="cg-label">Land pattern</p>
+        <div class="check-item"><input type="checkbox" id="c1"><label for="c1">No silkscreen within 0.20 mm of any pad, ring, test point, or fiducial <span class="rid">FP-07</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c2"><label for="c2">Density level recorded and consistent with the assembly method <span class="rid">FP-01</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c3"><label for="c3">Pads from toe/heel/side fillet goals, not copied from a similar part <span class="rid">FP-02</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c4"><label for="c4">Origin at body centroid, identical to the 3D model origin <span class="rid">FP-03 · 3D-02</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c5"><label for="c5">Pad numbering counter-clockwise from pin 1, viewed from above <span class="rid">FP-04</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c6"><label for="c6">Courtyard, assembly, fabrication, silkscreen all present and distinct <span class="rid">FP-06</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c7"><label for="c7">Pin-1 / polarity marker on silk and assembly, outside the courtyard <span class="rid">FP-08</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c8"><label for="c8">Reference designator ≥ 0.80 mm, not inverted, not overlapping <span class="rid">FP-09</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c9"><label for="c9">Annular ring ≥ 0.05 mm on all sides after drill tolerance <span class="rid">FP-10</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c10"><label for="c10">Thermal pad paste segmented, vias specified <span class="rid">FP-12</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c11"><label for="c11">No via inside any pad unless filled-and-capped and flagged <span class="rid">FP-13</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c12"><label for="c12">Copper-to-copper spacing between adjacent pads ≥ minimum <span class="rid">FP-14</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c13"><label for="c13">Mask and paste derived from copper, expansion configurable <span class="rid">FP-15</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c14"><label for="c14">Plated and non-plated holes emitted as distinct types <span class="rid">FP-16</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c15"><label for="c15">Maximum component height recorded as a footprint field <span class="rid">FP-17</span></label></div>
+        <div class="check-item"><input type="checkbox" id="c16"><label for="c16">Pick-and-place zero-rotation orientation set explicitly <span class="rid">FP-18</span></label></div>
+      </div>
+
+      <div class="check-group">
+        <p class="cg-label">Schematic symbol</p>
+        <div class="check-item"><input type="checkbox" id="s1"><label for="s1">Every pin endpoint exactly on the 2.54 mm grid; pin length uniform <span class="rid">SYM-02</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s2"><label for="s2">Pins grouped by function — inputs left, outputs right, power top, ground bottom <span class="rid">SYM-04</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s3"><label for="s3">Layout does not follow datasheet pin numbering <span class="rid">SYM-01</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s4"><label for="s4">No text overlaps text, outline, or pins; body sized with margin <span class="rid">SYM-03</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s5"><label for="s5">No hidden or auto-connected power pins <span class="rid">SYM-05</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s6"><label for="s6">Electrical pin types assigned truthfully, not blanket-passive <span class="rid">SYM-07</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s7"><label for="s7">Active-low notation consistent across symbol and library <span class="rid">SYM-08</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s8"><label for="s8">Reference designator prefix correct for the device class <span class="rid">SYM-10</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s9"><label for="s9">NC / DNC / reserved pins present with the datasheet's actual instruction <span class="rid">SYM-11</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s10"><label for="s10">No duplicated or skipped pin numbers across all units <span class="rid">SYM-12</span></label></div>
+        <div class="check-item"><input type="checkbox" id="s11"><label for="s11">Reference, value, part number, description, datasheet, footprint all set <span class="rid">SYM-14</span></label></div>
+      </div>
+
+      <div class="check-group">
+        <p class="cg-label">3D model</p>
+        <div class="check-item"><input type="checkbox" id="m1"><label for="m1">STEP AP242/AP214 emitted, units declared as millimetres <span class="rid">3D-01 · 3D-09</span></label></div>
+        <div class="check-item"><input type="checkbox" id="m2"><label for="m2">Z = 0 at seating plane, body in +Z, pin 1 matching the land pattern <span class="rid">3D-02</span></label></div>
+        <div class="check-item"><input type="checkbox" id="m3"><label for="m3">Lead numbering corresponds to footprint pad numbering <span class="rid">3D-03</span></label></div>
+        <div class="check-item"><input type="checkbox" id="m4"><label for="m4">Standoff modelled where the datasheet specifies one <span class="rid">3D-05</span></label></div>
+        <div class="check-item"><input type="checkbox" id="m5"><label for="m5">Geometry validates as closed manifold solids <span class="rid">3D-06</span></label></div>
+        <div class="check-item"><input type="checkbox" id="m6"><label for="m6">No PCB, pads, or solder included in the model <span class="rid">3D-10</span></label></div>
+        <div class="check-item"><input type="checkbox" id="m7"><label for="m7">Model XY envelope fits inside the footprint courtyard <span class="rid">3D-11</span></label></div>
+        <div class="check-item"><input type="checkbox" id="m8"><label for="m8">Maximum envelope recorded for worst-case clearance <span class="rid">3D-04</span></label></div>
+      </div>
+
+      <div class="check-group">
+        <p class="cg-label">Validation gates</p>
+        <div class="check-item"><input type="checkbox" id="v1"><label for="v1">Electrical battery passed — pin/pad set mapping, not just count <span class="rid">V-01</span></label></div>
+        <div class="check-item"><input type="checkbox" id="v2"><label for="v2">Mechanical battery passed — body, pitch, orientation, holes, courtyard <span class="rid">V-02</span></label></div>
+        <div class="check-item"><input type="checkbox" id="v3"><label for="v3">3D battery passed — origin, rotation, lead alignment, height, envelope <span class="rid">V-03</span></label></div>
+        <div class="check-item"><input type="checkbox" id="v4"><label for="v4">DRC/DFM battery passed, including silk-to-pad clearance <span class="rid">V-04</span></label></div>
+        <div class="check-item"><input type="checkbox" id="v5"><label for="v5">Machine-readable validation report emitted, every rule with a result <span class="rid">V-05</span></label></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="notes">
+    <p><b>On the values in this document.</b> Density levels, courtyard excess, hole-to-lead allowance, and minimum annular ring come from the IPC standards cited at the top. The <code>0.20&nbsp;mm</code> silkscreen clearance, <code>0.05&nbsp;mm</code> mask expansion, <code>0.15&nbsp;mm</code> copper spacing, and text minimums are house rules set at the safe end of common fabrication capability — each must be a configurable process parameter and confirmed against the fabricator's published capability, never hard-coded as a universal PCB rule.</p>
+    <p><b>Tier meaning.</b> <span class="tier must">must</span> blocks publication if unmet. <span class="tier should">should</span> is the standing default; departures need a recorded reason on the part.</p>
+    <p><b>Scope.</b> These rules cover generation and self-verification. They do not replace the human review gate (<code>F-05</code>) — they make that review fast by removing everything mechanically checkable from it.</p>
+  </footer>
+</div>

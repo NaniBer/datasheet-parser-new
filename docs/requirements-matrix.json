@@ -1,0 +1,799 @@
+{
+  "source": "docs/IDEEZA_Component_Generation_Spec.html",
+  "generated": "2026-08-24",
+  "classification_legend": {
+    "extraction": "reading data from the datasheet",
+    "data-model": "how objects/IDs/layers/metadata are represented & governed",
+    "generation": "producing symbol/footprint/3D geometry",
+    "export": "fabricator/CAD deliverable formats",
+    "validation": "QA gates & checks"
+  },
+  "status_legend": {
+    "implemented": "requirement met in code",
+    "partial": "some sub-conditions met, others not",
+    "missing": "not implemented",
+    "impossible": "cannot be satisfied/verified in current architecture"
+  },
+  "requirements": [
+    {
+      "id": "PL-01",
+      "section": "1. Pipeline",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "partial",
+      "requirement": "Extract once, generate symbol/footprint/model independently from one shared record",
+      "evidence": "main.py:1421/1451/1492 all build from PinData",
+      "notes": "No single frozen shared record object; body consumes footprint pad_map (3D partly coupled)."
+    },
+    {
+      "id": "PL-02",
+      "section": "1. Pipeline",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "missing",
+      "requirement": "Link artifacts by explicit symbolId/footprintId/modelId, not filename",
+      "evidence": "runner.py:26 discover_artifacts matches by filename stem",
+      "notes": "No ID fields anywhere; forbidden filename-matching is exactly what's used."
+    },
+    {
+      "id": "PL-03",
+      "section": "1. Pipeline",
+      "tier": "must",
+      "classification": "validation",
+      "status": "missing",
+      "requirement": "Do not persist to library before validation passes (staging state)",
+      "evidence": "main.py fail-open default emits GLB regardless",
+      "notes": "No staging; harness is offline grader, does not gate output."
+    },
+    {
+      "id": "PL-04",
+      "section": "1. Pipeline",
+      "tier": "must",
+      "classification": "extraction",
+      "status": "missing",
+      "requirement": "Source priority: mfr land pattern > IPC-7351B > DFM > generic; record which",
+      "evidence": "pcb_footprint_builder.py:158 jedec->extracted->IPC only",
+      "notes": "No recommended-land-pattern ingest, no DFM/generic tiers, no source recorded."
+    },
+    {
+      "id": "PL-05",
+      "section": "1. Pipeline",
+      "tier": "should",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Stepped wizard with per-step previews",
+      "evidence": "main.py steps are internal; api single upload->download",
+      "notes": "UI/workflow requirement; no wizard."
+    },
+    {
+      "id": "IN-01",
+      "section": "2. Inputs",
+      "tier": "must",
+      "classification": "extraction",
+      "status": "missing",
+      "requirement": "Capture manufacturer, MPN, description, category, datasheet URL/rev, distributor refs",
+      "evidence": "pin_data.py:29 only component_name",
+      "notes": "No identification metadata captured at all."
+    },
+    {
+      "id": "IN-02",
+      "section": "2. Inputs",
+      "tier": "must",
+      "classification": "extraction",
+      "status": "missing",
+      "requirement": "Per-pin: number, name, electrical TYPE, FUNCTION, side, length/orientation, active-low, hidden",
+      "evidence": "pin_data.py:8 Pin(number,name,function)",
+      "notes": "Only number+name+one free 'function' string; no electrical type/side/length/active-low/hidden."
+    },
+    {
+      "id": "IN-03",
+      "section": "2. Inputs",
+      "tier": "must",
+      "classification": "extraction",
+      "status": "missing",
+      "requirement": "Mechanical fields WITH tolerances (min/nom/max): pitch, body LWH, lead, standoff, thermal, holes",
+      "evidence": "dimension_extractor.py:367 collapses to midpoint",
+      "notes": "Tolerances discarded (midpoint), except b_max/L_max for pads; no structured mechanical schema."
+    },
+    {
+      "id": "F-01",
+      "section": "3. Foundations",
+      "tier": "must",
+      "classification": "extraction",
+      "status": "missing",
+      "requirement": "Never invent a dimension \u2014 emit BLOCKED naming the missing dim",
+      "evidence": "dimension_extractor.py:163 defaults; no BLOCKED token",
+      "notes": "Defaults/estimates on missing dims; never stops."
+    },
+    {
+      "id": "F-02",
+      "section": "3. Foundations",
+      "tier": "must",
+      "classification": "extraction",
+      "status": "partial",
+      "requirement": "Work in mm throughout; convert once at ingest; record both units",
+      "evidence": "text_dimensions.py:264 drops inch dup; unit hardcoded 'mm'",
+      "notes": "mm-only kept, but inch value discarded not recorded; no explicit conversion step."
+    },
+    {
+      "id": "F-03",
+      "section": "3. Foundations",
+      "tier": "must",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Apply tolerance extremes in the safe direction",
+      "evidence": "pcb_footprint_builder.py:453 pads use b_max/L_max",
+      "notes": "Only SMD pad sizing uses safe extreme; courtyard uses pad extents not max body; rest midpoints."
+    },
+    {
+      "id": "F-04",
+      "section": "3. Foundations",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "partial",
+      "requirement": "Provenance on every artifact: mfr, MPN, URL, rev, PAGE+TABLE, timestamp",
+      "evidence": "pcb_footprint_extras.py:372 only dimsSource",
+      "notes": "Only dims_source token; no MPN/URL/rev/page/table/timestamp."
+    },
+    {
+      "id": "F-05",
+      "section": "3. Foundations",
+      "tier": "must",
+      "classification": "validation",
+      "status": "missing",
+      "requirement": "Review gate: PENDING REVIEW, not orderable until approved",
+      "evidence": "api/jobs.py:20 statuses; DOWNLOADABLE incl UNVALIDATED",
+      "notes": "No review/approval state; artifacts downloadable immediately."
+    },
+    {
+      "id": "F-06",
+      "section": "3. Foundations",
+      "tier": "should",
+      "classification": "data-model",
+      "status": "partial",
+      "requirement": "Name all three from one canonical key; footprint not named after part number",
+      "evidence": "main.py:146 _both_output_paths shared stem",
+      "notes": "Shares CLI output stem (not a governed canonical key)."
+    },
+    {
+      "id": "F-07",
+      "section": "3. Foundations",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "missing",
+      "requirement": "Version, never overwrite; changelog; immutability",
+      "evidence": "validation_marker.py:33 saves in place",
+      "notes": "Outputs overwritten; no per-part versioning/changelog."
+    },
+    {
+      "id": "F-08",
+      "section": "3. Foundations",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "partial",
+      "requirement": "Default to IPC-2221 Class 2; record the class",
+      "evidence": "checks.py:38 ANNULAR_RING_MIN=0.05 (Class 2)",
+      "notes": "Class-2 threshold hard-coded; no class field, no selection, never recorded."
+    },
+    {
+      "id": "LAY-01",
+      "section": "4. Layers",
+      "tier": "must",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Full layer tree top+bottom (copper/mask/paste/silk/assembly/fab/courtyard)",
+      "evidence": "build_body fab/silk/crtyd; THT top+bottom copper",
+      "notes": "No paste layer, no assembly layer; SMD copper top-only."
+    },
+    {
+      "id": "LAY-02",
+      "section": "4. Layers",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "partial",
+      "requirement": "Every object owns its layerId (not inferred from geometry)",
+      "evidence": "extras carry originalName+color; layer via parent node",
+      "notes": "No explicit layerId; layer inferred from parent/material."
+    },
+    {
+      "id": "LAY-03",
+      "section": "4. Layers",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "implemented",
+      "requirement": "Coincident geometry stays independent objects",
+      "evidence": "build_pin adds copper/mask/hole as separate assemblies",
+      "notes": "Coincident nodes independent."
+    },
+    {
+      "id": "LAY-04",
+      "section": "4. Layers",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "partial",
+      "requirement": "Layer interactions (hide/select/delete/move/lock/export isolate)",
+      "evidence": "pcb_footprint_extras viewer flags",
+      "notes": "Some viewer metadata; no per-layer isolate/lock/export mechanism in source (viewer concern)."
+    },
+    {
+      "id": "LAY-05",
+      "section": "4. Layers",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "THT pads multi-layer object with explicit drill",
+      "evidence": "pcb_footprint_builder.py:753-801 + drill in extras",
+      "notes": "THT pad = copper top/bottom + barrel + hole + drill dia."
+    },
+    {
+      "id": "LAY-06",
+      "section": "4. Layers",
+      "tier": "must",
+      "classification": "validation",
+      "status": "partial",
+      "requirement": "Silk-to-copper collision check as an explicit pipeline stage",
+      "evidence": "_silk_line_segments inline at build; conformance check_silk_pad_clearance",
+      "notes": "Clipping done at construction + graded in harness; not a distinct in-pipeline collision gate."
+    },
+    {
+      "id": "LAY-07",
+      "section": "4. Layers",
+      "tier": "must",
+      "classification": "export",
+      "status": "impossible",
+      "requirement": "Exclude courtyard/assembly/fab from Gerber/ODB++ export",
+      "evidence": "No Gerber/ODB++/Excellon writer in repo",
+      "notes": "No manufacturing export exists at all -> cannot be satisfied/verified today."
+    },
+    {
+      "id": "FP-01",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "IPC-7351B Density Level B default; density recorded",
+      "evidence": "pcb_footprint_builder.py:63 fixed constants",
+      "notes": "No density selection; level never recorded."
+    },
+    {
+      "id": "FP-02",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Pads from toe/heel/side fillet goals (IPC-7351)",
+      "evidence": "_compute_pad_spec:459 b_eff+SIDE_MARGIN, lead+TOE_HEEL",
+      "notes": "Toe+heel collapsed to one 0.70 constant; side is +0.06 add, not IPC fillet goals."
+    },
+    {
+      "id": "FP-03",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Origin at body centroid",
+      "evidence": "_recenter_pins:242; body centered 0,0",
+      "notes": "Pads/body symmetric about origin."
+    },
+    {
+      "id": "FP-04",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Pads numbered CCW from pin 1 (top view); BGA grid; thermal numbering",
+      "evidence": "build_all_pins iterates layout order; BGA refused",
+      "notes": "CCW inherited from layout only; no BGA row-letter grid; no thermal-pad number."
+    },
+    {
+      "id": "FP-05",
+      "section": "5. Land pattern",
+      "tier": "should",
+      "classification": "data-model",
+      "status": "missing",
+      "requirement": "IPC-7351B land-pattern naming convention",
+      "evidence": "component_name used verbatim",
+      "notes": "No IPC name generated."
+    },
+    {
+      "id": "FP-06",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Courtyard, assembly, fabrication, silk as distinct layers",
+      "evidence": "build_body fab/silk/crtyd",
+      "notes": "No assembly layer (docstring mentions, code omits)."
+    },
+    {
+      "id": "FP-07",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Silkscreen >= 0.20 mm clear of pads; clipped where crossing",
+      "evidence": "_silk_line_segments:364; SILK_PAD_CLEARANCE 0.20 (+0.03)",
+      "notes": "Silk lines clipped clear of every pad bbox."
+    },
+    {
+      "id": "FP-08",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Pin-1/polarity marker on silk AND assembly, outside courtyard",
+      "evidence": "build_first_pin_marker silk outside courtyard; fab marker at pad",
+      "notes": "Silk marker OK; second marker is on FAB not assembly and sits at pad."
+    },
+    {
+      "id": "FP-09",
+      "section": "5. Land pattern",
+      "tier": "should",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Ref designator survives assembly (>=0.8mm, not over pad)",
+      "evidence": "build_designator offset_y = body/2+10",
+      "notes": "Placed far above; no size/collision enforcement."
+    },
+    {
+      "id": "FP-10",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "THT annular ring >= 0.05 mm; hole = lead + 0.25",
+      "evidence": "_compute_pad_spec THT: drill=diag+0.25, dia=drill+2*0.35",
+      "notes": "Ring 0.35 >= 0.05."
+    },
+    {
+      "id": "FP-11",
+      "section": "5. Land pattern",
+      "tier": "should",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Pin-1 rectangular pad on THT",
+      "evidence": "extras pinShape rectangle; geometry circle",
+      "notes": "Metadata/points only; actual THT copper is a circle for every pin."
+    },
+    {
+      "id": "FP-12",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Thermal-pad paste SEGMENTED (50-75%) + thermal vias",
+      "evidence": "No thermal/exposed pad or paste layer built",
+      "notes": "No paste layer, no thermal pad, no vias."
+    },
+    {
+      "id": "FP-13",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "No via-in-pad unless filled/capped and flagged",
+      "evidence": "No via geometry generated",
+      "notes": "No via concept; vacuously not violated but unenforced."
+    },
+    {
+      "id": "FP-14",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Copper-copper clearance between adjacent pads >= min (0.15)",
+      "evidence": "_relieve_corner_pads:266 CORNER_CLEARANCE 0.15; width cap pitch-0.20",
+      "notes": "Corner relief keeps quad corners >=0.15; same-side >=0.20."
+    },
+    {
+      "id": "FP-15",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Mask and paste derived from copper (expansion configurable)",
+      "evidence": "mask = copper + MASK_MARGIN 0.102",
+      "notes": "Mask derived; NO paste layer exists at all."
+    },
+    {
+      "id": "FP-16",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Plated vs non-plated holes emitted as distinct types",
+      "evidence": "extras hardcode thruHoleType 'plated'",
+      "notes": "Only plated holes; no NPTH type."
+    },
+    {
+      "id": "FP-17",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "missing",
+      "requirement": "Record component max height on the footprint",
+      "evidence": "No height field in Package extras",
+      "notes": "Height never recorded."
+    },
+    {
+      "id": "FP-18",
+      "section": "5. Land pattern",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "missing",
+      "requirement": "Store pick-and-place zero-rotation orientation",
+      "evidence": "per-pin rotation:0 only; no component orientation",
+      "notes": "No P&P zero orientation stored."
+    },
+    {
+      "id": "FP-19",
+      "section": "5. Land pattern",
+      "tier": "should",
+      "classification": "data-model",
+      "status": "missing",
+      "requirement": "Flag edge/keepout/castellated/press-fit parts",
+      "evidence": "No such flags",
+      "notes": "Absent."
+    },
+    {
+      "id": "FP-20",
+      "section": "5. Land pattern",
+      "tier": "should",
+      "classification": "data-model",
+      "status": "missing",
+      "requirement": "Test-point access flag for buried nets",
+      "evidence": "No test-point field",
+      "notes": "Absent."
+    },
+    {
+      "id": "SYM-01",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Layout does NOT reproduce physical pin order",
+      "evidence": "pin_layout places pins 1..N sequentially around rectangle",
+      "notes": "Reproduces physical order; no functional placement."
+    },
+    {
+      "id": "SYM-02",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Every pin endpoint on 2.54 mm grid; uniform pin length",
+      "evidence": "package_geometry.py:_normalize_schematic_to_grid pitch/leg=2.54",
+      "notes": "On-grid enforced. Caveat: BGA path bypasses normalization."
+    },
+    {
+      "id": "SYM-03",
+      "section": "6. Symbol",
+      "tier": "should",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Body sized to pins with margin; no text/outline/pin overlap",
+      "evidence": "_normalize need_h/need_w + margins",
+      "notes": "Sized w/ margin & grid pitch; no text/text or text/outline collision check."
+    },
+    {
+      "id": "SYM-04",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Group pins by function (inputs L, outputs R, power top, gnd bottom)",
+      "evidence": "layout by geometric side/number only",
+      "notes": "No functional grouping (also blocked: pin function not extracted)."
+    },
+    {
+      "id": "SYM-05",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Power/ground pins visible (not hidden/auto-connected)",
+      "evidence": "build_all_pins renders every pin as a leg",
+      "notes": "No hidden pins."
+    },
+    {
+      "id": "SYM-06",
+      "section": "6. Symbol",
+      "tier": "should",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Split large parts (>~40 pins) into multi-unit banks",
+      "evidence": "single Package/Legs assembly always",
+      "notes": "No U1A/U1B banking."
+    },
+    {
+      "id": "SYM-07",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "extraction",
+      "status": "missing",
+      "requirement": "Electrical pin TYPES assigned truthfully per pin",
+      "evidence": "adapter carries number+name only",
+      "notes": "No electrical-type field or rendering."
+    },
+    {
+      "id": "SYM-08",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Active-low notation consistent (overbar/one prefix)",
+      "evidence": "build_pin renders names raw",
+      "notes": "No overbar/prefix; 0 hits for active_low."
+    },
+    {
+      "id": "SYM-09",
+      "section": "6. Symbol",
+      "tier": "should",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Conventional IEEE-315 graphic forms for R/C/L/D/Q/gates",
+      "evidence": "build_body_border always a rectangle",
+      "notes": "No conventional symbols."
+    },
+    {
+      "id": "SYM-10",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "missing",
+      "requirement": "Reference designator prefix by device class",
+      "evidence": "designator hardcoded 'U'",
+      "notes": "No R/C/L/D/Q/J prefix logic."
+    },
+    {
+      "id": "SYM-11",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "No-connect pins explicit with datasheet instruction preserved",
+      "evidence": "no NC detection",
+      "notes": "NC treated as ordinary pins."
+    },
+    {
+      "id": "SYM-12",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "validation",
+      "status": "partial",
+      "requirement": "Never duplicate or skip a pin number; complete 1..N",
+      "evidence": "extraction_validator complete/dup check; conformance check_symbol_pin_numbering",
+      "notes": "Validated; but input pin_data not pre-checked, unmatched numbers silently skipped in layout."
+    },
+    {
+      "id": "SYM-13",
+      "section": "6. Symbol",
+      "tier": "should",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Pin names inside body, numbers outside",
+      "evidence": "DIP/TQFP inside; SOIC/dual-row inconsistent",
+      "notes": "Family-inconsistent name/number placement."
+    },
+    {
+      "id": "SYM-14",
+      "section": "6. Symbol",
+      "tier": "must",
+      "classification": "data-model",
+      "status": "partial",
+      "requirement": "Symbol fields: ref, value, MPN, description, datasheet, mfr, footprint link, rev",
+      "evidence": "schematic_extras value+designator only",
+      "notes": "Only reference('U') and value; rest absent."
+    },
+    {
+      "id": "SYM-15",
+      "section": "6. Symbol",
+      "tier": "should",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Symbol anchor at predictable on-grid point",
+      "evidence": "body centered at 0,0; dims grid-snapped",
+      "notes": "Predictable anchor."
+    },
+    {
+      "id": "SYM-16",
+      "section": "6. Symbol",
+      "tier": "should",
+      "classification": "data-model",
+      "status": "missing",
+      "requirement": "Ratings fields (V/I/tolerance/dielectric/power/temp)",
+      "evidence": "none in source",
+      "notes": "Absent."
+    },
+    {
+      "id": "3D-01",
+      "section": "7. 3D model",
+      "tier": "must",
+      "classification": "export",
+      "status": "implemented",
+      "requirement": "STEP (AP242/AP214) as PRIMARY; mesh secondary",
+      "evidence": "exporter.py:37 assembly.export(step) before GLB",
+      "notes": "STEP first; AP flavor not explicitly set (OCCT default AP214)."
+    },
+    {
+      "id": "3D-02",
+      "section": "7. 3D model",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Origin=centroid; Z=0 seating; body +Z; pin1 matches; X=w Y=l Z=h",
+      "evidence": "gullwing.py box(E1,D,A2); body +Z; validate_alignment",
+      "notes": "Origin/seating/orientation correct."
+    },
+    {
+      "id": "3D-03",
+      "section": "7. 3D model",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Per-pin leads numbered to match footprint pads",
+      "evidence": "gullwing Lead_<pin>; validator.py:73 validate_alignment tol 0.35",
+      "notes": "Lead feet checked against pad centres at build."
+    },
+    {
+      "id": "3D-04",
+      "section": "7. 3D model",
+      "tier": "must",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "Model nominal; record MAX envelope in metadata",
+      "evidence": "spec nominal dims; no max-envelope metadata; STEP no metadata",
+      "notes": "Nominal built; max envelope not recorded."
+    },
+    {
+      "id": "3D-05",
+      "section": "7. 3D model",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Model the standoff (body above board)",
+      "evidence": "gullwing body translate A1+A2/2; leadless/bga/dip standoff",
+      "notes": "Standoff modelled; contacts touch Z=0."
+    },
+    {
+      "id": "3D-06",
+      "section": "7. 3D model",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Clean closed watertight solids (validated)",
+      "evidence": "solids by boolean union; conformance check_body_watertight (STEP isValid)",
+      "notes": "Closed by construction + harness validates isValid; no build-time gate."
+    },
+    {
+      "id": "3D-07",
+      "section": "7. 3D model",
+      "tier": "should",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Simplify aggressively (envelope, omit <0.1mm)",
+      "evidence": "exporter _TESS_TOL 0.02; minimal B-rep faces",
+      "notes": "Envelope-level modelling."
+    },
+    {
+      "id": "3D-08",
+      "section": "7. 3D model",
+      "tier": "should",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "Materials/colours by convention",
+      "evidence": "templates BODY dark, LEAD tin; mirrored to GLB",
+      "notes": "Two-material convention."
+    },
+    {
+      "id": "3D-09",
+      "section": "7. 3D model",
+      "tier": "must",
+      "classification": "export",
+      "status": "implemented",
+      "requirement": "STEP declares millimetre units",
+      "evidence": "cadquery assembly.export default unit MM; conformance check_body_units_mm",
+      "notes": "mm declared (library default), validated in harness."
+    },
+    {
+      "id": "3D-10",
+      "section": "7. 3D model",
+      "tier": "must",
+      "classification": "generation",
+      "status": "implemented",
+      "requirement": "No PCB/pads/solder in the model",
+      "evidence": "templates add only Body/Lead/ExposedPad/Tab/balls",
+      "notes": "Component only."
+    },
+    {
+      "id": "3D-11",
+      "section": "7. 3D model",
+      "tier": "must",
+      "classification": "validation",
+      "status": "implemented",
+      "requirement": "Model XY envelope inside footprint courtyard",
+      "evidence": "conformance check_body_within_courtyard",
+      "notes": "Validated in harness (model3d has no such check; harness does)."
+    },
+    {
+      "id": "3D-12",
+      "section": "7. 3D model",
+      "tier": "should",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Moving/mating features in neutral state; travel recorded",
+      "evidence": "no moving geometry/travel field",
+      "notes": "N/A for current families; no mechanism."
+    },
+    {
+      "id": "3D-13",
+      "section": "7. 3D model",
+      "tier": "should",
+      "classification": "generation",
+      "status": "partial",
+      "requirement": "One body per material grouped as assembly",
+      "evidence": "one solid per Lead; grouped by material in GLB",
+      "notes": "Grouped 2-material assembly but per-lead solids, not merged per material."
+    },
+    {
+      "id": "3D-14",
+      "section": "7. 3D model",
+      "tier": "should",
+      "classification": "generation",
+      "status": "missing",
+      "requirement": "Round coordinates to ~0.001 mm",
+      "evidence": "no rounding; float32 GLB; OCCT default STEP",
+      "notes": "Not quantised."
+    },
+    {
+      "id": "V-01",
+      "section": "8. Validation",
+      "tier": "must",
+      "classification": "validation",
+      "status": "partial",
+      "requirement": "Electrical: pin==pad set, dup/missing, names match, types plausible, on grid",
+      "evidence": "conformance pin_pad_set_mapping/symbol_pin_numbering/symbol_grid + extraction_validator",
+      "notes": "Set/dup/missing/grid covered; pin NAME match and TYPE plausibility NOT (types not modelled)."
+    },
+    {
+      "id": "V-02",
+      "section": "8. Validation",
+      "tier": "must",
+      "classification": "validation",
+      "status": "partial",
+      "requirement": "Mechanical: body/pad vs extracted dims, pitch, orientation, hole/ring, courtyard",
+      "evidence": "V-02 battery UNRUN; granular FP-03/04/10/06 + model3d validate_body",
+      "notes": "Battery-level UNRUN; pad positions not checked vs datasheet dims."
+    },
+    {
+      "id": "V-03",
+      "section": "8. Validation",
+      "tier": "must",
+      "classification": "validation",
+      "status": "partial",
+      "requirement": "3D: body on origin, leads on pads, pin-1 across three, height, envelope",
+      "evidence": "V-03 battery UNRUN; body_seating/within_courtyard + build-time align",
+      "notes": "Battery-level UNRUN; height-match & pin-1-across-three not checked."
+    },
+    {
+      "id": "V-04",
+      "section": "8. Validation",
+      "tier": "must",
+      "classification": "validation",
+      "status": "partial",
+      "requirement": "DRC/DFM: pad-pad, mask/paste, silk-pad, courtyard, hole/ring, house DFM",
+      "evidence": "conformance pad_pad/silk_pad/mask/annular/within_courtyard",
+      "notes": "No umbrella rule; paste dims not checked; single-part only (no neighbour clearance)."
+    },
+    {
+      "id": "V-05",
+      "section": "8. Validation",
+      "tier": "must",
+      "classification": "validation",
+      "status": "implemented",
+      "requirement": "Machine-readable validation report per part, every rule with a result",
+      "evidence": "conformance model.py PartReport.to_dict; runner _write_json",
+      "notes": "Genuine per-part report; UNRUN never silently passes."
+    }
+  ]
+}

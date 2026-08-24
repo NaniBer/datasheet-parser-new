@@ -7,6 +7,7 @@ dimensions and can be customized as needed.
 """
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Tuple, List, Optional
 from enum import Enum
@@ -789,6 +790,57 @@ def lossy_approximation_reason(package_str: str) -> Optional[str]:
     return None
 
 
+SCHEMATIC_GRID_MM = 2.54   # SYM-02: 2.54 mm = 100 mil schematic grid
+
+
+def _snap_up(value: float, grid: float = SCHEMATIC_GRID_MM) -> float:
+    """Round a length up to the next whole grid step (>= one step)."""
+    return max(1, math.ceil(round(value / grid, 6))) * grid
+
+
+def _normalize_schematic_to_grid(params: SchematicParameters) -> SchematicParameters:
+    """Force schematic geometry onto the 2.54 mm grid (SYM-02).
+
+    The per-family builders lay pins out at near-physical pitch (1.27, 0.65,
+    2.5 ...), which leaves pin endpoints off the schematic grid. IEEE-315 / CAD
+    practice requires every pin endpoint on a 2.54 mm (100 mil) lattice with a
+    uniform pin length. We pin the pitch and leg length to the grid, snap the
+    margin, and resize the body so the pins still fit — keeping the body
+    outline, legs and pin endpoints mutually grid-aligned. Endpoint math:
+    left/right endpoints sit at +/-(body_width/2 + leg_length); with a
+    grid-multiple body_width and a grid leg_length their span stays on-grid,
+    and vertical steps are exactly one grid pitch.
+    """
+    grid = SCHEMATIC_GRID_MM
+    params.pin_pitch = grid
+    params.pin_geometry.leg_length = grid                  # uniform, on-grid
+    top_margin = _snap_up(params.body_geometry.top_margin)
+    params.body_geometry.top_margin = top_margin
+
+    counts = list(params.pins_per_side or [])
+
+    def _at(i: int) -> int:
+        return counts[i] if i < len(counts) and counts[i] else 0
+
+    # pin_layout reads dual-row as [left, right, ...] and quad as
+    # [left, bottom, right, top]. Vertical sides drive height, horizontal width.
+    if _at(2) or _at(3):                                   # quad (top/bottom pins)
+        vertical = max(_at(0), _at(2))
+        horizontal = max(_at(1), _at(3))
+    else:                                                  # dual-row
+        vertical = max(_at(0), _at(1)) or (params.pin_count // 2)
+        horizontal = 0
+
+    need_h = (max(vertical, 1) - 1) * grid + 2 * top_margin
+    params.body_height = _snap_up(max(params.body_height, need_h))
+    if horizontal:
+        need_w = (horizontal - 1) * grid + 2 * top_margin
+        params.body_width = _snap_up(max(params.body_width, need_w))
+    else:
+        params.body_width = _snap_up(params.body_width)
+    return params
+
+
 def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicParameters:
     """
     Get schematic parameters for a package.
@@ -810,27 +862,27 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
     ptype = parse_package_type(package_type)
 
     if ptype == PackageType.DIP:
-        return get_dip_parameters(pin_count)
+        params = get_dip_parameters(pin_count)
     elif ptype == PackageType.SOIC:
-        return get_soic_parameters(pin_count)
+        params = get_soic_parameters(pin_count)
     elif ptype == PackageType.TSSOP:
-        return get_tssop_parameters(pin_count)
+        params = get_tssop_parameters(pin_count)
     elif ptype == PackageType.DFN:
-        return get_dfn_parameters(pin_count)
+        params = get_dfn_parameters(pin_count)
     elif ptype == PackageType.WSON:
-        return get_wson_parameters(pin_count)
+        params = get_wson_parameters(pin_count)
     elif ptype == PackageType.SON:
-        return get_son_parameters(pin_count)
+        params = get_son_parameters(pin_count)
     elif ptype == PackageType.TQFP or ptype == PackageType.LQFP:
-        return get_tqfp_parameters(pin_count)
+        params = get_tqfp_parameters(pin_count)
     elif ptype == PackageType.QFN:
-        return get_qfn_parameters(pin_count)
+        params = get_qfn_parameters(pin_count)
     elif ptype == PackageType.BGA:
-        return get_bga_parameters(pin_count)
+        return get_bga_parameters(pin_count)   # grid layout — not a perimeter grid
     elif ptype == PackageType.LCCC:
-        return get_lccc_parameters(pin_count)
+        params = get_lccc_parameters(pin_count)
     elif ptype == PackageType.CDIP:
-        return get_cdip_parameters(pin_count)
+        params = get_cdip_parameters(pin_count)
     else:
         # Unreachable for current PackageType members; fail loudly if a new
         # member is added without a parameter builder.
@@ -839,6 +891,9 @@ def get_schematic_parameters(package_type: str, pin_count: int) -> SchematicPara
             error_code=ErrorCodes.PACKAGE_UNKNOWN,
             details={"package_type": ptype.value},
         )
+
+    # SYM-02: every pin endpoint must land on the 2.54 mm schematic grid.
+    return _normalize_schematic_to_grid(params)
 
 
 # ============================================================================

@@ -163,12 +163,17 @@ def validate_pcb_footprint_hierarchy(
             errors.append("Body is missing fab_layer")
 
         if silk_index is not None:
-            _expect_child_order(
-                gltf,
-                silk_index,
-                ["BodyLine", "BodyLine"],
-                errors,
-            )
+            # Silk is the body outline clipped clear of pads (FP-07), so the
+            # segment count varies: 2 full lines for dual-row parts, more (or
+            # fewer) once broken around top/bottom pad columns on quad parts.
+            # Require only that every silk object is a BodyLine outline segment.
+            silk_children = _child_names(gltf, silk_index)
+            if not silk_children:
+                errors.append("silk_layer has no BodyLine segments")
+            elif any(name != "BodyLine" for name in silk_children):
+                errors.append(
+                    "silk_layer children must all be 'BodyLine', got %s" % silk_children
+                )
         else:
             errors.append("Body is missing silk_layer")
 

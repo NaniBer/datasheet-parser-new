@@ -2505,10 +2505,14 @@ def test_pdip_footprint_is_through_hole_at_drill_spacing(tmp_path):
 
 
 def test_schematic_symbol_keeps_display_proportions():
-    # The readable schematic-symbol geometry must be unaffected.
+    # The schematic keeps large, readable *display* proportions (not the ~9.2 mm
+    # physical DIP-8 body) — but now snapped to the 2.54 mm grid per SYM-02:
+    # every pin endpoint must land on a 2.54 mm (100 mil) lattice.
     params = get_schematic_parameters("DIP-8", 8)
-    assert params.body_width == 20.0
-    assert params.pin_pitch == 2.5
+    assert params.pin_pitch == 2.54                       # on-grid pitch (was 2.5)
+    assert params.pin_geometry.leg_length == 2.54         # uniform, on-grid
+    assert abs(params.body_width % 2.54) < 1e-6           # body_width a grid multiple
+    assert params.body_width >= 20.0                      # still display-sized, not physical
 
 
 def test_so_alias_resolves_to_soic():
