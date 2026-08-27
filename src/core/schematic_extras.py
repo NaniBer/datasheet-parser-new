@@ -141,6 +141,23 @@ def _annotate_bodyline(gltf: "GLTF2", container_index: int) -> None:
         _set_extras(gltf, child_index, extras)
 
 
+ACTIVE_LOW_MARKER = "/"  # SYM-08: one consistent ASCII active-low notation
+
+
+def _active_low_display(pin_name: str, active_low: bool) -> str:
+    """Name with a single leading active-low marker, no double-marking.
+
+    Strips any inversion marker already in the extracted name (leading '/',
+    trailing '#', '_N' suffix) before applying the one canonical prefix.
+    """
+    if not active_low:
+        return pin_name
+    base = (pin_name or "").strip().lstrip("/").rstrip("#")
+    if base.upper().endswith("_N"):
+        base = base[:-2]
+    return f"{ACTIVE_LOW_MARKER}{base}"
+
+
 def _annotate_pin_group(
     gltf: "GLTF2",
     pin_index: int,
@@ -158,6 +175,11 @@ def _annotate_pin_group(
     # verbatim instruction ("do not connect" vs "tie to GND").
     nc = bool(semantics.get("nc"))
     nc_instruction = semantics.get("nc_instruction")
+    # SYM-08: active-low as a flag + a displayName carrying ONE consistent ASCII
+    # marker (leading "/"). The geometry name mesh keeps the base name unchanged;
+    # the frontend renders the notation (a true overbar) from these extras.
+    active_low = bool(semantics.get("active_low"))
+    display_name = _active_low_display(pin_name, active_low)
 
     side = 0
     pin_length = 0.0
@@ -191,6 +213,8 @@ def _annotate_pin_group(
             "electricalType": electrical_type,
             "nc": nc,
             "ncInstruction": nc_instruction,
+            "activeLow": active_low,
+            "displayName": display_name,
             "dragEffect": False,
             "originalName": pin_number,
             "renderOrder": 0,

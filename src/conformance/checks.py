@@ -873,6 +873,38 @@ def check_nc_pins_marked(ctx: PartContext) -> _Outcome:
                     measured=f"{nc_n} nc")
 
 
+def check_active_low_notation(ctx: PartContext) -> _Outcome:
+    """SYM-08: active-low pins carry a flag + one consistent ASCII marker.
+
+    Every pin has an ``activeLow`` flag; every active-low pin's ``displayName``
+    carries the single leading '/' marker (frontend renders a true overbar).
+    """
+    miss = _need_glb(ctx, "symbol")
+    if miss:
+        return miss
+    g = ctx.glb("symbol")
+    root = _root(g)
+    legs = _find_child(g, root, "Legs") if root is not None else None
+    if legs is None:
+        return _Outcome(CheckStatus.UNRUN, "no Legs in symbol")
+    pins = g.nodes[legs].children or []
+    missing, unmarked = [], []
+    for p in pins:
+        ex = g.nodes[p].extras or {}
+        if "activeLow" not in ex:
+            missing.append(g.nodes[p].name)
+            continue
+        if ex.get("activeLow") and not str(ex.get("displayName", "")).startswith("/"):
+            unmarked.append(g.nodes[p].name)
+    if missing:
+        return _Outcome(CheckStatus.FAIL, f"{len(missing)} pin(s) missing activeLow flag")
+    if unmarked:
+        return _Outcome(CheckStatus.FAIL, f"active-low pins missing '/' marker: {unmarked[:5]}")
+    al = sum(1 for p in pins if (g.nodes[p].extras or {}).get("activeLow"))
+    return _Outcome(CheckStatus.PASS, f"{len(pins)} pins flagged ({al} active-low)",
+                    measured=f"{al} active_low")
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -898,5 +930,6 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "body_watertight": check_body_watertight,
     "symbol_electrical_types": check_symbol_electrical_types,
     "nc_pins_marked": check_nc_pins_marked,
+    "active_low_notation": check_active_low_notation,
     "report_emitted": check_report_emitted,
 }

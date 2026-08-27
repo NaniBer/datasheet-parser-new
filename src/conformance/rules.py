@@ -38,7 +38,7 @@ RULES: List[Rule] = [
     Rule("SYM-04", "must", "symbol", "Pins grouped by electrical function", None),
     Rule("SYM-05", "must", "symbol", "Power and ground pins visible", None),
     Rule("SYM-07", "must", "symbol", "Electrical pin types assigned truthfully", "symbol_electrical_types"),
-    Rule("SYM-08", "must", "symbol", "Active-low notation consistent", None),
+    Rule("SYM-08", "must", "symbol", "Active-low notation consistent", "active_low_notation"),
     Rule("SYM-10", "must", "symbol", "Reference designator prefix correct for class", None),
     Rule("SYM-11", "must", "symbol", "No-connect pins handled explicitly", "nc_pins_marked"),
     Rule("SYM-12", "must", "symbol", "No duplicated or skipped pin numbers", "symbol_pin_numbering"),
