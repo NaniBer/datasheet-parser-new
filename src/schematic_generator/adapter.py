@@ -7,8 +7,42 @@ This module provides functions to convert between the PinData model
 
 from typing import List, Dict, Any, Optional
 from src.models.pin_data import PinData, Pin
+from src.models.component_record import ComponentRecord
 from src.pdf_extractor.variant_selection import select_package_variant
 from .pinout_diagram_builder import build_pinout_diagram as build_schematic
+
+
+_SEMANTIC_KEYS = ("electrical_type", "role", "active_low", "nc", "nc_instruction")
+
+
+def _enrich_builder_pins(
+    pins_for_builder: List[Dict[str, Any]],
+    record: Optional[ComponentRecord],
+) -> List[Dict[str, Any]]:
+    """Slice C plumbing: attach per-pin contract semantics (electrical_type,
+    role, active_low, nc, nc_instruction) from the ComponentRecord onto the
+    builder pin dicts, matched by pin number.
+
+    Additive only — number/name/order are untouched, and the builder currently
+    reads only number/name, so generated output is byte-identical until a later
+    sub-step consumes these keys. When no record is supplied, a no-op.
+    """
+    if record is None:
+        return pins_for_builder
+    variant = record.selected()
+    if variant is None:
+        return pins_for_builder
+    by_number = {str(p.number): p for p in variant.pins}
+    for d in pins_for_builder:
+        rp = by_number.get(str(d.get("number")))
+        if rp is None:
+            continue
+        d.setdefault("electrical_type", rp.electrical_type)
+        d.setdefault("role", rp.role)
+        d.setdefault("active_low", rp.active_low)
+        d.setdefault("nc", rp.nc)
+        d.setdefault("nc_instruction", rp.nc_instruction)
+    return pins_for_builder
 
 
 def pin_data_to_builder_format(
@@ -92,6 +126,7 @@ def build_schematic_from_pin_data(
     custom_layout: Optional[Dict[str, List[int]]] = None,
     part_number: Optional[str] = None,
     package_index: Optional[int] = None,
+    record: Optional[ComponentRecord] = None,
 ) -> bool:
     """
     Build and export schematic from PinData.
@@ -114,6 +149,10 @@ def build_schematic_from_pin_data(
         package_index=package_index,
         part_number=part_number,
     )
+
+    # Slice C plumbing (inert): attach contract semantics from the record. The
+    # builder ignores these keys today, so output is unchanged.
+    pins_for_builder = _enrich_builder_pins(pins_for_builder, record)
 
     # Build schematic
     return build_schematic(package_type, pin_count, component_name, pins_for_builder, output_path, custom_layout)

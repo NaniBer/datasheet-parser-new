@@ -1381,6 +1381,7 @@ def process_datasheet(
                 custom_layout=custom_layout,
                 part_number=resolved_part_number,
                 package_index=package_index,
+                record=component_record,
             )
 
         if not result:
@@ -1430,7 +1431,8 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
                             package_index: Optional[int] = None,
                             verbose: bool = False,
                             extracted_dims=None,
-                            emit_body_3d: bool = False) -> bool:
+                            emit_body_3d: bool = False,
+                            record: Optional[ComponentRecord] = None) -> bool:
     """Run both schematic and PCB footprint builders on already-extracted pin data.
 
     Args:
@@ -1461,6 +1463,7 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
             custom_layout=custom_layout,
             part_number=part_number,
             package_index=package_index,
+            record=record,
         ))
         if verbose:
             print(f"Schematic: {schematic_str}")
@@ -1822,6 +1825,7 @@ def _run_cli():
             verbose=args.verbose,
             extracted_dims=extracted_dims,
             emit_body_3d=args.body_3d,
+            record=component_record,
         )
         if not success:
             sys.exit(EXIT_DOMAIN_FAILURE)
