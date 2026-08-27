@@ -451,6 +451,8 @@ class ComponentRecord:
                 etype = etype or c_type
                 role = role or c_role
                 active_low = active_low or c_active
+                # fill-only: a no-connect name/role sets the nc flag (never unsets).
+                nc = bool(g("nc")) or c_role == "nc" or c_type == "no_connect"
 
                 out.append(RecordPin(
                     number=str(g("number")),
@@ -458,7 +460,7 @@ class ComponentRecord:
                     electrical_type=etype,
                     role=role,
                     active_low=active_low,
-                    nc=bool(g("nc")),
+                    nc=nc,
                     nc_instruction=g("nc_instruction"),
                 ))
             return out

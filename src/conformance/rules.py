@@ -40,7 +40,7 @@ RULES: List[Rule] = [
     Rule("SYM-07", "must", "symbol", "Electrical pin types assigned truthfully", "symbol_electrical_types"),
     Rule("SYM-08", "must", "symbol", "Active-low notation consistent", None),
     Rule("SYM-10", "must", "symbol", "Reference designator prefix correct for class", None),
-    Rule("SYM-11", "must", "symbol", "No-connect pins handled explicitly", None),
+    Rule("SYM-11", "must", "symbol", "No-connect pins handled explicitly", "nc_pins_marked"),
     Rule("SYM-12", "must", "symbol", "No duplicated or skipped pin numbers", "symbol_pin_numbering"),
 
     # --- land pattern / footprint ----------------------------------------------

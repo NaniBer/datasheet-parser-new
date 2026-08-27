@@ -19,6 +19,7 @@ across pads).
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -834,6 +835,44 @@ def check_symbol_electrical_types(ctx: PartContext) -> _Outcome:
                     measured=f"{typed}/{len(pins)} concrete")
 
 
+def check_nc_pins_marked(ctx: PartContext) -> _Outcome:
+    """SYM-11: no-connect pins are drawn and explicitly tagged (nc extra).
+
+    Every pin carries an ``nc`` flag, and any pin whose name is a no-connect
+    label (NC/DNC/RESERVED) must be flagged nc=true (drawn, not omitted).
+    """
+    miss = _need_glb(ctx, "symbol")
+    if miss:
+        return miss
+    g = ctx.glb("symbol")
+    root = _root(g)
+    legs = _find_child(g, root, "Legs") if root is not None else None
+    if legs is None:
+        return _Outcome(CheckStatus.UNRUN, "no Legs in symbol")
+
+    def _is_nc_name(name: str) -> bool:
+        return re.sub(r"[^A-Z]", "", (name or "").upper()) in {
+            "NC", "DNC", "NOCONNECT", "NOCONNECTION", "RESERVED", "DNU"}
+
+    pins = g.nodes[legs].children or []
+    missing, unmarked = [], []
+    for p in pins:
+        ex = g.nodes[p].extras or {}
+        if "nc" not in ex:
+            missing.append(g.nodes[p].name)
+            continue
+        name = ex.get("pinName") or ex.get("value") or ""
+        if _is_nc_name(name) and not ex.get("nc"):
+            unmarked.append(g.nodes[p].name)
+    if missing:
+        return _Outcome(CheckStatus.FAIL, f"{len(missing)} pin(s) missing nc flag")
+    if unmarked:
+        return _Outcome(CheckStatus.FAIL, f"no-connect-named pins not tagged nc: {unmarked[:5]}")
+    nc_n = sum(1 for p in pins if (g.nodes[p].extras or {}).get("nc"))
+    return _Outcome(CheckStatus.PASS, f"{len(pins)} pins tagged ({nc_n} no-connect)",
+                    measured=f"{nc_n} nc")
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -858,5 +897,6 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "body_step_present": check_body_step_present,
     "body_watertight": check_body_watertight,
     "symbol_electrical_types": check_symbol_electrical_types,
+    "nc_pins_marked": check_nc_pins_marked,
     "report_emitted": check_report_emitted,
 }

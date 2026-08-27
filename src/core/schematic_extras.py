@@ -154,6 +154,10 @@ def _annotate_pin_group(
     # SYM-07: electrical type as a pin extra. Unknown -> the contract's explicit
     # "unspecified" member (never invented).
     electrical_type = semantics.get("electrical_type") or "unspecified"
+    # SYM-11: no-connect pins are drawn but tagged, keeping the datasheet's
+    # verbatim instruction ("do not connect" vs "tie to GND").
+    nc = bool(semantics.get("nc"))
+    nc_instruction = semantics.get("nc_instruction")
 
     side = 0
     pin_length = 0.0
@@ -185,6 +189,8 @@ def _annotate_pin_group(
             "value": pin_name,
             "pinName": pin_name,
             "electricalType": electrical_type,
+            "nc": nc,
+            "ncInstruction": nc_instruction,
             "dragEffect": False,
             "originalName": pin_number,
             "renderOrder": 0,
