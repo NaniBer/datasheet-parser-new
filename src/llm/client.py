@@ -7,11 +7,13 @@ import time
 
 try:
     from ..models.pin_data import PinData, Pin, PackageInfo
+    from ..models.component_record import normalize_electrical_type, normalize_role
     from ..pdf_extractor.non_pin_features import is_non_pin_feature_name
     from ..chat_bot import get_completion_from_messages, build_pin_extraction_prompt
     from ..exceptions import LLMExtractionError, ValidationError, APICredentialsError, ErrorCodes
 except ImportError:  # pragma: no cover - compatibility for top-level imports in legacy scripts
     from src.models.pin_data import PinData, Pin, PackageInfo
+    from src.models.component_record import normalize_electrical_type, normalize_role
     from src.pdf_extractor.non_pin_features import is_non_pin_feature_name
     from src.chat_bot import get_completion_from_messages, build_pin_extraction_prompt
     from src.exceptions import LLMExtractionError, ValidationError, APICredentialsError, ErrorCodes
@@ -79,6 +81,47 @@ def _coerce_pin_number(value) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _has_active_low_marker(name: str) -> bool:
+    """Deterministic backstop: explicit inversion markers in a pin name."""
+    if not name:
+        return False
+    n = name.strip()
+    return (
+        n.endswith("#") or n.startswith("/")
+        or n.endswith("_N") or n.endswith("_n")
+        or "̅" in n or "̄" in n     # combining overline / macron
+    )
+
+
+def _is_nc_name(name: str) -> bool:
+    """Deterministic backstop for no-connect / reserved pin names."""
+    compact = re.sub(r"[^A-Z]", "", (name or "").upper())
+    return compact in {"NC", "DNC", "NOCONNECT", "NOCONNECTION", "RESERVED", "DNU"}
+
+
+def _pin_semantics(pin_json: dict, name: str) -> dict:
+    """Map an LLM pin object onto the extraction-contract fields (Slice A).
+
+    Normalizes electrical_type/role to the canonical vocab (unknown -> None, never
+    invented) and applies deterministic backstops for active_low / nc so a silent
+    LLM omission still yields the right flag. ``function`` is kept = role for the
+    legacy verbose summary.
+    """
+    etype = normalize_electrical_type(pin_json.get("electrical_type"))
+    role = normalize_role(pin_json.get("role")) or normalize_role(pin_json.get("function"))
+    nc = bool(pin_json.get("nc")) or _is_nc_name(name)
+    if nc and etype is None:
+        etype = "no_connect"
+    return {
+        "electrical_type": etype,
+        "role": role,
+        "active_low": bool(pin_json.get("active_low")) or _has_active_low_marker(name),
+        "nc": nc,
+        "nc_instruction": pin_json.get("nc_instruction"),
+        "function": role,
+    }
 
 
 class LLMClient:
@@ -364,7 +407,7 @@ class LLMClient:
                         pkg_info["pins"].append({
                             "number": pin_number,
                             "name": pin_name,
-                            "function": pin_data.get("function")
+                            **_pin_semantics(pin_data, pin_name),
                         })
 
                     packages_list.append(pkg_info)
@@ -424,11 +467,17 @@ class LLMClient:
 
                     pin_number = _coerce_pin_number(pin_data.get("number"))
 
+                    sem = _pin_semantics(pin_data, pin_name)
                     pins.append(
                         Pin(
                             number=pin_number,
                             name=pin_name,
-                            function=pin_data.get("function"),
+                            function=sem["function"],
+                            electrical_type=sem["electrical_type"],
+                            role=sem["role"],
+                            active_low=sem["active_low"],
+                            nc=sem["nc"],
+                            nc_instruction=sem["nc_instruction"],
                         )
                     )
 

@@ -24,6 +24,7 @@ from .component_record import (
     refdes_prefix,
     validate_pin_semantics,
 )
+from .pin_classifier import classify_pin_name, detect_active_low
 
 __all__ = [
     "Pin", "PackageInfo", "PinData",
@@ -35,4 +36,5 @@ __all__ = [
     "ROLE_SIDE", "LAND_PATTERN_SOURCES",
     "normalize_electrical_type", "normalize_role", "role_side",
     "refdes_prefix", "validate_pin_semantics",
+    "classify_pin_name", "detect_active_low",
 ]

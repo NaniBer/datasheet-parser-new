@@ -10,7 +10,14 @@ class Pin:
 
     number: int
     name: str
-    function: Optional[str] = None  # power, ground, input, output, etc.
+    function: Optional[str] = None  # legacy free-text (kept = role for back-compat)
+    # Slice A — extraction output contract (see docs/extraction-output-contract.md).
+    # Additive + Optional so nothing downstream is forced; generation ignores these.
+    electrical_type: Optional[str] = None  # ERC type (contract) [SYM-07]
+    role: Optional[str] = None             # functional role (contract) [SYM-04]
+    active_low: bool = False               # [SYM-08]
+    nc: bool = False                       # [SYM-11]
+    nc_instruction: Optional[str] = None   # verbatim datasheet wording [SYM-11]
 
 
 @dataclass

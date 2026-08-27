@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from .pin_data import PinData, PackageInfo, Pin as LegacyPin
+from .pin_classifier import classify_pin_name
 
 # --- controlled OUTPUT VOCABULARIES (the extraction output contract) ----------
 # Finalized in docs/extraction-output-contract.md. Every enum has an explicit
@@ -407,10 +408,36 @@ class ComponentRecord:
         def _mk_pins(pins) -> List[RecordPin]:
             out = []
             for p in pins or []:
-                num = p.get("number") if isinstance(p, dict) else p.number
-                name = p.get("name") if isinstance(p, dict) else p.name
-                func = p.get("function") if isinstance(p, dict) else getattr(p, "function", None)
-                out.append(RecordPin(number=str(num), name=name or "", role=func))
+                is_dict = isinstance(p, dict)
+
+                def g(key):
+                    return p.get(key) if is_dict else getattr(p, key, None)
+
+                # Slice A: carry the contract fields onto the record, normalizing
+                # to the canonical vocab. role falls back to the legacy function.
+                name = g("name") or ""
+                etype = normalize_electrical_type(g("electrical_type"))
+                role = normalize_role(g("role")) or normalize_role(g("function"))
+                active_low = bool(g("active_low"))
+
+                # Slice A.2: fill-only name classifier. Only fills fields the
+                # extractor left empty; never overrides an existing value, and
+                # only ever ADDS active_low (name-marker based). Ambiguous names
+                # resolve to None -> stay unspecified/other (no guessing).
+                c_type, c_role, c_active = classify_pin_name(name)
+                etype = etype or c_type
+                role = role or c_role
+                active_low = active_low or c_active
+
+                out.append(RecordPin(
+                    number=str(g("number")),
+                    name=name,
+                    electrical_type=etype,
+                    role=role,
+                    active_low=active_low,
+                    nc=bool(g("nc")),
+                    nc_instruction=g("nc_instruction"),
+                ))
             return out
 
         variants: List[PackageVariant] = []
