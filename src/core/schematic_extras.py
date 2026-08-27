@@ -146,9 +146,14 @@ def _annotate_pin_group(
     pin_index: int,
     pin_name: str,
     body_center: List[float],
+    semantics: Optional[Dict[str, Any]] = None,
 ) -> None:
     pin_node = gltf.nodes[pin_index]
     pin_number = pin_node.name
+    semantics = semantics or {}
+    # SYM-07: electrical type as a pin extra. Unknown -> the contract's explicit
+    # "unspecified" member (never invented).
+    electrical_type = semantics.get("electrical_type") or "unspecified"
 
     side = 0
     pin_length = 0.0
@@ -179,6 +184,7 @@ def _annotate_pin_group(
             "hideTransformControls": _HIDE_TRANSFORM_CONTROLS,
             "value": pin_name,
             "pinName": pin_name,
+            "electricalType": electrical_type,
             "dragEffect": False,
             "originalName": pin_number,
             "renderOrder": 0,
@@ -211,6 +217,7 @@ def inject_schematic_extras(
     pin_names: Dict[str, str],
     component_name: str,
     designator: str = "U",
+    pin_semantics: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> bool:
     """
     Annotate a generated schematic GLB with IDEEZA frontend extras.
@@ -275,7 +282,8 @@ def inject_schematic_extras(
             for pin_index in child.children or []:
                 pin_number = gltf.nodes[pin_index].name
                 pin_name = pin_names.get(pin_number, "")
-                _annotate_pin_group(gltf, pin_index, pin_name, body_center)
+                sem = (pin_semantics or {}).get(pin_number)
+                _annotate_pin_group(gltf, pin_index, pin_name, body_center, semantics=sem)
 
     gltf.save(str(glb_path))
     return True

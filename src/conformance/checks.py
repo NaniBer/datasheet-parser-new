@@ -806,6 +806,34 @@ def check_body_watertight(ctx: PartContext) -> _Outcome:
                     measured=f"{len(solids)} solids")
 
 
+def check_symbol_electrical_types(ctx: PartContext) -> _Outcome:
+    """SYM-07: every symbol pin carries a contract electrical_type extra."""
+    miss = _need_glb(ctx, "symbol")
+    if miss:
+        return miss
+    from ..models import ELECTRICAL_TYPES
+    g = ctx.glb("symbol")
+    root = _root(g)
+    legs = _find_child(g, root, "Legs") if root is not None else None
+    if legs is None:
+        return _Outcome(CheckStatus.UNRUN, "no Legs in symbol")
+    pins = g.nodes[legs].children or []
+    missing, bad = [], []
+    for pin in pins:
+        et = (g.nodes[pin].extras or {}).get("electricalType")
+        if et is None:
+            missing.append(g.nodes[pin].name)
+        elif et not in ELECTRICAL_TYPES:
+            bad.append(f"{g.nodes[pin].name}:{et}")
+    if missing:
+        return _Outcome(CheckStatus.FAIL, f"{len(missing)} pin(s) missing electricalType extra")
+    if bad:
+        return _Outcome(CheckStatus.FAIL, f"off-contract electricalType: {bad[:5]}")
+    typed = sum(1 for p in pins if (g.nodes[p].extras or {}).get("electricalType") != "unspecified")
+    return _Outcome(CheckStatus.PASS, f"{len(pins)} pins typed ({typed} concrete, rest unspecified)",
+                    measured=f"{typed}/{len(pins)} concrete")
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -829,5 +857,6 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "body_within_courtyard": check_body_within_courtyard,
     "body_step_present": check_body_step_present,
     "body_watertight": check_body_watertight,
+    "symbol_electrical_types": check_symbol_electrical_types,
     "report_emitted": check_report_emitted,
 }

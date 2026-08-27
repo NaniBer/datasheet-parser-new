@@ -540,8 +540,21 @@ class PinoutDiagramBuilder:
                     str(pin.get("number")): str(pin.get("name") or "")
                     for pin in pin_data
                 }
+                # Slice C: per-pin contract semantics for GLB extras (carried on
+                # the pin dicts by the adapter's record enrichment).
+                pin_semantics = {
+                    str(pin.get("number")): {
+                        "electrical_type": pin.get("electrical_type"),
+                        "role": pin.get("role"),
+                        "active_low": bool(pin.get("active_low")),
+                        "nc": bool(pin.get("nc")),
+                        "nc_instruction": pin.get("nc_instruction"),
+                    }
+                    for pin in pin_data
+                }
                 if not inject_schematic_extras(
-                    output_path, pin_name_map, self.component_name
+                    output_path, pin_name_map, self.component_name,
+                    pin_semantics=pin_semantics,
                 ):
                     logger.warning("Schematic extras injection found no Package root")
             except Exception as exc:
