@@ -258,33 +258,56 @@ class Mechanical:
 
     @classmethod
     def from_flat_dims(cls, dims: Optional[Dict], provenance: Optional[Provenance] = None) -> "Mechanical":
-        """Build from the legacy flat extracted_dims dict (nominal + b/L tolerances)."""
+        """Build from the flat extracted_dims dict.
+
+        Slice B: preserves per-field min/nom/max tolerances (was b/L only) and a
+        record-level Provenance from the extractor's reserved keys (``_page`` /
+        ``dims_source``). Purely additive to the model; the flat dict — and thus
+        what the builders read — is unchanged (``raw_flat`` passthrough)."""
         m = cls()
         if not dims:
             return m
         m.raw_flat = dict(dims)          # exact passthrough for lossless round-trip
+
+        # Record-level provenance from the reserved keys, unless one was passed.
+        prov = provenance
+        if prov is None and (dims.get("_page") is not None or dims.get("dims_source") or dims.get("_table")):
+            prov = Provenance(
+                page=int(dims["_page"]) if dims.get("_page") is not None else None,
+                table=dims.get("_table"),
+                method=dims.get("dims_source"),
+            )
+
         for key, attr in cls._FLAT_MAP.items():
             if dims.get(key) is not None:
-                d = Dimension(nom=float(dims[key]), provenance=provenance)
-                setattr(m, attr, d)
-        # tolerance carve-outs the current extractor keeps
-        for base, attr in (("b", "lead_width_b"), ("L", "lead_length_L")):
+                setattr(m, attr, Dimension(nom=float(dims[key]), provenance=prov))
+
+        # Slice B: attach min/max tolerances for every mapped field.
+        for key, attr in cls._FLAT_MAP.items():
+            lo, hi = dims.get(f"{key}_min"), dims.get(f"{key}_max")
+            if lo is None and hi is None:
+                continue
             d = getattr(m, attr)
-            lo, hi = dims.get(f"{base}_min"), dims.get(f"{base}_max")
-            if lo is not None or hi is not None:
-                if d is None:
-                    d = Dimension(provenance=provenance)
-                    setattr(m, attr, d)
-                if lo is not None:
-                    d.min = float(lo)
-                if hi is not None:
-                    d.max = float(hi)
-        if dims.get("D2") is not None or dims.get("E2") is not None:
-            m.thermal_pad = {}
-            if dims.get("D2") is not None:
-                m.thermal_pad["D2"] = Dimension(nom=float(dims["D2"]), provenance=provenance)
-            if dims.get("E2") is not None:
-                m.thermal_pad["E2"] = Dimension(nom=float(dims["E2"]), provenance=provenance)
+            if d is None:
+                d = Dimension(provenance=prov)
+                setattr(m, attr, d)
+            if lo is not None:
+                d.min = float(lo)
+            if hi is not None:
+                d.max = float(hi)
+
+        # Thermal pad (nominal + tolerances when present).
+        for tk in ("D2", "E2"):
+            if any(dims.get(f"{tk}{sfx}") is not None for sfx in ("", "_min", "_max")):
+                m.thermal_pad = m.thermal_pad or {}
+                d = Dimension(provenance=prov)
+                if dims.get(tk) is not None:
+                    d.nom = float(dims[tk])
+                if dims.get(f"{tk}_min") is not None:
+                    d.min = float(dims[f"{tk}_min"])
+                if dims.get(f"{tk}_max") is not None:
+                    d.max = float(dims[f"{tk}_max"])
+                m.thermal_pad[tk] = d
         return m
 
     def to_flat_dims(self) -> Dict[str, float]:

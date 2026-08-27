@@ -235,6 +235,11 @@ class DimensionExtractor:
             if flat:
                 flat = self._normalize_through_hole_span(target_package_type, flat)
             if flat:
+                if candidates:
+                    # Slice B: record-level provenance — the (1-indexed) page the
+                    # dimension drawing was read from. Reserved key the builders
+                    # never read; the record turns it into a Provenance.
+                    flat["_page"] = candidates[0]["page"] + 1
                 return _tagged(flat, "text+vision" if text_result else "vision")
             return _tagged(text_result, "text")
 
@@ -370,13 +375,14 @@ class DimensionExtractor:
                     result[key] = mn
                 elif mx is not None:
                     result[key] = mx
-                # IPC-7351 sizes pads from the tolerance extremes (widest
-                # lead, longest foot), not nominals: preserve them for the
-                # pad-relevant keys alongside the midpoint.
-                if key in ("b", "L") and mx is not None:
-                    result[f"{key}_max"] = mx
-                if key in ("b", "L") and mn is not None:
+                # Slice B: preserve the tolerance extremes for EVERY field (was
+                # b/L only, which IPC-7351 pad sizing needs). Additive keys
+                # alongside the unchanged nominal — the record carries real
+                # min/max tolerances while the builders keep reading the nominal.
+                if mn is not None:
                     result[f"{key}_min"] = mn
+                if mx is not None:
+                    result[f"{key}_max"] = mx
             else:
                 f = self._to_float(val)
                 if f is not None:
