@@ -147,6 +147,12 @@ class Mechanical:
     mounting_holes: List[Dict] = field(default_factory=list)
     max_envelope: Optional[Dict[str, Dimension]] = None  # {"x","y","z"} [3D-04]
     recommended_land_pattern: Optional[Dict] = None      # [PL-04]
+    # Phase-2 lossless passthrough: the exact flat extracted_dims dict this
+    # Mechanical was built from, so to_flat_dims() reproduces it byte-for-byte
+    # (incl. keys the structured fields don't yet model: dims_source, c, D1, ...).
+    # None once dims are populated structurally (Phase 3+), where to_flat_dims
+    # derives from the structured fields instead.
+    raw_flat: Optional[Dict[str, float]] = None
 
     # Flat-dict keys used by the current pipeline (extracted_dims contract).
     _FLAT_MAP = {
@@ -161,6 +167,7 @@ class Mechanical:
         m = cls()
         if not dims:
             return m
+        m.raw_flat = dict(dims)          # exact passthrough for lossless round-trip
         for key, attr in cls._FLAT_MAP.items():
             if dims.get(key) is not None:
                 d = Dimension(nom=float(dims[key]), provenance=provenance)
@@ -186,7 +193,13 @@ class Mechanical:
         return m
 
     def to_flat_dims(self) -> Dict[str, float]:
-        """Reproduce the legacy extracted_dims flat dict for existing consumers."""
+        """Reproduce the legacy extracted_dims flat dict for existing consumers.
+
+        Phase 2: when built from a flat dict, return that exact dict (lossless,
+        including keys the structured fields don't model). Otherwise derive from
+        the structured Dimensions."""
+        if self.raw_flat is not None:
+            return dict(self.raw_flat)
         out: Dict[str, float] = {}
         for key, attr in self._FLAT_MAP.items():
             d = getattr(self, attr)
@@ -242,6 +255,10 @@ class ComponentRecord:
     # Preserved ordering-table ground truth (kept from legacy PinData).
     ordered_pin_count: Optional[int] = None
     ordered_package_type: Optional[str] = None
+    # Legacy pipeline flags carried through so the compat layer is lossless for
+    # what the builders + watermark read (not new information — mirrors PinData).
+    validation_errors: Optional[List[str]] = None
+    footprint_unsupported_reason: Optional[str] = None
 
     # ---- lookups -------------------------------------------------------------
     def selected(self) -> Optional[PackageVariant]:
@@ -289,6 +306,8 @@ class ComponentRecord:
             provenance=provenance,
             ordered_pin_count=pin_data.ordered_pin_count,
             ordered_package_type=pin_data.ordered_package_type,
+            validation_errors=list(pin_data.validation_errors) if pin_data.validation_errors else None,
+            footprint_unsupported_reason=pin_data.footprint_unsupported_reason,
         )
 
         def _mk_pins(pins) -> List[RecordPin]:
@@ -335,12 +354,42 @@ class ComponentRecord:
             rec.block("pins")
         return rec
 
+    def update_from_pin_data(
+        self,
+        pin_data: PinData,
+        extracted_dims: Optional[Dict] = None,
+    ) -> "ComponentRecord":
+        """Refresh the geometry/flags from an enriched legacy PinData in place.
+
+        The pipeline mutates the legacy ``pin_data`` after the extraction seam
+        (ordering ground truth, module flag, package-type substitution) and
+        computes dims late. This re-derives the variants/pins/mechanical/ordered
+        fields + legacy flags from that final state while preserving the record's
+        identity/provenance/links/version established at the seam. No new
+        information is invented — it mirrors the legacy object.
+        """
+        fresh = ComponentRecord.from_pin_data(
+            pin_data, part_number=self.identity.mpn, extracted_dims=extracted_dims,
+        )
+        self.variants = fresh.variants
+        self.selected_variant = fresh.selected_variant
+        self.ordered_pin_count = fresh.ordered_pin_count
+        self.ordered_package_type = fresh.ordered_package_type
+        self.validation_errors = fresh.validation_errors
+        self.footprint_unsupported_reason = fresh.footprint_unsupported_reason
+        self.status = fresh.status
+        self.blocking = fresh.blocking
+        return self
+
     def to_pin_data(self) -> PinData:
         """Reconstruct a legacy PinData so existing generation runs unchanged."""
         def _legacy_pins(pins: List[RecordPin]) -> List[dict]:
             return [{"number": p.number, "name": p.name, "function": p.role} for p in pins]
 
-        component_name = self.identity.mpn or self.identity.description or (self.component_id or "Unknown")
+        # Restore the ORIGINAL extracted component_name (stored in description by
+        # from_pin_data), not the part number in mpn — component_name becomes the
+        # symbol/footprint label, so it must round-trip exactly.
+        component_name = self.identity.description or self.identity.mpn or (self.component_id or "Unknown")
 
         if len(self.variants) > 1:
             packages = [{
@@ -357,6 +406,8 @@ class ComponentRecord:
                 selected_package_index=sel_idx,
                 ordered_pin_count=self.ordered_pin_count,
                 ordered_package_type=self.ordered_package_type,
+                validation_errors=list(self.validation_errors) if self.validation_errors else None,
+                footprint_unsupported_reason=self.footprint_unsupported_reason,
             )
 
         v = self.selected()
@@ -370,6 +421,8 @@ class ComponentRecord:
                   for p in v.pins],
             ordered_pin_count=self.ordered_pin_count,
             ordered_package_type=self.ordered_package_type,
+            validation_errors=list(self.validation_errors) if self.validation_errors else None,
+            footprint_unsupported_reason=self.footprint_unsupported_reason,
         )
 
 
