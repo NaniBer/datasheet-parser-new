@@ -25,19 +25,113 @@ from typing import Dict, List, Optional
 
 from .pin_data import PinData, PackageInfo, Pin as LegacyPin
 
-# --- controlled vocabularies (documentation + optional validation) ------------
-# Fields stay Optional[str] so the *current* extraction (which has none of this)
-# is representable; the vocab is what a future extractor should populate.
+# --- controlled OUTPUT VOCABULARIES (the extraction output contract) ----------
+# Finalized in docs/extraction-output-contract.md. Every enum has an explicit
+# "unknown" member so the extractor is NEVER forced to guess: an unstated field
+# resolves to unspecified / other / False, and required-but-missing dimensions
+# BLOCK the record (F-01) rather than being invented.
+
+# ERC electrical types (IEEE-315 / SnapMagic / spec SYM-07). Closed set — drives
+# electrical-rule checking, so no free-form values.
 ELECTRICAL_TYPES = {
-    "input", "output", "bidirectional", "power_in", "power_out",
-    "passive", "open_collector", "open_drain", "tristate", "analog", "no_connect",
+    "input", "output", "bidirectional", "tri_state", "passive",
+    "power_in", "power_out", "open_collector", "open_emitter",
+    "no_connect", "unspecified",
 }
+# Non-canonical spellings normalized into the set. open_drain == open_collector
+# for ERC (a pin that only sinks); tri-state/3state == tri_state; etc.
+ELECTRICAL_TYPE_ALIASES = {
+    "open_drain": "open_collector", "opendrain": "open_collector",
+    "tristate": "tri_state", "tri-state": "tri_state", "3state": "tri_state",
+    "nc": "no_connect", "no-connect": "no_connect", "noconnect": "no_connect",
+    "power": "power_in", "power_input": "power_in", "power_output": "power_out",
+    "analog": "passive", "": "unspecified", "unknown": "unspecified", "free": "unspecified",
+}
+
+# Functional roles -> symbol side (spec SYM-04). Roles are for LAYOUT/grouping;
+# electrical_type is for ERC. A pin carries both (VCC = power_in + supply).
 PIN_ROLES = {
-    "supply", "ground", "clock", "reset", "data", "address", "io",
-    "control", "enable", "oscillator", "analog_io", "other",
+    "supply", "ground", "input", "output", "io", "clock", "reset",
+    "enable", "control", "address", "data", "analog", "oscillator",
+    "thermal", "nc", "other",
 }
+ROLE_ALIASES = {
+    "vcc": "supply", "vdd": "supply", "power": "supply",
+    "gnd": "ground", "vss": "ground", "analog_io": "analog",
+    "no_connect": "nc", "dnc": "nc", "reserved": "nc", "": "other",
+}
+ROLE_SIDE = {
+    "supply": "top", "ground": "bottom", "thermal": "bottom",
+    "input": "left", "clock": "left", "reset": "left", "enable": "left",
+    "control": "left", "address": "left", "oscillator": "left",
+    "output": "right", "io": "right", "data": "right", "analog": "right",
+    "nc": "unplaced", "other": "left",
+}
+
+# Device classes -> reference-designator prefix (spec SYM-10). device_class holds
+# the semantic class; the prefix is derived via REFDES_PREFIX (fixes the old
+# stub that conflated class "IC"/"LED" with prefixes).
+DEVICE_CLASSES = {
+    "resistor", "capacitor", "inductor", "ferrite_bead", "diode", "led",
+    "transistor", "ic", "connector", "plug", "switch", "crystal",
+    "oscillator", "fuse", "test_point", "other",
+}
+REFDES_PREFIX = {
+    "resistor": "R", "capacitor": "C", "inductor": "L", "ferrite_bead": "FB",
+    "diode": "D", "led": "D", "transistor": "Q", "ic": "U", "connector": "J",
+    "plug": "P", "switch": "SW", "crystal": "Y", "oscillator": "Y",
+    "fuse": "F", "test_point": "TP", "other": "U",
+}
+
 LAND_PATTERN_SOURCES = {"mfr_recommended", "ipc7351b", "dfm", "generic"}
-DEVICE_CLASSES = {"R", "C", "L", "D", "LED", "Q", "IC", "J", "P", "SW", "Y", "F", "TP", "FB"}
+
+
+# --- contract validation helpers (non-raising; used by a future validator) ----
+def _norm(value) -> str:
+    return str(value or "").strip().lower().replace(" ", "_")
+
+
+def normalize_electrical_type(value) -> Optional[str]:
+    """Canonical electrical_type, applying aliases; None if not in the contract."""
+    if value is None:
+        return None
+    v = _norm(value)
+    v = ELECTRICAL_TYPE_ALIASES.get(v, v)
+    return v if v in ELECTRICAL_TYPES else None
+
+
+def normalize_role(value) -> Optional[str]:
+    """Canonical role, applying aliases; None if not in the contract."""
+    if value is None:
+        return None
+    v = _norm(value)
+    v = ROLE_ALIASES.get(v, v)
+    return v if v in PIN_ROLES else None
+
+
+def role_side(role: Optional[str]) -> str:
+    """Symbol side a role places on (SYM-04); defaults left for unknown roles."""
+    return ROLE_SIDE.get(role or "other", "left")
+
+
+def refdes_prefix(device_class: Optional[str]) -> str:
+    """Reference-designator prefix for a device class (SYM-10); 'U' if unknown."""
+    return REFDES_PREFIX.get(_norm(device_class), "U")
+
+
+def validate_pin_semantics(pin: "RecordPin") -> List[str]:
+    """Return contract violations for a pin's enum fields (empty == valid).
+
+    Non-raising: unknown/None values are allowed at the model level (the
+    extractor may legitimately not know), but off-contract *concrete* values are
+    reported so a future validation gate can catch them.
+    """
+    issues: List[str] = []
+    if pin.electrical_type is not None and pin.electrical_type not in ELECTRICAL_TYPES:
+        issues.append(f"pin {pin.number}: electrical_type {pin.electrical_type!r} off-contract")
+    if pin.role is not None and pin.role not in PIN_ROLES:
+        issues.append(f"pin {pin.number}: role {pin.role!r} off-contract")
+    return issues
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_UNIT = "mm"
