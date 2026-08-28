@@ -960,6 +960,69 @@ def check_functional_grouping(ctx: PartContext) -> _Outcome:
                     measured=measured)
 
 
+def check_power_ground_visible(ctx: PartContext) -> _Outcome:
+    """SYM-05: power and ground pins are identified and drawn on the symbol.
+
+    Every pin is emitted as a Leg node, so "visible" is structural. We grade
+    whether the symbol carries identifiable power and/or ground pins: PASS when
+    at least one is present (it is, by construction, drawn), SKIP when the part
+    carries neither — a 2-pin passive or an unclassified part has nothing to
+    grade. We never invent a missing ground, so a part is only reported on what
+    it actually declares.
+    """
+    miss = _need_glb(ctx, "symbol")
+    if miss:
+        return miss
+    g = ctx.glb("symbol")
+    root = _root(g)
+    legs = _find_child(g, root, "Legs") if root is not None else None
+    if legs is None:
+        return _Outcome(CheckStatus.UNRUN, "no Legs in symbol")
+    power, ground = [], []
+    for p in (g.nodes[legs].children or []):
+        ex = g.nodes[p].extras or {}
+        if ex.get("role") == "supply" or ex.get("electricalType") in ("power_in", "power_out"):
+            power.append(g.nodes[p].name)
+        if ex.get("role") == "ground":
+            ground.append(g.nodes[p].name)
+    if not power and not ground:
+        return _Outcome(CheckStatus.SKIP, "no power/ground pins identified on this part")
+    measured = f"{len(power)} power, {len(ground)} ground"
+    return _Outcome(CheckStatus.PASS, f"power/ground pins drawn ({measured})", measured=measured)
+
+
+def check_layout_not_physical(ctx: PartContext) -> _Outcome:
+    """SYM-01: the symbol is laid out by function, not physical pin order.
+
+    Only meaningful for parts the generator lays out functionally — those that
+    clear the SYM-04 gate. Below the gate the physical layout is expected and
+    correct, so this SKIPs (an unclassified or passive part is never faulted).
+    For gated parts, functional grouping (every pin on ROLE_SIDE[role]) is
+    exactly "not physical order", so this delegates to the SYM-04 grouping
+    result rather than re-deriving it.
+    """
+    miss = _need_glb(ctx, "symbol")
+    if miss:
+        return miss
+    from ..models import functional_layout_applicable
+    g = ctx.glb("symbol")
+    root = _root(g)
+    legs = _find_child(g, root, "Legs") if root is not None else None
+    if legs is None:
+        return _Outcome(CheckStatus.UNRUN, "no Legs in symbol")
+    raw_roles = [(g.nodes[p].extras or {}).get("role") for p in (g.nodes[legs].children or [])]
+    if not functional_layout_applicable(raw_roles):
+        return _Outcome(CheckStatus.SKIP, "below functional-layout gate (physical layout is expected)")
+    inner = check_functional_grouping(ctx)
+    if inner.status is CheckStatus.PASS:
+        return _Outcome(CheckStatus.PASS, "grouped by function, not physical pin order",
+                        measured=inner.measured)
+    if inner.status is CheckStatus.FAIL:
+        return _Outcome(CheckStatus.FAIL, f"layout still follows physical order: {inner.message}",
+                        measured=inner.measured)
+    return inner  # SKIP / UNRUN passthrough
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -987,5 +1050,7 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "nc_pins_marked": check_nc_pins_marked,
     "active_low_notation": check_active_low_notation,
     "functional_grouping": check_functional_grouping,
+    "power_ground_visible": check_power_ground_visible,
+    "layout_not_physical": check_layout_not_physical,
     "report_emitted": check_report_emitted,
 }

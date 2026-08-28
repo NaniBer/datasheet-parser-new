@@ -33,10 +33,10 @@ RULES: List[Rule] = [
     Rule("V-05", "must", "meta", "Machine-readable validation report emitted", "report_emitted"),
 
     # --- schematic symbol ------------------------------------------------------
-    Rule("SYM-01", "must", "symbol", "Layout does not follow physical pin order", None),
+    Rule("SYM-01", "must", "symbol", "Layout does not follow physical pin order", "layout_not_physical"),
     Rule("SYM-02", "must", "symbol", "Every pin endpoint on the 2.54 mm grid", "symbol_grid"),
     Rule("SYM-04", "must", "symbol", "Pins grouped by electrical function", "functional_grouping"),
-    Rule("SYM-05", "must", "symbol", "Power and ground pins visible", None),
+    Rule("SYM-05", "must", "symbol", "Power and ground pins visible", "power_ground_visible"),
     Rule("SYM-07", "must", "symbol", "Electrical pin types assigned truthfully", "symbol_electrical_types"),
     Rule("SYM-08", "must", "symbol", "Active-low notation consistent", "active_low_notation"),
     Rule("SYM-10", "must", "symbol", "Reference designator prefix correct for class", None),

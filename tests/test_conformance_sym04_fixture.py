@@ -45,14 +45,15 @@ def test_func8_fixture_grades_sym04_pass_through_harness():
     by_id = _grade_symbol(_fx("func8"))
     assert by_id["SYM-04"].status is CheckStatus.PASS, by_id["SYM-04"].message
     # the whole symbol battery grades PASS on the same functional artifact
-    for rid in ("SYM-02", "SYM-07", "SYM-08", "SYM-11", "SYM-12"):
+    for rid in ("SYM-01", "SYM-02", "SYM-05", "SYM-07", "SYM-08", "SYM-11", "SYM-12"):
         assert by_id[rid].status is CheckStatus.PASS, (rid, by_id[rid].message)
 
 
 def test_roleless_fixture_skips_sym04_through_harness():
-    # A generic P1..Pn fixture is below the gate: SYM-04 SKIPs (not penalised),
-    # while the rest of the symbol battery still grades PASS.
+    # A generic P1..Pn fixture is below the gate: the function-dependent rules
+    # SKIP (not penalised), while the rest of the symbol battery still PASSes.
     by_id = _grade_symbol(_fx("dip8"))
-    assert by_id["SYM-04"].status is CheckStatus.SKIP
+    for rid in ("SYM-01", "SYM-04", "SYM-05"):
+        assert by_id[rid].status is CheckStatus.SKIP, (rid, by_id[rid].message)
     assert by_id["SYM-12"].status is CheckStatus.PASS
     assert by_id["SYM-02"].status is CheckStatus.PASS
