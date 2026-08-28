@@ -21,6 +21,8 @@ from .component_record import (
     normalize_electrical_type,
     normalize_role,
     role_side,
+    role_coverage,
+    functional_layout_applicable,
     refdes_prefix,
     validate_pin_semantics,
 )
@@ -35,6 +37,7 @@ __all__ = [
     "ELECTRICAL_TYPES", "PIN_ROLES", "DEVICE_CLASSES", "REFDES_PREFIX",
     "ROLE_SIDE", "LAND_PATTERN_SOURCES",
     "normalize_electrical_type", "normalize_role", "role_side",
+    "role_coverage", "functional_layout_applicable",
     "refdes_prefix", "validate_pin_semantics",
     "classify_pin_name", "detect_active_low",
 ]

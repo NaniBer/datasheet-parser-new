@@ -115,6 +115,36 @@ def role_side(role: Optional[str]) -> str:
     return ROLE_SIDE.get(role or "other", "left")
 
 
+# A "concrete" role is one that carries functional-grouping information. The
+# catch-all ``other`` and any unknown/None are NOT concrete — they tell us
+# nothing about which side a pin belongs on.
+def role_coverage(roles: List[Optional[str]]) -> float:
+    """Fraction of pins that carry a concrete (non-``other``) functional role."""
+    if not roles:
+        return 0.0
+    concrete = sum(1 for r in roles if normalize_role(r) not in (None, "other"))
+    return concrete / len(roles)
+
+
+def functional_layout_applicable(roles: List[Optional[str]]) -> bool:
+    """SYM-04 gate: enable functional (role-based) layout for this part.
+
+    Conservative by design (see docs/extraction-output-contract.md and the
+    Sub-step 4 decision doc): grouping is only meaningful when the highest-value
+    anchors — power and ground — are both concretely identified AND at least half
+    the pins carry a concrete role. Below the gate, callers fall back to the
+    legacy physical layout, so partially/unclassified parts stay byte-identical.
+
+    Single source of truth: the 4b generator uses this to decide layout, and the
+    SYM-04 conformance check uses it to decide whether to grade grouping — so the
+    check never penalises a part the generator legitimately left physical.
+    """
+    normalized = [normalize_role(r) for r in roles]
+    has_supply = "supply" in normalized
+    has_ground = "ground" in normalized
+    return has_supply and has_ground and role_coverage(roles) >= 0.5
+
+
 def refdes_prefix(device_class: Optional[str]) -> str:
     """Reference-designator prefix for a device class (SYM-10); 'U' if unknown."""
     return REFDES_PREFIX.get(_norm(device_class), "U")

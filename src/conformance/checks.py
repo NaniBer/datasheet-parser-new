@@ -905,6 +905,61 @@ def check_active_low_notation(ctx: PartContext) -> _Outcome:
                     measured=f"{al} active_low")
 
 
+# Schematic side codes (schematic_extras convention): 0=left,1=top,2=right,3=bottom.
+_SIDE_CODE_TO_NAME = {0: "left", 1: "top", 2: "right", 3: "bottom"}
+
+
+def check_functional_grouping(ctx: PartContext) -> _Outcome:
+    """SYM-04: pins are grouped on the symbol side their electrical function dictates.
+
+    Grades only parts the generator would actually lay out functionally — i.e.
+    that clear the shared coverage gate (power+ground concrete, >=50% concrete
+    roles). Below the gate the symbol is legitimately physical, so the rule does
+    not apply and we SKIP. For gated parts, every concretely-classified pin must
+    sit on ``ROLE_SIDE[role]``; ``nc`` pins (role "unplaced") and unknown/``other``
+    roles are exempt (they carry no side obligation).
+    """
+    miss = _need_glb(ctx, "symbol")
+    if miss:
+        return miss
+    from ..models import ROLE_SIDE, normalize_role, functional_layout_applicable
+    g = ctx.glb("symbol")
+    root = _root(g)
+    legs = _find_child(g, root, "Legs") if root is not None else None
+    if legs is None:
+        return _Outcome(CheckStatus.UNRUN, "no Legs in symbol")
+    pins = g.nodes[legs].children or []
+
+    raw_roles = [(g.nodes[p].extras or {}).get("role") for p in pins]
+    if not functional_layout_applicable(raw_roles):
+        return _Outcome(CheckStatus.SKIP,
+                        "below functional-layout gate (physical layout is expected)")
+
+    mismatches: List[str] = []
+    graded = 0
+    for p in pins:
+        ex = g.nodes[p].extras or {}
+        role = normalize_role(ex.get("role"))
+        if role in (None, "other", "nc") or ex.get("nc"):
+            continue                               # no side obligation
+        expected = ROLE_SIDE.get(role)
+        if expected in (None, "unplaced"):
+            continue
+        actual = _SIDE_CODE_TO_NAME.get(ex.get("side"))
+        graded += 1
+        if actual != expected:
+            mismatches.append(f"{g.nodes[p].name}({role}):{actual}!={expected}")
+    if graded == 0:
+        return _Outcome(CheckStatus.SKIP, "no side-bearing roles to grade")
+    measured = f"{graded - len(mismatches)}/{graded} grouped"
+    if mismatches:
+        return _Outcome(CheckStatus.FAIL,
+                        f"{len(mismatches)} pin(s) not on their function side: {mismatches[:5]}",
+                        measured=measured)
+    return _Outcome(CheckStatus.PASS, f"all {graded} functional pins grouped by side",
+                    measured=measured)
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -931,5 +986,6 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "symbol_electrical_types": check_symbol_electrical_types,
     "nc_pins_marked": check_nc_pins_marked,
     "active_low_notation": check_active_low_notation,
+    "functional_grouping": check_functional_grouping,
     "report_emitted": check_report_emitted,
 }

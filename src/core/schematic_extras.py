@@ -180,6 +180,12 @@ def _annotate_pin_group(
     # the frontend renders the notation (a true overbar) from these extras.
     active_low = bool(semantics.get("active_low"))
     display_name = _active_low_display(pin_name, active_low)
+    # SYM-04: functional role drives which SIDE the pin is grouped on. Carried as
+    # an extra so the conformance check can verify grouping (side vs role) and the
+    # frontend can cluster pins by function. Left as-is (may be None/"other" when
+    # the extractor could not classify the pin); the layout gate decides whether
+    # role actually moves the pin.
+    role = semantics.get("role")
 
     side = 0
     pin_length = 0.0
@@ -211,6 +217,7 @@ def _annotate_pin_group(
             "value": pin_name,
             "pinName": pin_name,
             "electricalType": electrical_type,
+            "role": role,
             "nc": nc,
             "ncInstruction": nc_instruction,
             "activeLow": active_low,
