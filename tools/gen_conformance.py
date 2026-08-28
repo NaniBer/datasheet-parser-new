@@ -33,7 +33,7 @@ from src.conformance.runner import (
     print_corpus_summary,
     print_part_report,
 )
-from src.models import PinData, PackageInfo, Pin
+from src.models import PinData, PackageInfo, Pin, ComponentRecord
 
 # {rule_id: (status, message)} for build-time-only rules the static artifacts
 # can't express (3D-03 needs per-lead identity + the footprint pad map).
@@ -41,11 +41,15 @@ BuildResults = Dict[str, tuple]
 
 
 def _pin_data(fx: FamilyFixture) -> PinData:
-    """A legacy single-package PinData carrying the fixture's correct pins."""
+    """A legacy single-package PinData carrying the fixture's correct pins.
+
+    Pin roles (when the fixture supplies them) flow through so the schematic
+    builder can group by function (SYM-04); role-less fixtures stay physical.
+    """
     return PinData(
         component_name=fx.component_name,
         package=PackageInfo(type=fx.package_type, pin_count=fx.pin_count, width=6.0, height=5.0),
-        pins=[Pin(number=int(p["number"]), name=p["name"]) for p in fx.pins],
+        pins=[Pin(number=int(p["number"]), name=p["name"], role=p.get("role")) for p in fx.pins],
     )
 
 
@@ -72,7 +76,10 @@ def generate_family(fx: FamilyFixture, out_dir: Path) -> tuple:
 
     schematic = out_dir / f"{fx.key}_schematic.glb"
     try:
-        if build_schematic_from_pin_data(pin_data=pin_data, output_path=str(schematic)) and schematic.is_file():
+        # Record carries per-pin roles to the builder so functional grouping
+        # (SYM-04) applies to gated fixtures; role-less fixtures stay physical.
+        record = ComponentRecord.from_pin_data(pin_data)
+        if build_schematic_from_pin_data(pin_data=pin_data, output_path=str(schematic), record=record) and schematic.is_file():
             produced["symbol"] = str(schematic)
     except Exception as e:
         print(f"  [{fx.key}] schematic refused/failed: {e}")

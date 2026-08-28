@@ -32,11 +32,31 @@ def _pins(n: int) -> List[Dict[str, str]]:
     return [{"number": str(i), "name": f"P{i}"} for i in range(1, n + 1)]
 
 
+# A functional fixture carries explicit roles so it clears the SYM-04 gate
+# (concrete supply + ground, >= 50% concrete roles) and the symbol is laid out
+# by function. Names/roles are hand-set so grading is deterministic and needs no
+# LLM. Generic ``_pins`` fixtures stay role-less and SKIP SYM-04 (below gate),
+# which is exactly how the harness should treat an unclassified part.
+_FUNC8_PINS: List[Dict[str, str]] = [
+    {"number": "1", "name": "CLK",  "role": "clock"},
+    {"number": "2", "name": "RST",  "role": "reset"},
+    {"number": "3", "name": "IN0",  "role": "input"},
+    {"number": "4", "name": "GND",  "role": "ground"},
+    {"number": "5", "name": "OUT0", "role": "output"},
+    {"number": "6", "name": "OUT1", "role": "output"},
+    {"number": "7", "name": "IO0",  "role": "io"},
+    {"number": "8", "name": "VCC",  "role": "supply"},
+]
+
+
 # One representative per supported family. Numbering is a complete 1..N set so
 # the pin/pad-mapping and numbering checks exercise the real path.
 FIXTURES: List[FamilyFixture] = [
     FamilyFixture("dip8",    "DIP-8",     8,  "GEN_DIP8",    "through_hole", _pins(8)),
     FamilyFixture("soic8",   "SOIC-8",    8,  "GEN_SOIC8",   "gullwing",     _pins(8)),
+    # Functional-grouping fixture (SYM-04): explicit roles => clears the gate,
+    # symbol is laid out by function. Same SOIC-8 geometry as soic8 otherwise.
+    FamilyFixture("func8",   "SOIC-8",    8,  "GEN_FUNC8",   "gullwing",     _FUNC8_PINS),
     FamilyFixture("soic16",  "SOIC-16",   16, "GEN_SOIC16",  "gullwing",     _pins(16)),
     FamilyFixture("sop16",   "SOP-16",    16, "GEN_SOP16",   "gullwing",     _pins(16)),
     FamilyFixture("ssop20",  "SSOP-20",   20, "GEN_SSOP20",  "gullwing",     _pins(20)),
