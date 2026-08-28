@@ -440,6 +440,8 @@ class PinLayout:
             if side == "left":
                 # Left side: top to bottom
                 for i, pin_num in enumerate(pin_numbers):
+                    if pin_num is None:
+                        continue  # blank slot: consume a grid step, draw no pin
                     y = (body_height / 2) - top_margin - (i * pin_pitch)
                     x = -body_width / 2
 
@@ -462,6 +464,8 @@ class PinLayout:
             elif side == "right":
                 # Right side: top to bottom (or bottom to top depending on data)
                 for i, pin_num in enumerate(pin_numbers):
+                    if pin_num is None:
+                        continue  # blank slot: consume a grid step, draw no pin
                     y = (body_height / 2) - top_margin - (i * pin_pitch)
                     x = body_width / 2
 
@@ -484,6 +488,8 @@ class PinLayout:
             elif side == "bottom":
                 # Bottom side: left to right
                 for i, pin_num in enumerate(pin_numbers):
+                    if pin_num is None:
+                        continue  # blank slot: consume a grid step, draw no pin
                     x = -(body_width / 2) + top_margin + (i * pin_pitch)
                     y = -body_height / 2
 
@@ -506,6 +512,8 @@ class PinLayout:
             elif side == "top":
                 # Top side: left to right
                 for i, pin_num in enumerate(pin_numbers):
+                    if pin_num is None:
+                        continue  # blank slot: consume a grid step, draw no pin
                     x = -(body_width / 2) + top_margin + (i * pin_pitch)
                     y = body_height / 2
 

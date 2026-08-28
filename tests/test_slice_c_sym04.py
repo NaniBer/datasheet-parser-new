@@ -78,12 +78,12 @@ def test_role_extra_written():
     assert all("role" in v for v in ex.values())
 
 
-# --- SYM-04 is expected-RED on the current physical layout (4a; fixed in 4b) ---
-def test_sym04_fails_on_physical_layout():
+# --- SYM-04 passes once C.4b lays gated parts out by function -----------------
+def test_sym04_passes_on_functional_layout():
     outcome = check_functional_grouping(PartContext("x", {"symbol": _build(_gated_pd())}))
-    # gate passes -> rule applies; a DIP dual-row layout can never put supply on
-    # top / ground on bottom, so grouping must be reported as not-yet-satisfied.
-    assert outcome.status is CheckStatus.FAIL
+    # gate passes -> functional layout (C.4b) groups pins by role: supply on top,
+    # ground on bottom, inputs left, outputs right => grouping satisfied.
+    assert outcome.status is CheckStatus.PASS
 
 
 # --- below-gate parts are SKIPped, never penalised (legacy compatibility) -----

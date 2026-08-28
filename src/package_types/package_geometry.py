@@ -798,6 +798,18 @@ def _snap_up(value: float, grid: float = SCHEMATIC_GRID_MM) -> float:
     return max(1, math.ceil(round(value / grid, 6))) * grid
 
 
+def _snap_up_even(value: float, grid: float = SCHEMATIC_GRID_MM) -> float:
+    """Round up to an even (2x) grid multiple so half the length stays on-grid.
+
+    Functional symbols (SYM-04) are laid out symmetrically about the origin, so
+    a pin edge sits at +/- body_dim/2. Snapping the body to a 2*grid multiple
+    keeps body_dim/2 a whole grid step, so every pin row/column and every leg
+    tip lands on the 2.54 mm lattice (SYM-02) regardless of side parity.
+    """
+    step = 2 * grid
+    return max(1, math.ceil(round(value / step, 6))) * step
+
+
 def _normalize_schematic_to_grid(params: SchematicParameters) -> SchematicParameters:
     """Force schematic geometry onto the 2.54 mm grid (SYM-02).
 

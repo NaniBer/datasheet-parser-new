@@ -113,7 +113,7 @@ class PinoutDiagramBuilder:
         1.0
     )
 
-    def __init__(self, package_type: str, pin_count: int, component_name: str = "IC", custom_layout: Optional[Dict[str, List[int]]] = None):
+    def __init__(self, package_type: str, pin_count: int, component_name: str = "IC", custom_layout: Optional[Dict[str, List[int]]] = None, pin_data: Optional[List[Dict[str, Any]]] = None):
         """
         Initialize pinout diagram builder.
 
@@ -123,6 +123,10 @@ class PinoutDiagramBuilder:
             component_name: Component name for PackageValue label
             custom_layout: Optional dict mapping side names to pin numbers
                          (e.g., {"left_side": [1,2,3], "bottom_edge": [4,5,6]})
+            pin_data: Optional enriched pin dicts (carry role/nc). When present
+                      and no explicit custom_layout is given, pins that clear the
+                      SYM-04 gate are laid out by function (Slice C.4b); otherwise
+                      the physical layout is used unchanged.
         """
         self.package_type = package_type
         self.pin_count = pin_count
@@ -132,8 +136,24 @@ class PinoutDiagramBuilder:
         # Get schematic parameters
         self.params = get_schematic_parameters(package_type, pin_count)
 
+        # SYM-04: functional grouping. An explicit Vision custom_layout is
+        # authoritative and always wins; otherwise, when the pins clear the gate
+        # (concrete power+ground, >=50% concrete roles), lay them out by function
+        # and resize the body to fit. Below the gate, layout_arg stays the
+        # original custom_layout (usually None) => byte-identical physical layout.
+        layout_arg: Optional[Dict[str, List]] = custom_layout
+        if custom_layout is None and pin_data:
+            from ..models import functional_layout_applicable
+            if functional_layout_applicable([p.get("role") for p in pin_data]):
+                from .functional_layout import apply_functional_layout
+                layout_arg = apply_functional_layout(pin_data, self.params)
+                logger.info(
+                    "SYM-04 functional layout: %s",
+                    {k: [n for n in v if n] for k, v in layout_arg.items() if any(v)},
+                )
+
         # Calculate pin positions
-        self.pin_positions = layout_pins(self.params, custom_layout)
+        self.pin_positions = layout_pins(self.params, layout_arg)
 
         logger.info(
             "Initialized schematic builder for %s (%d pins)" % (package_type, pin_count)
@@ -601,5 +621,5 @@ def build_pinout_diagram(
     Returns:
         True if successful, False otherwise
     """
-    builder = PinoutDiagramBuilder(package_type, pin_count, component_name, custom_layout)
+    builder = PinoutDiagramBuilder(package_type, pin_count, component_name, custom_layout, pin_data=pin_data)
     return builder.save_glb(output_path, pin_data)
