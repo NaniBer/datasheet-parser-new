@@ -124,6 +124,9 @@ def validate_body(assembly: cq.Assembly, spec: Body3DSpec) -> Body3DValidationRe
         "z_min": bb.zmin,
         "z_max": bb.zmax,
         "lead_count": lead_count,
+        # XY centroid — should sit on the shared origin (V-03 origin alignment).
+        "center_x": (bb.xmin + bb.xmax) / 2.0,
+        "center_y": (bb.ymin + bb.ymax) / 2.0,
     }
 
     # Lead count is exact — a right-sized body with the wrong pin count is wrong.

@@ -9,6 +9,7 @@ it.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -34,6 +35,40 @@ class Body3DResult:
     align_ok: Optional[bool] = None          # None when no pad map supplied
     worst_align_delta: Optional[float] = None
     reason: Optional[str] = None
+
+
+# V-03: the 3D body aligns to the footprint in origin, leads, and height. This
+# is a build-time verdict (like 3D-03) because per-lead identity and the CAD
+# B-rep are gone from the tessellated GLB — it must be computed while the
+# in-memory assembly + footprint pad map are still available.
+V03_ORIGIN_TOL_MM = 0.10
+
+
+def footprint_alignment_verdict(result: "Body3DResult") -> Optional[Tuple[bool, str]]:
+    """V-03 composite verdict, or None when it cannot be assessed.
+
+    Returns ``(ok, message)``. None when there is no body, or no footprint pad
+    map was supplied (``align_ok is None``) so lead alignment is unknown — the
+    rule then stays UNRUN for that part, mirroring 3D-03. PASS requires all
+    three: lead feet on their pads (3D-03's check), the body XY centroid on the
+    shared origin, and the built height matching spec A (no height issue).
+    """
+    if not result.success or result.align_ok is None:
+        return None
+    m = result.metrics or {}
+    origin = math.hypot(float(m.get("center_x", 0.0)), float(m.get("center_y", 0.0)))
+    leads_ok = result.align_ok is True
+    origin_ok = origin <= V03_ORIGIN_TOL_MM
+    height_ok = not any(
+        ("height" in s) or ("body top" in s) or ("!= A " in s) for s in result.issues
+    )
+    ok = leads_ok and origin_ok and height_ok
+    msg = (
+        f"leads {'ok' if leads_ok else 'off'} (worst {result.worst_align_delta or 0.0:.3f} mm); "
+        f"origin {origin:.3f} mm {'ok' if origin_ok else '> tol'}; "
+        f"height {'ok' if height_ok else 'off'}"
+    )
+    return ok, msg
 
 
 def build_body_model(

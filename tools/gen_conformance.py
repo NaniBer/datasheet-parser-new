@@ -68,6 +68,7 @@ def generate_family(fx: FamilyFixture, out_dir: Path) -> tuple:
     )
     from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
     from src.model3d import build_body_model
+    from src.model3d.builder import footprint_alignment_verdict
 
     out_dir.mkdir(parents=True, exist_ok=True)
     pin_data = _pin_data(fx)
@@ -135,6 +136,13 @@ def generate_family(fx: FamilyFixture, out_dir: Path) -> tuple:
                     CheckStatus.FAIL,
                     f"lead/pad numbering or position mismatch (worst {body.worst_align_delta:.3f} mm); "
                     + "; ".join(body.issues[:2]),
+                )
+            # V-03: composite body->footprint alignment (origin, leads, height).
+            verdict = footprint_alignment_verdict(body)
+            if verdict is not None:
+                ok, msg = verdict
+                build_results["V-03"] = (
+                    CheckStatus.PASS if ok else CheckStatus.FAIL, msg,
                 )
         else:
             print(f"  [{fx.key}] body skipped: {body.reason}")
