@@ -1023,6 +1023,56 @@ def check_layout_not_physical(ctx: PartContext) -> _Outcome:
     return inner  # SKIP / UNRUN passthrough
 
 
+def check_pnp_zero_orientation(ctx: PartContext) -> _Outcome:
+    """FP-18: the footprint declares a pick-and-place zero orientation.
+
+    Assembly/P&P needs a defined 0-degree placement datum. Generation stamps a
+    fixed convention (0 deg, pin-1 reference) on the footprint Package root; this
+    verifies it is present and zero. SKIP when there is no footprint artifact.
+    """
+    miss = _need_glb(ctx, "footprint")
+    if miss:
+        return miss
+    g = ctx.glb("footprint")
+    root = _root(g)
+    if root is None:
+        return _Outcome(CheckStatus.UNRUN, "no footprint root")
+    zo = (g.nodes[root].extras or {}).get("zeroOrientation")
+    if not isinstance(zo, dict) or "angle" not in zo:
+        return _Outcome(CheckStatus.FAIL, "no pick-and-place zeroOrientation on footprint")
+    angle = zo.get("angle")
+    if angle != 0:
+        return _Outcome(CheckStatus.FAIL, f"zero orientation not 0 deg (got {angle})",
+                        measured=f"{angle} deg")
+    return _Outcome(CheckStatus.PASS, "P&P zero orientation set (0 deg, pin-1 ref)",
+                    measured="0 deg")
+
+
+def check_component_height_present(ctx: PartContext) -> _Outcome:
+    """FP-17: the footprint records the component's Z height.
+
+    Assembly/BOM/collision needs the body height even though the 2D footprint
+    plane discards Z. Generation stamps ``componentHeight`` on the Package root
+    (from the 3D spec's body height). PASS when a positive height is present,
+    FAIL when missing or non-positive; SKIP when there is no footprint artifact.
+    """
+    miss = _need_glb(ctx, "footprint")
+    if miss:
+        return miss
+    g = ctx.glb("footprint")
+    root = _root(g)
+    if root is None:
+        return _Outcome(CheckStatus.UNRUN, "no footprint root")
+    ch = (g.nodes[root].extras or {}).get("componentHeight")
+    value = ch.get("value") if isinstance(ch, dict) else None
+    if not isinstance(value, (int, float)) or value <= 0:
+        return _Outcome(CheckStatus.FAIL, "no positive componentHeight recorded on footprint",
+                        measured=str(value))
+    src = ch.get("source") if isinstance(ch, dict) else None
+    return _Outcome(CheckStatus.PASS, f"component height {value} mm recorded ({src})",
+                    measured=f"{value} mm")
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -1052,5 +1102,7 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "functional_grouping": check_functional_grouping,
     "power_ground_visible": check_power_ground_visible,
     "layout_not_physical": check_layout_not_physical,
+    "pnp_zero_orientation": check_pnp_zero_orientation,
+    "component_height_present": check_component_height_present,
     "report_emitted": check_report_emitted,
 }

@@ -288,6 +288,7 @@ def inject_pcb_footprint_extras(
     pad_spec: Optional[dict] = None,
     pin_side_map: Optional[Dict[str, str]] = None,
     dims_source: Optional[str] = None,
+    component_height: Optional[float] = None,
     # Legacy params kept for backwards compatibility
     body_width: Optional[float] = None,
     body_height: Optional[float] = None,
@@ -368,12 +369,22 @@ def inject_pcb_footprint_extras(
                 "dragEffect": True,
                 "originalName": "Package",
                 "renderOrder": 0,
+                # FP-18: pick-and-place zero orientation. A fixed convention —
+                # 0 deg with pin 1 as the reference — so assembly has a defined
+                # placement datum. Deterministic; no datasheet input needed.
+                "zeroOrientation": {"angle": 0.0, "unit": "deg", "reference": "pin1"},
             }
             if dims_source:
                 # Dimension provenance: "text" (deterministic datasheet
                 # text), "vision"/"text+vision" (model-read drawing),
                 # "jedec_default" (family defaults), "unverified".
                 extras["dimsSource"] = dims_source
+            if component_height is not None:
+                # FP-17: component Z height (mm). Source mirrors dimsSource —
+                # "unverified"/"jedec_default" until a datasheet "A" is extracted.
+                extras["componentHeight"] = {
+                    "value": component_height, "unit": "mm", "source": dims_source,
+                }
 
         # ── Labels ────────────────────────────────────────────────────────────
         elif name == "DesignatorName":

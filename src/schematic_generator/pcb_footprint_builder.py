@@ -196,6 +196,17 @@ class PcbFootprintBuilder:
                 "geometry (no real dimensions found); pad sizes are unverified."
             )
 
+        # FP-17: record the component's Z height on the footprint. The 2D path
+        # discards Z, but assembly/BOM needs the body height, so we take it from
+        # the 3D spec (extracted "A" when available, else the JEDEC-ish default).
+        # Deterministic — no datasheet/LLM dependency.
+        try:
+            from ..model3d.spec import build_spec
+            spec = build_spec(package_type, pin_count, component_name, extracted_dims)
+            self.component_height = round(float(spec.body_height_A), 3)
+        except Exception:
+            self.component_height = None
+
         # Calculate pin positions
         self.pin_positions = layout_pins(self.params, custom_layout)
 
@@ -1013,6 +1024,7 @@ class PcbFootprintBuilder:
                         pos.pin_number: pos.side for pos in self.pin_positions
                     },
                     dims_source=self.dims_source,
+                    component_height=self.component_height,
                 )
                 logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:

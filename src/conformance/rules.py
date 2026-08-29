@@ -52,8 +52,8 @@ RULES: List[Rule] = [
     Rule("FP-10", "must", "footprint", "THT annular ring >= 0.05 mm after tolerance", "annular_ring"),
     Rule("FP-14", "must", "footprint", "Copper-to-copper pad clearance >= minimum", "pad_pad_clearance"),
     Rule("FP-15", "must", "footprint", "Mask/paste derived from copper", "mask_from_copper"),
-    Rule("FP-17", "must", "footprint", "Component height recorded on footprint", None),
-    Rule("FP-18", "must", "footprint", "Pick-and-place zero orientation set", None),
+    Rule("FP-17", "must", "footprint", "Component height recorded on footprint", "component_height_present"),
+    Rule("FP-18", "must", "footprint", "Pick-and-place zero orientation set", "pnp_zero_orientation"),
 
     # --- layers ----------------------------------------------------------------
     Rule("LAY-01", "must", "footprint", "Full layer tree generated", "footprint_layers_present"),
