@@ -1073,6 +1073,47 @@ def check_component_height_present(ctx: PartContext) -> _Outcome:
                     measured=f"{value} mm")
 
 
+_KNOWN_FOOTPRINT_LAYERS = {
+    "F.Cu", "B.Cu", "*.Cu", "F.Mask", "B.Mask", "F.SilkS",
+    "F.Fab", "F.CrtYd", "Edge.Cuts", "drill",
+}
+
+
+def check_every_object_layer_id(ctx: PartContext) -> _Outcome:
+    """LAY-02: every drawn footprint object owns a layerId.
+
+    Walk every mesh-bearing node; each must carry a ``layerId`` in the known
+    KiCad-style layer set. Transparent UI helpers (BoundingBox) are exempt —
+    they are selection aids, not fabrication objects. SKIP when there is no
+    footprint artifact.
+    """
+    miss = _need_glb(ctx, "footprint")
+    if miss:
+        return miss
+    g = ctx.glb("footprint")
+    if not g.nodes:
+        return _Outcome(CheckStatus.UNRUN, "empty footprint")
+    missing, bad, checked = [], [], 0
+    for node in g.nodes:
+        if node.mesh is None or (node.name or "") == "BoundingBox":
+            continue
+        checked += 1
+        lid = (node.extras or {}).get("layerId")
+        if lid is None:
+            missing.append(node.name)
+        elif lid not in _KNOWN_FOOTPRINT_LAYERS:
+            bad.append(f"{node.name}:{lid}")
+    if checked == 0:
+        return _Outcome(CheckStatus.UNRUN, "no drawable objects in footprint")
+    if missing:
+        return _Outcome(CheckStatus.FAIL, f"{len(missing)} object(s) without a layerId: {missing[:5]}",
+                        measured=f"{len(missing)}/{checked} missing")
+    if bad:
+        return _Outcome(CheckStatus.FAIL, f"off-vocabulary layerId: {bad[:5]}")
+    return _Outcome(CheckStatus.PASS, f"all {checked} objects own a layerId",
+                    measured=f"{checked} objects")
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -1104,5 +1145,6 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "layout_not_physical": check_layout_not_physical,
     "pnp_zero_orientation": check_pnp_zero_orientation,
     "component_height_present": check_component_height_present,
+    "every_object_layer_id": check_every_object_layer_id,
     "report_emitted": check_report_emitted,
 }

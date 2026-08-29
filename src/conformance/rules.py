@@ -57,7 +57,7 @@ RULES: List[Rule] = [
 
     # --- layers ----------------------------------------------------------------
     Rule("LAY-01", "must", "footprint", "Full layer tree generated", "footprint_layers_present"),
-    Rule("LAY-02", "must", "footprint", "Every object owns its layerId", None),
+    Rule("LAY-02", "must", "footprint", "Every object owns its layerId", "every_object_layer_id"),
     Rule("LAY-05", "must", "footprint", "THT pads are multi-layer with explicit drill", "tht_pad_multilayer"),
     Rule("LAY-06", "must", "footprint", "Silk-to-copper collision check ran", "silk_pad_clearance"),
 
