@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 def export_model(
-    assembly: cq.Assembly, base_path: str, ref_des: str = "U1"
+    assembly: cq.Assembly, base_path: str, ref_des: str = "U1",
+    provenance: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """Write ``<base_path>.step`` and ``<base_path>.glb``.
 
@@ -30,6 +31,8 @@ def export_model(
         base_path: output path without extension.
         ref_des: reference-designator node name inserted between ``Body`` and the
             solids (placeholder default until the real source is wired in).
+        provenance: F-04 dimension provenance stamped on the Package root
+            (e.g. ``{"method": <confidence>, "component": <name>}``).
 
     Returns:
         {"step": <path>, "glb": <path>}.
@@ -40,7 +43,7 @@ def export_model(
     try:
         # Preferred path: build the GLB from scratch with one glTF node per
         # B-rep face (matches the reference model's per-face COMPOUND convention).
-        _build_faceted_glb(assembly, glb_path, ref_des)
+        _build_faceted_glb(assembly, glb_path, ref_des, provenance)
     except Exception as exc:  # fail-open: fall back to the per-solid rewrite
         logger.warning(
             "Faceted GLB build failed for %s (%s); falling back to per-solid rewrite",
@@ -48,10 +51,18 @@ def export_model(
         )
         assembly.export(glb_path)
         try:
-            _rewrite_glb_hierarchy(glb_path, ref_des)
+            _rewrite_glb_hierarchy(glb_path, ref_des, provenance)
         except Exception as exc2:  # keep the raw GLB rather than none
             logger.warning("GLB hierarchy rewrite skipped for %s: %s", glb_path, exc2)
     return {"step": step_path, "glb": glb_path}
+
+
+def _package_extras(provenance: Optional[Dict[str, str]]) -> dict:
+    """Package-root extras, with F-04 provenance when supplied."""
+    extras = {"originalName": "Package", "renderOrder": 0}
+    if provenance:
+        extras["provenance"] = provenance
+    return extras
 
 
 # --- Faceted GLB build (one node per B-rep face) ---------------------------
@@ -67,7 +78,8 @@ _BODY_RGB = (0.15, 0.15, 0.17)
 _LEAD_RGB = (0.75, 0.75, 0.78)
 
 
-def _build_faceted_glb(assembly: cq.Assembly, glb_path: str, ref_des: str) -> None:
+def _build_faceted_glb(assembly: cq.Assembly, glb_path: str, ref_des: str,
+                       provenance: Optional[Dict[str, str]] = None) -> None:
     """Build a binary GLB with one glTF node per B-rep face.
 
     Node tree: ``Package -> Body -> <ref_des> -> [COMPOUND, COMPOUND_1, ...]``
@@ -222,7 +234,7 @@ def _build_faceted_glb(assembly: cq.Assembly, glb_path: str, ref_des: str) -> No
 
     package = Node(
         name="Package", children=[body_index], rotation=list(_ZUP_TO_YUP),
-        extras={"originalName": "Package", "renderOrder": 0},
+        extras=_package_extras(provenance),
     )
     nodes.append(package)
     package_index = len(nodes) - 1
@@ -251,7 +263,8 @@ def _build_faceted_glb(assembly: cq.Assembly, glb_path: str, ref_des: str) -> No
 
 # --- GLB re-hierarchy ------------------------------------------------------
 
-def _rewrite_glb_hierarchy(glb_path: str, ref_des: str) -> None:
+def _rewrite_glb_hierarchy(glb_path: str, ref_des: str,
+                           provenance: Optional[Dict[str, str]] = None) -> None:
     """Rewrite the cadquery node tree into ``Package -> Body -> <RefDes> ->
     COMPOUND*`` (matching the 2d/schematic/3d reference convention).
 
@@ -327,7 +340,7 @@ def _rewrite_glb_hierarchy(glb_path: str, ref_des: str) -> None:
     package = Node(
         name="Package",
         children=[body_index],
-        extras={"originalName": "Package", "renderOrder": 0},
+        extras=_package_extras(provenance),
     )
     # Preserve the cadquery root's placement (the Y-up rotation) on Package.
     package.matrix = root.matrix

@@ -1114,6 +1114,33 @@ def check_every_object_layer_id(ctx: PartContext) -> _Outcome:
                     measured=f"{checked} objects")
 
 
+def check_provenance_recorded(ctx: PartContext) -> _Outcome:
+    """F-04: generated artifacts record their dimension provenance.
+
+    Each produced footprint/body GLB must carry a ``provenance`` dict (with a
+    ``method``) on its Package root, so the source of the geometry is traceable.
+    Method-level provenance is recorded deterministically today (dims source /
+    build confidence); richer datasheet references await extraction. SKIP when
+    neither a footprint nor a body artifact exists.
+    """
+    if GLTF2 is None:
+        return _Outcome(CheckStatus.UNRUN, "pygltflib not installed")
+    kinds = [k for k in ("footprint", "body") if ctx.has(k)]
+    if not kinds:
+        return _Outcome(CheckStatus.SKIP, "no footprint/body artifact to check")
+    missing = []
+    for kind in kinds:
+        g = ctx.glb(kind)
+        root = _root(g)
+        prov = (g.nodes[root].extras or {}).get("provenance") if root is not None else None
+        if not isinstance(prov, dict) or not prov.get("method"):
+            missing.append(kind)
+    if missing:
+        return _Outcome(CheckStatus.FAIL, f"artifact(s) without provenance: {missing}")
+    return _Outcome(CheckStatus.PASS, f"provenance recorded on {kinds}",
+                    measured=",".join(kinds))
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -1146,5 +1173,6 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "pnp_zero_orientation": check_pnp_zero_orientation,
     "component_height_present": check_component_height_present,
     "every_object_layer_id": check_every_object_layer_id,
+    "provenance_recorded": check_provenance_recorded,
     "report_emitted": check_report_emitted,
 }

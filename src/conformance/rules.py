@@ -74,7 +74,7 @@ RULES: List[Rule] = [
 
     # --- foundations -----------------------------------------------------------
     Rule("F-01", "must", "meta", "No dimension invented (flag and stop)", None),
-    Rule("F-04", "must", "meta", "Datasheet provenance recorded on artifacts", None),
+    Rule("F-04", "must", "meta", "Datasheet provenance recorded on artifacts", "provenance_recorded"),
 ]
 
 

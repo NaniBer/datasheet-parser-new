@@ -112,7 +112,10 @@ def build_body_model(
         worst_align = alignment.worst_delta
         issues.extend(alignment.issues)
 
-    paths = export_model(assembly, output_base)
+    # F-04: record dimension provenance on the artifact. Method-level only for
+    # now (confidence + component); datasheet URL/revision/page await extraction.
+    provenance = {"method": spec.confidence, "component": component_name}
+    paths = export_model(assembly, output_base, provenance=provenance)
 
     validated = (
         validation.ok

@@ -407,6 +407,9 @@ def inject_pcb_footprint_extras(
                 # text), "vision"/"text+vision" (model-read drawing),
                 # "jedec_default" (family defaults), "unverified".
                 extras["dimsSource"] = dims_source
+                # F-04: uniform provenance key across artifacts (method-level;
+                # datasheet URL/revision/page await extraction).
+                extras["provenance"] = {"method": dims_source, "component": component_name}
             if component_height is not None:
                 # FP-17: component Z height (mm). Source mirrors dimsSource —
                 # "unverified"/"jedec_default" until a datasheet "A" is extracted.
