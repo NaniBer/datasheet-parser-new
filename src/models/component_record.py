@@ -115,6 +115,27 @@ def role_side(role: Optional[str]) -> str:
     return ROLE_SIDE.get(role or "other", "left")
 
 
+def classify_device_class(pin_data: "PinData") -> Optional[str]:
+    """Best-effort device class for the reference-designator prefix (SYM-10).
+
+    Prefers an explicit/extracted ``pin_data.device_class`` (normalised to the
+    contract). Otherwise a conservative deterministic fallback: a multi-pin part
+    that exposes both power and ground reads as an ``ic`` (prefix ``U``).
+    Geometry cannot distinguish R/C/D/etc., so those are never guessed — the
+    class stays None and ``refdes_prefix`` yields the safe default ``U``.
+    """
+    explicit = _norm(getattr(pin_data, "device_class", None))
+    if explicit in DEVICE_CLASSES:
+        return explicit
+    pins = pin_data.pins or []
+    names = " ".join((p.name or "").upper() for p in pins)
+    has_supply = any(tok in names for tok in ("VCC", "VDD", "VS", "V+"))
+    has_ground = any(tok in names for tok in ("GND", "VSS", "VEE"))
+    if len(pins) >= 6 and has_supply and has_ground:
+        return "ic"
+    return None
+
+
 # A "concrete" role is one that carries functional-grouping information. The
 # catch-all ``other`` and any unknown/None are NOT concrete — they tell us
 # nothing about which side a pin belongs on.
@@ -450,6 +471,7 @@ class ComponentRecord:
             identity=Identity(
                 mpn=part_number or pin_data.component_name,
                 description=pin_data.component_name,
+                device_class=classify_device_class(pin_data),
             ),
             provenance=provenance,
             ordered_pin_count=pin_data.ordered_pin_count,

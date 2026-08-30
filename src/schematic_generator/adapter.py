@@ -7,7 +7,7 @@ This module provides functions to convert between the PinData model
 
 from typing import List, Dict, Any, Optional
 from src.models.pin_data import PinData, Pin
-from src.models.component_record import ComponentRecord
+from src.models.component_record import ComponentRecord, refdes_prefix
 from src.pdf_extractor.variant_selection import select_package_variant
 from .pinout_diagram_builder import build_pinout_diagram as build_schematic
 
@@ -154,5 +154,11 @@ def build_schematic_from_pin_data(
     # builder ignores these keys today, so output is unchanged.
     pins_for_builder = _enrich_builder_pins(pins_for_builder, record)
 
+    # SYM-10: reference-designator prefix from the device class (U when unknown).
+    designator = "U"
+    if record is not None and record.identity is not None:
+        designator = refdes_prefix(record.identity.device_class)
+
     # Build schematic
-    return build_schematic(package_type, pin_count, component_name, pins_for_builder, output_path, custom_layout)
+    return build_schematic(package_type, pin_count, component_name, pins_for_builder,
+                           output_path, custom_layout, designator=designator)

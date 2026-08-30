@@ -1227,6 +1227,31 @@ def footprint_dims_verdict(
     return True, f"footprint matches datasheet ({len(checks)} dims within tol)"
 
 
+def refdes_prefix_verdict(
+    symbol_glb: str, device_class: Optional[str],
+) -> Optional[Tuple[bool, str]]:
+    """SYM-10 verdict: the symbol's designator prefix is correct for the class.
+
+    Build-time verdict (the on-disk GLB has the stamped designator but no class
+    to compare against): reads the DesignatorName value from the symbol GLB and
+    checks it equals ``refdes_prefix(device_class)``. Returns ``(ok, message)``,
+    or None when there is no designator to read.
+    """
+    if GLTF2 is None:
+        return None
+    from ..models import refdes_prefix
+    g = GLTF2().load_binary(symbol_glb)
+    root = _root(g)
+    dn = _find_child(g, root, "DesignatorName") if root is not None else None
+    value = (g.nodes[dn].extras or {}).get("value") if dn is not None else None
+    if value is None:
+        return None
+    expected = refdes_prefix(device_class)
+    if value == expected:
+        return True, f"designator '{value}' matches prefix for class {device_class!r}"
+    return False, f"designator '{value}' != expected '{expected}' for class {device_class!r}"
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")

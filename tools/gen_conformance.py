@@ -50,6 +50,7 @@ def _pin_data(fx: FamilyFixture) -> PinData:
         component_name=fx.component_name,
         package=PackageInfo(type=fx.package_type, pin_count=fx.pin_count, width=6.0, height=5.0),
         pins=[Pin(number=int(p["number"]), name=p["name"], role=p.get("role")) for p in fx.pins],
+        device_class=fx.device_class,
     )
 
 
@@ -82,6 +83,14 @@ def generate_family(fx: FamilyFixture, out_dir: Path) -> tuple:
         record = ComponentRecord.from_pin_data(pin_data)
         if build_schematic_from_pin_data(pin_data=pin_data, output_path=str(schematic), record=record) and schematic.is_file():
             produced["symbol"] = str(schematic)
+            # SYM-10: the stamped designator prefix must match the device class.
+            from src.conformance.checks import refdes_prefix_verdict
+            verdict = refdes_prefix_verdict(str(schematic), record.identity.device_class)
+            if verdict is not None:
+                passed, msg = verdict
+                build_results["SYM-10"] = (
+                    CheckStatus.PASS if passed else CheckStatus.FAIL, msg,
+                )
     except Exception as e:
         print(f"  [{fx.key}] schematic refused/failed: {e}")
 

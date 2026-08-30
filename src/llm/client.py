@@ -429,6 +429,7 @@ class LLMClient:
                 # Create PinData with new multi-package format
                 pin_data = PinData(
                     component_name=data.get("component_name", "Unknown"),
+                    device_class=data.get("device_class"),
                     packages=packages_list,
                     selected_package_index=selected_package_index,
                     selected_package_type=selected_package_type,
@@ -484,6 +485,7 @@ class LLMClient:
                 # Create PinData with legacy single-package format
                 pin_data = PinData(
                     component_name=data.get("component_name", "Unknown"),
+                    device_class=data.get("device_class"),
                     package=package,
                     pins=pins,
                     selected_package_index=selected_package_index if selected_package_index is not None else 0,

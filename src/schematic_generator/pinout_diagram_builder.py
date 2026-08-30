@@ -113,7 +113,7 @@ class PinoutDiagramBuilder:
         1.0
     )
 
-    def __init__(self, package_type: str, pin_count: int, component_name: str = "IC", custom_layout: Optional[Dict[str, List[int]]] = None, pin_data: Optional[List[Dict[str, Any]]] = None):
+    def __init__(self, package_type: str, pin_count: int, component_name: str = "IC", custom_layout: Optional[Dict[str, List[int]]] = None, pin_data: Optional[List[Dict[str, Any]]] = None, designator: str = "U"):
         """
         Initialize pinout diagram builder.
 
@@ -132,9 +132,12 @@ class PinoutDiagramBuilder:
         self.pin_count = pin_count
         self.component_name = component_name
         self.custom_layout = custom_layout
+        self.designator = designator
 
         # Get schematic parameters
         self.params = get_schematic_parameters(package_type, pin_count)
+        # SYM-10: the drawn designator text follows the class prefix too.
+        self.params.body_geometry.designator_name = designator
 
         # SYM-04: functional grouping. An explicit Vision custom_layout is
         # authoritative and always wins; otherwise, when the pins clear the gate
@@ -574,6 +577,7 @@ class PinoutDiagramBuilder:
                 }
                 if not inject_schematic_extras(
                     output_path, pin_name_map, self.component_name,
+                    designator=self.designator,
                     pin_semantics=pin_semantics,
                 ):
                     logger.warning("Schematic extras injection found no Package root")
@@ -605,6 +609,7 @@ def build_pinout_diagram(
     pin_data: List[Dict[str, Any]],
     output_path: str,
     custom_layout: Optional[Dict[str, List[int]]] = None,
+    designator: str = "U",
 ) -> bool:
     """
     Build and export pinout diagram from pin data.
@@ -621,5 +626,5 @@ def build_pinout_diagram(
     Returns:
         True if successful, False otherwise
     """
-    builder = PinoutDiagramBuilder(package_type, pin_count, component_name, custom_layout, pin_data=pin_data)
+    builder = PinoutDiagramBuilder(package_type, pin_count, component_name, custom_layout, pin_data=pin_data, designator=designator)
     return builder.save_glb(output_path, pin_data)

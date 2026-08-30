@@ -24,6 +24,7 @@ from .component_record import (
     role_coverage,
     functional_layout_applicable,
     refdes_prefix,
+    classify_device_class,
     validate_pin_semantics,
 )
 from .pin_classifier import classify_pin_name, detect_active_low
@@ -38,6 +39,6 @@ __all__ = [
     "ROLE_SIDE", "LAND_PATTERN_SOURCES",
     "normalize_electrical_type", "normalize_role", "role_side",
     "role_coverage", "functional_layout_applicable",
-    "refdes_prefix", "validate_pin_semantics",
+    "refdes_prefix", "classify_device_class", "validate_pin_semantics",
     "classify_pin_name", "detect_active_low",
 ]

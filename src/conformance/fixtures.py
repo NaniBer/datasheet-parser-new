@@ -28,6 +28,8 @@ class FamilyFixture:
     # Optional synthetic datasheet dims (flat e/E/D/b/L...) to exercise V-02
     # deterministically — the built footprint must realize these values.
     extracted_dims: Optional[Dict[str, float]] = None
+    # Optional synthetic device class to exercise SYM-10's refdes prefix.
+    device_class: Optional[str] = None
 
 
 def _pins(n: int) -> List[Dict[str, str]]:
@@ -64,6 +66,10 @@ FIXTURES: List[FamilyFixture] = [
     # footprint can be graded against them. Deterministic — no extraction.
     FamilyFixture("soic16d", "SOIC-16",   16, "GEN_SOIC16D", "gullwing",     _pins(16),
                   extracted_dims={"e": 1.27, "E": 10.325, "D": 9.90, "b": 0.41, "L": 0.835}),
+    # SYM-10 fixture: an explicit device class exercises a non-'U' refdes prefix
+    # (transistor -> 'Q'). device_class is injected synthetically (no LLM).
+    FamilyFixture("sot23q",  "SOT-23-3",  3,  "GEN_Q",       "gullwing",     _pins(3),
+                  device_class="transistor"),
     FamilyFixture("soic16",  "SOIC-16",   16, "GEN_SOIC16",  "gullwing",     _pins(16)),
     FamilyFixture("sop16",   "SOP-16",    16, "GEN_SOP16",   "gullwing",     _pins(16)),
     FamilyFixture("ssop20",  "SSOP-20",   20, "GEN_SSOP20",  "gullwing",     _pins(20)),

@@ -394,6 +394,7 @@ def build_pin_extraction_prompt(
         "Return ONLY valid JSON with this exact structure:\n"
         "{\n"
         "  \"component_name\": \"Component name\",\n"
+        "  \"device_class\": \"one of: resistor,capacitor,inductor,ferrite_bead,diode,led,transistor,ic,connector,plug,switch,crystal,oscillator,fuse,test_point,other (OPTIONAL - omit if unsure)\",\n"
         "  \"package\": {\n"
         "    \"type\": \"Package type\",\n"
         "    \"pin_count\": number,\n"
