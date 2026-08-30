@@ -277,6 +277,34 @@ def _build_pin_extras(
     }
 
 
+# LAY-02: KiCad-style layer for every drawn footprint object, derived
+# deterministically from the node name (+ its parent layer / pin). Copper spans
+# layers on through-hole barrels ("*.Cu"); SMD pads are top copper ("F.Cu").
+def _footprint_layer_id(name: str, par_name: str) -> Optional[str]:
+    if name == "CopperCirclePad":
+        return "F.Cu"
+    if name in ("CopperCirclePin", "CopperCylinderPin"):
+        return "*.Cu"                              # through-hole barrel: all copper
+    if name == "SolderMask":
+        return "F.Mask"
+    if name == "HoleCylinderPin":
+        return "drill"
+    if name == "silk_firstPinMarker":
+        return "F.SilkS"
+    if name == "fab_firstPinMarker":
+        return "F.Fab"
+    if name == "text" and par_name.isdigit():
+        return "F.Fab"                             # pin-number labels
+    if name == "BodyLine":
+        return {"fab_layer": "F.Fab", "silk_layer": "F.SilkS",
+                "crtyd_layer": "F.CrtYd"}.get(par_name)
+    if name == "Body" and par_name == "DesignatorName":
+        return "F.SilkS"                           # reference designator on silk
+    if name == "Body" and par_name == "PackageValue":
+        return "F.Fab"
+    return None
+
+
 def inject_pcb_footprint_extras(
     glb_path: str,
     component_name: str,
@@ -288,6 +316,7 @@ def inject_pcb_footprint_extras(
     pad_spec: Optional[dict] = None,
     pin_side_map: Optional[Dict[str, str]] = None,
     dims_source: Optional[str] = None,
+    component_height: Optional[float] = None,
     # Legacy params kept for backwards compatibility
     body_width: Optional[float] = None,
     body_height: Optional[float] = None,
@@ -368,12 +397,25 @@ def inject_pcb_footprint_extras(
                 "dragEffect": True,
                 "originalName": "Package",
                 "renderOrder": 0,
+                # FP-18: pick-and-place zero orientation. A fixed convention —
+                # 0 deg with pin 1 as the reference — so assembly has a defined
+                # placement datum. Deterministic; no datasheet input needed.
+                "zeroOrientation": {"angle": 0.0, "unit": "deg", "reference": "pin1"},
             }
             if dims_source:
                 # Dimension provenance: "text" (deterministic datasheet
                 # text), "vision"/"text+vision" (model-read drawing),
                 # "jedec_default" (family defaults), "unverified".
                 extras["dimsSource"] = dims_source
+                # F-04: uniform provenance key across artifacts (method-level;
+                # datasheet URL/revision/page await extraction).
+                extras["provenance"] = {"method": dims_source, "component": component_name}
+            if component_height is not None:
+                # FP-17: component Z height (mm). Source mirrors dimsSource —
+                # "unverified"/"jedec_default" until a datasheet "A" is extracted.
+                extras["componentHeight"] = {
+                    "value": component_height, "unit": "mm", "source": dims_source,
+                }
 
         # ── Labels ────────────────────────────────────────────────────────────
         elif name == "DesignatorName":
@@ -535,6 +577,14 @@ def inject_pcb_footprint_extras(
             else:
                 t = [t[0] if len(t) > 0 else 0.0, t[1] if len(t) > 1 else 0.0, 0.15]
             node.translation = t
+
+        # LAY-02: stamp the layerId on every drawn (mesh-bearing) fab object.
+        # BoundingBox is a transparent selection helper, not a fab object, so it
+        # is intentionally left without one.
+        if extras is not None and node.mesh is not None and name != "BoundingBox":
+            lid = _footprint_layer_id(name, par_name)
+            if lid:
+                extras["layerId"] = lid
 
         if extras is not None:
             node.extras = extras

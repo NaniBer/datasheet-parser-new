@@ -141,14 +141,51 @@ def _annotate_bodyline(gltf: "GLTF2", container_index: int) -> None:
         _set_extras(gltf, child_index, extras)
 
 
+ACTIVE_LOW_MARKER = "/"  # SYM-08: one consistent ASCII active-low notation
+
+
+def _active_low_display(pin_name: str, active_low: bool) -> str:
+    """Name with a single leading active-low marker, no double-marking.
+
+    Strips any inversion marker already in the extracted name (leading '/',
+    trailing '#', '_N' suffix) before applying the one canonical prefix.
+    """
+    if not active_low:
+        return pin_name
+    base = (pin_name or "").strip().lstrip("/").rstrip("#")
+    if base.upper().endswith("_N"):
+        base = base[:-2]
+    return f"{ACTIVE_LOW_MARKER}{base}"
+
+
 def _annotate_pin_group(
     gltf: "GLTF2",
     pin_index: int,
     pin_name: str,
     body_center: List[float],
+    semantics: Optional[Dict[str, Any]] = None,
 ) -> None:
     pin_node = gltf.nodes[pin_index]
     pin_number = pin_node.name
+    semantics = semantics or {}
+    # SYM-07: electrical type as a pin extra. Unknown -> the contract's explicit
+    # "unspecified" member (never invented).
+    electrical_type = semantics.get("electrical_type") or "unspecified"
+    # SYM-11: no-connect pins are drawn but tagged, keeping the datasheet's
+    # verbatim instruction ("do not connect" vs "tie to GND").
+    nc = bool(semantics.get("nc"))
+    nc_instruction = semantics.get("nc_instruction")
+    # SYM-08: active-low as a flag + a displayName carrying ONE consistent ASCII
+    # marker (leading "/"). The geometry name mesh keeps the base name unchanged;
+    # the frontend renders the notation (a true overbar) from these extras.
+    active_low = bool(semantics.get("active_low"))
+    display_name = _active_low_display(pin_name, active_low)
+    # SYM-04: functional role drives which SIDE the pin is grouped on. Carried as
+    # an extra so the conformance check can verify grouping (side vs role) and the
+    # frontend can cluster pins by function. Left as-is (may be None/"other" when
+    # the extractor could not classify the pin); the layout gate decides whether
+    # role actually moves the pin.
+    role = semantics.get("role")
 
     side = 0
     pin_length = 0.0
@@ -179,6 +216,12 @@ def _annotate_pin_group(
             "hideTransformControls": _HIDE_TRANSFORM_CONTROLS,
             "value": pin_name,
             "pinName": pin_name,
+            "electricalType": electrical_type,
+            "role": role,
+            "nc": nc,
+            "ncInstruction": nc_instruction,
+            "activeLow": active_low,
+            "displayName": display_name,
             "dragEffect": False,
             "originalName": pin_number,
             "renderOrder": 0,
@@ -211,6 +254,7 @@ def inject_schematic_extras(
     pin_names: Dict[str, str],
     component_name: str,
     designator: str = "U",
+    pin_semantics: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> bool:
     """
     Annotate a generated schematic GLB with IDEEZA frontend extras.
@@ -275,7 +319,8 @@ def inject_schematic_extras(
             for pin_index in child.children or []:
                 pin_number = gltf.nodes[pin_index].name
                 pin_name = pin_names.get(pin_number, "")
-                _annotate_pin_group(gltf, pin_index, pin_name, body_center)
+                sem = (pin_semantics or {}).get(pin_number)
+                _annotate_pin_group(gltf, pin_index, pin_name, body_center, semantics=sem)
 
     gltf.save(str(glb_path))
     return True

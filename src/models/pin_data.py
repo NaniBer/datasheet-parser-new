@@ -10,7 +10,14 @@ class Pin:
 
     number: int
     name: str
-    function: Optional[str] = None  # power, ground, input, output, etc.
+    function: Optional[str] = None  # legacy free-text (kept = role for back-compat)
+    # Slice A — extraction output contract (see docs/extraction-output-contract.md).
+    # Additive + Optional so nothing downstream is forced; generation ignores these.
+    electrical_type: Optional[str] = None  # ERC type (contract) [SYM-07]
+    role: Optional[str] = None             # functional role (contract) [SYM-04]
+    active_low: bool = False               # [SYM-08]
+    nc: bool = False                       # [SYM-11]
+    nc_instruction: Optional[str] = None   # verbatim datasheet wording [SYM-11]
 
 
 @dataclass
@@ -41,6 +48,7 @@ class PinData:
     # the LLM's variant choice during selection.
     ordered_pin_count: Optional[int] = None  # Pin count printed on the ordered part's row
     ordered_package_type: Optional[str] = None  # Package family printed on the ordered part's row
+    device_class: Optional[str] = None  # semantic class -> refdes prefix [SYM-10]
     extraction_method: str = "Table"  # Table, Diagram, Mixed
     validation_errors: Optional[List[str]] = None  # Reasons output is unvalidated: forced best-effort, or lossy/unverified geometry. Drives the GLB watermark + exit 3.
     footprint_unsupported_reason: Optional[str] = None  # Set when the part is a module/SiP/grid-array whose footprint we won't build; the pipeline emits schematic-only.

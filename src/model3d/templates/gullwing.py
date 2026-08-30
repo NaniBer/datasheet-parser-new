@@ -6,6 +6,7 @@ separated along X (lead-span E axis); pins run along Y at pitch e.
 """
 from __future__ import annotations
 
+import logging
 from typing import List, Tuple
 
 import cadquery as cq
@@ -13,8 +14,19 @@ import cadquery as cq
 from ..spec import Body3DSpec
 from .base import PackageTemplate
 
+logger = logging.getLogger(__name__)
+
 # Default lead-frame thickness (JEDEC symbol c) when the datasheet omits it.
 DEFAULT_LEAD_THICKNESS = 0.20
+
+# Detail-feature sizes (mm). Each is applied fail-open: if the OCCT op raises,
+# the plain geometry is kept, so a detail failure never breaks a build. Radii are
+# clamped against the local geometry so they stay well inside validator
+# tolerances (span +/-0.15, length +/-0.10, height +/-0.05).
+BODY_CHAMFER = 0.20          # top/bottom moulded-body bevel
+PIN1_DIMPLE_R = 0.30         # pin-1 index dimple radius
+PIN1_DIMPLE_DEPTH = 0.15     # pin-1 index dimple depth
+LEAD_FILLET = 0.08           # gull-wing bend radius
 
 _BODY_COLOR = cq.Color(0.15, 0.15, 0.17)
 _LEAD_COLOR = cq.Color(0.75, 0.75, 0.78)
@@ -61,11 +73,7 @@ class GullwingTemplate(PackageTemplate):
 
         asm = cq.Assembly()
 
-        body = (
-            cq.Workplane("XY")
-            .box(E1, D, A2)
-            .translate((0, 0, A1 + A2 / 2.0))
-        )
+        body = self._build_body(E1, D, A2, A1)
         asm.add(body, name="Body", color=_BODY_COLOR)
 
         left, right = spec.pins_per_side[0], spec.pins_per_side[1]
@@ -77,42 +85,103 @@ class GullwingTemplate(PackageTemplate):
         return asm
 
     @staticmethod
+    def _build_body(E1: float, D: float, A2: float, A1: float) -> cq.Workplane:
+        """Moulded body: a box with top/bottom perimeter chamfers and a pin-1
+        index dimple. Each detail is fail-open (falls back to the plain box).
+
+        Built centred at Z=0 (top at +A2/2), then lifted onto the standoff A1.
+        Chamfers cut the top/bottom rim inward, so the base stays E1 x D and the
+        top stays at +A2/2 -- overall span/length/height are preserved.
+        """
+        body = cq.Workplane("XY").box(E1, D, A2)
+
+        # Top + bottom perimeter chamfer (the classic SOIC moulded bevel).
+        chamfer = min(BODY_CHAMFER, 0.4 * A2, 0.2 * min(E1, D))
+        if chamfer > 0.01:
+            try:
+                body = body.edges(">Z").chamfer(chamfer).edges("<Z").chamfer(chamfer)
+            except Exception:  # OCCT edge-op failure -> keep the plain box
+                logger.debug("body chamfer skipped", exc_info=True)
+                body = cq.Workplane("XY").box(E1, D, A2)
+
+        # Pin-1 index dimple on the top face, near the pin-1 corner (x<0, y>0),
+        # kept clear of the chamfered rim so it lands on the flat top.
+        r_d = min(PIN1_DIMPLE_R, 0.15 * min(E1, D))
+        depth = min(PIN1_DIMPLE_DEPTH, 0.3 * A2)
+        if r_d > 0.05 and depth > 0.02:
+            try:
+                margin = chamfer + r_d + 0.20
+                px = -(E1 / 2.0 - margin)
+                py = D / 2.0 - margin
+                dimple = (
+                    cq.Workplane("XY")
+                    .cylinder(depth, r_d)
+                    .translate((px, py, A2 / 2.0 - depth / 2.0))
+                )
+                body = body.cut(dimple)
+            except Exception:
+                logger.debug("pin-1 dimple skipped", exc_info=True)
+
+        return body.translate((0, 0, A1 + A2 / 2.0))
+
+    @staticmethod
     def _gullwing_lead(
         s: float, y: float, E: float, E1: float, L: float, b: float,
         c: float, A1: float, A2: float,
     ) -> cq.Workplane:
-        """One gull-wing lead: shoulder (at body) -> riser -> foot (on board)."""
-        tip = s * (E / 2.0)
+        """One gull-wing lead: shoulder (at body) -> riser -> foot (on board).
+
+        Built as a single constant-thickness (c) ribbon profile drawn in the X-Z
+        plane and extruded along Y by the lead width b, then the two gull-wing
+        bends are rounded. Modelling the lead as one clean prism (instead of a
+        union of three boxes) keeps the B-rep face set minimal and identical on
+        both columns -- a box union left OCCT to resolve the fillet differently
+        per side (14 faces one side, 32 the other). This mirrors the reference
+        3d.glb, whose leads are ~14 faces of a clean rounded gull-wing.
+        """
         knee = s * (E / 2.0 - L)
-        body_edge = s * (E1 / 2.0)
         shoulder_z = A1 + A2 * 0.5           # lead exits the body mid-height
 
-        # Foot: flat on the seating plane, from knee out to the tip.
-        foot = (
-            cq.Workplane("XY")
-            .box(L, b, c)
-            .translate((s * (E / 2.0 - L / 2.0), y, c / 2.0))
+        # Closed ribbon outline in X-Z (thickness c), walked outer then inner:
+        # foot tip -> foot top -> up the riser -> shoulder top -> body end cap ->
+        # shoulder bottom -> down the riser -> foot bottom. `o` offsets the riser
+        # faces so its wall thickness is c on the correct (outboard) side.
+        o = c / 2.0 if s > 0 else -c / 2.0
+        tip = s * (E / 2.0)
+        body_edge = s * (E1 / 2.0)
+        outline = [
+            (tip, 0.0),                          # foot tip, bottom
+            (tip, c),                            # foot tip, top
+            (knee + o, c),                       # foot top -> riser (outboard)
+            (knee + o, shoulder_z + c / 2.0),    # up riser -> shoulder top
+            (body_edge, shoulder_z + c / 2.0),   # shoulder top -> body
+            (body_edge, shoulder_z - c / 2.0),   # body end cap
+            (knee - o, shoulder_z - c / 2.0),    # shoulder bottom -> riser (inboard)
+            (knee - o, 0.0),                     # down riser -> foot bottom
+        ]
+
+        # The XZ workplane's normal is -Y, so extrude(b) spans Y in [-b, 0];
+        # shift by y + b/2 to centre the lead width on the pin row at y.
+        lead = (
+            cq.Workplane("XZ")
+            .polyline(outline)
+            .close()
+            .extrude(b)
+            .translate((0, y + b / 2.0, 0))
         )
-        lead = foot
 
-        # Riser: vertical run at the knee, from the foot up to shoulder height.
-        riser_h = shoulder_z - c
-        if riser_h > 0:
-            riser = (
-                cq.Workplane("XY")
-                .box(c, b, riser_h)
-                .translate((knee, y, c + riser_h / 2.0))
-            )
-            lead = lead.union(riser)
-
-        # Shoulder: horizontal from the body side out to the knee.
-        shoulder_len = abs(knee - body_edge)
-        if shoulder_len > 1e-6:
-            shoulder = (
-                cq.Workplane("XY")
-                .box(shoulder_len, b, c)
-                .translate(((knee + body_edge) / 2.0, y, shoulder_z))
-            )
-            lead = lead.union(shoulder)
+        # Round the two gull-wing bends: the Y-parallel edges clustered at the
+        # riser (x ~ knee), leaving the foot tip and the body root square. On a
+        # clean prism this resolves identically on both columns. Fail-open.
+        radius = min(LEAD_FILLET, 0.4 * c, 0.3 * b)
+        if radius > 0.01:
+            try:
+                bend = lead.edges("|Y").filter(
+                    lambda e: abs(e.Center().x - knee) < 0.6 * abs(L)
+                )
+                if bend.objects:
+                    lead = lead.newObject(bend.objects).fillet(radius)
+            except Exception:  # OCCT fillet failure -> keep the sharp prism
+                logger.debug("lead bend fillet skipped", exc_info=True)
 
         return lead

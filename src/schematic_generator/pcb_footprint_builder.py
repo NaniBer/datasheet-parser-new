@@ -65,12 +65,14 @@ class PcbFootprintBuilder:
     PAD_TOE_HEEL = 0.70     # mm, gull-wing pad length = L + toe + heel
     PAD_SIDE_MARGIN = 0.06  # mm, gull-wing pad width = b + side margins
     PAD_MIN_GAP = 0.20      # mm, minimum copper gap between adjacent pads
+    CORNER_CLEARANCE = 0.15  # mm, min copper-copper at quad corners (FP-14/IPC-2221B)
     MASK_MARGIN = 0.102     # mm, solder mask opening beyond copper
     PIN_CYLINDER_HEIGHT = 0.200  # mm (through PCB thickness)
     PAD_HEIGHT = 0.020  # mm (thin layer)
     TINY_HEIGHT = 0.001  # mm (minimum height for extrusion)
     SILK_MARKER_RADIUS = 0.100  # mm (first pin marker size)
     SILK_MARKER_HEIGHT = 0.200  # mm (first pin marker thickness)
+    SILK_MARKER_CLEARANCE = 0.10  # mm (gap beyond courtyard for the silk pin-1 dot)
 
     # Body line parameters (from reference 2d.glb)
     BODY_HALF_WIDTH = 3.6195  # mm
@@ -81,6 +83,7 @@ class PcbFootprintBuilder:
 
     # Layer clearance offsets (matching reference 2d.glb spacing between layers)
     SILK_MARGIN_Y = 0.12   # silk extends this far beyond fab on Y (= LINE_THICKNESS)
+    SILK_PAD_CLEARANCE = 0.20  # mm, min silk-to-pad clearance (FP-07/IPC-2612)
     CRTYD_MARGIN_Y = 0.25  # crtyd clearance beyond body/pads (both axes)
 
     def __init__(self, package_type: str, pin_count: int, component_name: str = "IC",
@@ -193,6 +196,17 @@ class PcbFootprintBuilder:
                 "geometry (no real dimensions found); pad sizes are unverified."
             )
 
+        # FP-17: record the component's Z height on the footprint. The 2D path
+        # discards Z, but assembly/BOM needs the body height, so we take it from
+        # the 3D spec (extracted "A" when available, else the JEDEC-ish default).
+        # Deterministic — no datasheet/LLM dependency.
+        try:
+            from ..model3d.spec import build_spec
+            spec = build_spec(package_type, pin_count, component_name, extracted_dims)
+            self.component_height = round(float(spec.body_height_A), 3)
+        except Exception:
+            self.component_height = None
+
         # Calculate pin positions
         self.pin_positions = layout_pins(self.params, custom_layout)
 
@@ -222,6 +236,12 @@ class PcbFootprintBuilder:
                     pos.y -= inset
                 elif pos.side == "bottom":
                     pos.y += inset
+
+        # FP-14: on quad packages the end pads of perpendicular sides overlap at
+        # the corners. Shorten those corner pads' inner (heel) end so the
+        # copper-to-copper clearance meets CORNER_CLEARANCE.
+        self._pad_length_override: Dict[str, float] = {}
+        self._relieve_corner_pads()
 
         logger.info(
             "Initialized 2D PCB schematic builder for %s (%d pins)" % (package_type, pin_count)
@@ -253,6 +273,141 @@ class PcbFootprintBuilder:
                     p.x -= dx
                     p.text_x -= dx
                     p.num_x -= dx
+
+    def _relieve_corner_pads(self) -> None:
+        """Shorten perpendicular corner pads to keep >= CORNER_CLEARANCE (FP-14).
+
+        On quad packages the end pad of one side and the end pad of the adjacent
+        (perpendicular) side extend toward the same corner and their copper
+        overlaps. For each such colliding pair we retract the *inner* (heel) end
+        of each pad — keeping the outer toe fixed so the solder joint is
+        preserved — by ``length_override`` + a recentred position. Dual-row
+        packages (no top/bottom pads) have no perpendicular pairs and are
+        untouched. Widths and mask openings scale from the overridden length in
+        ``build_pin``, so mask stays derived from copper (FP-15).
+        """
+        spec = self.pad_spec
+        if spec.get("shape") != "rect":
+            return
+        length, width = spec["length"], spec["width"]
+        vert = [p for p in self.pin_positions if p.side in ("left", "right")]
+        horiz = [p for p in self.pin_positions if p.side in ("top", "bottom")]
+        if not vert or not horiz:
+            return  # dual-row: no corners
+
+        clr = self.CORNER_CLEARANCE
+
+        def x_half(p):
+            return (length if p.side in ("left", "right") else width) / 2.0
+
+        def y_half(p):
+            return (width if p.side in ("left", "right") else length) / 2.0
+
+        # New inner-edge targets (keyed by pin), retracting toward the toe.
+        new_max_x: Dict[str, float] = {}   # left pads: shorten +X edge
+        new_min_x: Dict[str, float] = {}   # right pads: shorten -X edge
+        new_max_y: Dict[str, float] = {}   # bottom pads: shorten +Y edge
+        new_min_y: Dict[str, float] = {}   # top pads: shorten -Y edge
+
+        for v in vert:
+            vx0, vx1 = v.x - x_half(v), v.x + x_half(v)
+            vy0, vy1 = v.y - y_half(v), v.y + y_half(v)
+            for h in horiz:
+                hx0, hx1 = h.x - x_half(h), h.x + x_half(h)
+                hy0, hy1 = h.y - y_half(h), h.y + y_half(h)
+                # Overlap (or within clearance) on both axes => a corner clash.
+                if not (min(vx1, hx1) - max(vx0, hx0) > -clr and
+                        min(vy1, hy1) - max(vy0, hy0) > -clr):
+                    continue
+                # Retract the vertical pad's inner X-edge clear of h's X-band.
+                if v.side == "left":
+                    tgt = hx0 - clr
+                    new_max_x[v.pin_number] = min(new_max_x.get(v.pin_number, vx1), tgt)
+                else:  # right
+                    tgt = hx1 + clr
+                    new_min_x[v.pin_number] = max(new_min_x.get(v.pin_number, vx0), tgt)
+                # Retract the horizontal pad's inner Y-edge clear of v's Y-band.
+                if h.side == "bottom":
+                    tgt = vy0 - clr
+                    new_max_y[h.pin_number] = min(new_max_y.get(h.pin_number, hy1), tgt)
+                else:  # top
+                    tgt = vy1 + clr
+                    new_min_y[h.pin_number] = max(new_min_y.get(h.pin_number, hy0), tgt)
+
+        for p in self.pin_positions:
+            if p.side in ("left", "right"):
+                x0, x1 = p.x - x_half(p), p.x + x_half(p)
+                if p.pin_number in new_max_x:
+                    x1 = new_max_x[p.pin_number]
+                elif p.pin_number in new_min_x:
+                    x0 = new_min_x[p.pin_number]
+                else:
+                    continue
+                new_len = max(width, x1 - x0)   # never shorter than the pad width
+                self._pad_length_override[p.pin_number] = new_len
+                p.x = (x0 + x1) / 2.0
+            else:  # top / bottom
+                y0, y1 = p.y - y_half(p), p.y + y_half(p)
+                if p.pin_number in new_max_y:
+                    y1 = new_max_y[p.pin_number]
+                elif p.pin_number in new_min_y:
+                    y0 = new_min_y[p.pin_number]
+                else:
+                    continue
+                new_len = max(width, y1 - y0)
+                self._pad_length_override[p.pin_number] = new_len
+                p.y = (y0 + y1) / 2.0
+
+    def _pad_bbox(self, p) -> tuple:
+        """(x0, x1, y0, y1) copper extent of one pad, honouring corner relief."""
+        spec = self.pad_spec
+        if spec.get("shape") == "rect":
+            length = self._pad_length_override.get(p.pin_number, spec["length"])
+            if p.side in ("top", "bottom"):
+                hx, hy = spec["width"] / 2.0, length / 2.0
+            else:
+                hx, hy = length / 2.0, spec["width"] / 2.0
+        else:
+            r = spec.get("diameter", self.COPPER_PAD_DIAMETER) / 2.0
+            hx = hy = r
+        return p.x - hx, p.x + hx, p.y - hy, p.y + hy
+
+    def _silk_line_segments(self, y_line: float, x_min: float, x_max: float,
+                            line_thickness: float) -> List[tuple]:
+        """Clip a horizontal silk line clear of every pad (FP-07).
+
+        Returns the (x0, x1) spans of the line at ``y_line`` that stay at least
+        SILK_PAD_CLEARANCE from all pads. On dual-row packages no pad reaches the
+        top/bottom edge, so the full line is returned unchanged; on quad packages
+        the line is broken around the top/bottom pad columns — a broken outline
+        is correct output, not a flaw.
+        """
+        # Clip a hair beyond the 0.20 mm minimum so the result clears the
+        # boundary robustly (float noise) with real margin, not exactly on it.
+        clr = self.SILK_PAD_CLEARANCE + 0.03
+        band_lo = y_line - line_thickness / 2.0 - clr
+        band_hi = y_line + line_thickness / 2.0 + clr
+
+        forbidden = []
+        for p in self.pin_positions:
+            px0, px1, py0, py1 = self._pad_bbox(p)
+            if py1 > band_lo and py0 < band_hi:            # pad sits under the line
+                forbidden.append((px0 - clr, px1 + clr))
+
+        segments = [(x_min, x_max)]
+        for fa, fb in forbidden:
+            nxt = []
+            for a, b in segments:
+                if fb <= a or fa >= b:                     # no overlap
+                    nxt.append((a, b))
+                    continue
+                if a < fa:
+                    nxt.append((a, fa))                    # keep the clear left part
+                if fb < b:
+                    nxt.append((fb, b))                    # keep the clear right part
+            segments = nxt
+        # Drop slivers too small to print as a legend line.
+        return [(a, b) for a, b in segments if (b - a) > line_thickness]
 
     def _apply_extracted_dims(self, dims: Dict[str, Any]) -> None:
         """Override SchematicParameters fields with extracted PDF dimensions."""
@@ -419,14 +574,19 @@ class PcbFootprintBuilder:
             name="BodyLine_Right", color=self.YELLOW_COLOR)
         body_assy.add(fab_layer, name="fab_layer")
 
-        # 2. silk_layer - Top/bottom only (avoids pin areas on left/right for DIP)
+        # 2. silk_layer - top/bottom outline lines, clipped clear of any pads
+        # they cross (FP-07). Dual-row parts keep the full lines; quad parts get
+        # a broken outline around the top/bottom pad columns.
         silk_layer = cq.Assembly(name="silk_layer")
-        silk_layer.add(
-            cq.Workplane("XY").center(0, silk_hh).rect(silk_hw * 2, line_thickness).extrude(line_height),
-            name="BodyLine_Top", color=self.WHITE_COLOR)
-        silk_layer.add(
-            cq.Workplane("XY").center(0, -silk_hh).rect(silk_hw * 2, line_thickness).extrude(line_height),
-            name="BodyLine_Bottom", color=self.WHITE_COLOR)
+        for label, y_line in (("Top", silk_hh), ("Bottom", -silk_hh)):
+            segments = self._silk_line_segments(y_line, -silk_hw, silk_hw, line_thickness)
+            for i, (a, b) in enumerate(segments):
+                # Unique construction names; normalize_pcb_footprint_bodyline_names
+                # collapses them all back to "BodyLine" in the saved GLB.
+                seg_name = f"BodyLine_{label}" if len(segments) == 1 else f"BodyLine_{label}_{i}"
+                silk_layer.add(
+                    cq.Workplane("XY").center((a + b) / 2.0, y_line).rect(b - a, line_thickness).extrude(line_height),
+                    name=seg_name, color=self.WHITE_COLOR)
         body_assy.add(silk_layer, name="silk_layer")
 
         # 3. crtyd_layer - Complete outline (4 lines), larger clearance box
@@ -552,15 +712,27 @@ class PcbFootprintBuilder:
 
         x, y = pin1_pos.x, pin1_pos.y
 
-        # Silk layer marker
-        silk_marker = cq.Workplane("XY").center(x, y).circle(
+        # FP-07 / FP-08: the SILK pin-1 marker must be clear of every solderable
+        # pad. Place it just OUTSIDE the courtyard, in pin 1's corner, so silk
+        # clipping can never erase it and it can never overlap copper. (The fab
+        # marker below stays at the pad — the fabrication layer is documentation,
+        # not silkscreen, and is not subject to the 0.20 mm silk-to-pad rule.)
+        _, _, _, _, crtyd_hw, crtyd_hh = self._layer_half_dims()
+        gap = self.SILK_MARKER_CLEARANCE + self.SILK_MARKER_RADIUS
+        sx = -1.0 if x <= 0 else 1.0
+        sy = 1.0 if y >= 0 else -1.0
+        silk_x = sx * (crtyd_hw + gap)
+        silk_y = sy * (crtyd_hh + gap)
+
+        # Silk layer marker (outside the courtyard, pin-1 corner)
+        silk_marker = cq.Workplane("XY").center(silk_x, silk_y).circle(
             self.SILK_MARKER_RADIUS
         ).extrude(self.SILK_MARKER_HEIGHT)
         silk_marker_assy = cq.Assembly(name="silk_firstPinMarker")
         silk_marker_assy.add(silk_marker, color=self.WHITE_COLOR)
         markers_assy.add(silk_marker_assy)
 
-        # Fab layer marker
+        # Fab layer marker (documentation — stays at the pad)
         fab_marker = cq.Workplane("XY").center(x, y).circle(
             self.SILK_MARKER_RADIUS
         ).extrude(self.SILK_MARKER_HEIGHT)
@@ -644,10 +816,12 @@ class PcbFootprintBuilder:
             # along the lead direction); otherwise the legacy circles.
             spec = self.pad_spec
             if spec["shape"] == "rect":
+                # Corner pads may carry a shortened length (FP-14 relief).
+                length = self._pad_length_override.get(pin_number, spec["length"])
                 if pin_pos.side in ("top", "bottom"):
-                    pad_x, pad_y = spec["width"], spec["length"]
+                    pad_x, pad_y = spec["width"], length
                 else:
-                    pad_x, pad_y = spec["length"], spec["width"]
+                    pad_x, pad_y = length, spec["width"]
 
                 solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
                     x, y
@@ -850,6 +1024,7 @@ class PcbFootprintBuilder:
                         pos.pin_number: pos.side for pos in self.pin_positions
                     },
                     dims_source=self.dims_source,
+                    component_height=self.component_height,
                 )
                 logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:

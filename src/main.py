@@ -27,7 +27,7 @@ from .schematic_generator import (
     pin_data_to_builder_format,
 )
 from .utils import PackageDetector
-from .models import PinData, Pin, PackageInfo
+from .models import PinData, Pin, PackageInfo, ComponentRecord
 from .exceptions import (
     ValidationError, ErrorCodes, APICredentialsError, DatasheetParserError,
     LLMExtractionError, SchematicGenerationError,
@@ -1152,6 +1152,24 @@ def flag_module_footprint(
             print(f"  Module detected: {reason}")
 
 
+def _builder_inputs_from_record(
+    record: ComponentRecord,
+    pin_data: PinData,
+    extracted_dims=None,
+):
+    """Phase 2 builder boundary: refresh the canonical ComponentRecord from the
+    enriched legacy ``pin_data`` (+dims) and reconstruct, via the compatibility
+    layer, the exact legacy ``PinData`` / ``extracted_dims`` the builders consume.
+
+    This is pure plumbing: ``to_pin_data()`` / ``to_flat_dims()`` reproduce the
+    legacy inputs 1:1 (dims are a lossless passthrough), so generated output is
+    unchanged. Returns ``(pin_data, extracted_dims)``.
+    """
+    record.update_from_pin_data(pin_data, extracted_dims if extracted_dims else None)
+    dims = record.selected_mechanical().to_flat_dims() if extracted_dims else extracted_dims
+    return record.to_pin_data(), dims
+
+
 def process_datasheet(
     input_path: Path,
     output_path: Path,
@@ -1217,6 +1235,13 @@ def process_datasheet(
             verbose,
             part_number=resolved_part_number,
             force_best_effort=force_best_effort,
+        )
+
+        # Phase 2: build the canonical ComponentRecord at the extraction seam.
+        # It is refreshed at the builder boundary; the legacy pin_data continues
+        # to drive the existing enrichment/control flow unchanged.
+        component_record = ComponentRecord.from_pin_data(
+            pin_data, part_number=resolved_part_number
         )
 
         # Ground the ordered variant in the datasheet's own ordering table and
@@ -1324,11 +1349,21 @@ def process_datasheet(
                 if verbose:
                     print(f"[DimensionExtractor] Skipping: {e}")
 
+            # Phase 2: builders consume the record-reconstructed legacy inputs.
+            builder_pin_data, extracted_dims = _builder_inputs_from_record(
+                component_record, pin_data, extracted_dims
+            )
+            package_type, pin_count, _, pin_data_list = pin_data_to_builder_format(
+                builder_pin_data,
+                part_number=resolved_part_number,
+                package_index=package_index,
+            )
+
             degraded: List[str] = []
             result = build_pcb_2d_schematic(
                 package_type=package_type,
                 pin_count=pin_count,
-                component_name=pin_data.component_name,
+                component_name=builder_pin_data.component_name,
                 pin_data=pin_data_list,
                 output_path=str(output_path),
                 custom_layout=custom_layout,
@@ -1337,13 +1372,16 @@ def process_datasheet(
             )
             _record_degraded(pin_data, degraded)
         else:
-            # 3D mode - adapter handles both formats
+            # 3D mode - adapter handles both formats. Builders consume the
+            # record-reconstructed legacy pin_data (Phase 2).
+            builder_pin_data, _ = _builder_inputs_from_record(component_record, pin_data)
             result = build_schematic_from_pin_data(
-                pin_data=pin_data,
+                pin_data=builder_pin_data,
                 output_path=str(output_path),
                 custom_layout=custom_layout,
                 part_number=resolved_part_number,
                 package_index=package_index,
+                record=component_record,
             )
 
         if not result:
@@ -1393,7 +1431,8 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
                             package_index: Optional[int] = None,
                             verbose: bool = False,
                             extracted_dims=None,
-                            emit_body_3d: bool = False) -> bool:
+                            emit_body_3d: bool = False,
+                            record: Optional[ComponentRecord] = None) -> bool:
     """Run both schematic and PCB footprint builders on already-extracted pin data.
 
     Args:
@@ -1424,6 +1463,7 @@ def process_datasheet_both(pin_data: PinData, output_path: Path,
             custom_layout=custom_layout,
             part_number=part_number,
             package_index=package_index,
+            record=record,
         ))
         if verbose:
             print(f"Schematic: {schematic_str}")
@@ -1710,6 +1750,10 @@ def _run_cli():
                 part_number=resolved_part_number,
                 force_best_effort=effective_best_effort,
             )
+            # Phase 2: canonical ComponentRecord built at the extraction seam.
+            component_record = ComponentRecord.from_pin_data(
+                pin_data, part_number=resolved_part_number
+            )
             # Ground the ordered variant in the datasheet's ordering table
             # (also applied in single-output mode via process_datasheet).
             apply_ordering_ground_truth(
@@ -1766,6 +1810,13 @@ def _run_cli():
             print(f"Warning: dimension extraction skipped ({e}); "
                   "JEDEC family defaults will be used.")
 
+        # Phase 2: the record is canonical from here; reconstruct the legacy
+        # PinData/extracted_dims the builders + watermark consume via the compat
+        # layer. Byte-identical to the legacy inputs, so output is unchanged.
+        pin_data, extracted_dims = _builder_inputs_from_record(
+            component_record, pin_data, extracted_dims
+        )
+
         success = process_datasheet_both(
             pin_data=pin_data,
             output_path=output_path,
@@ -1774,6 +1825,7 @@ def _run_cli():
             verbose=args.verbose,
             extracted_dims=extracted_dims,
             emit_body_3d=args.body_3d,
+            record=component_record,
         )
         if not success:
             sys.exit(EXIT_DOMAIN_FAILURE)
