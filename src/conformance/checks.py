@@ -1141,6 +1141,92 @@ def check_provenance_recorded(ctx: PartContext) -> _Outcome:
                     measured=",".join(kinds))
 
 
+# ---------------------------------------------------------------------------
+# V-02 (footprint dims match datasheet) — build-time verdict, not a static check.
+# The on-disk harness has no datasheet reference, so V-02 is graded where the
+# driver holds BOTH the extracted dims and the produced footprint (mirrors V-03).
+# ---------------------------------------------------------------------------
+def measure_footprint_dims(gltf) -> Optional[Dict[str, float]]:
+    """Realized footprint geometry from the GLB, orientation-independent.
+
+    Returns pad ``pitch`` (e), pad-centre column span ``row_span`` (= E - L),
+    and fab-outline extents along the pin-run and cross axes (``fab_run`` = D,
+    ``fab_cross`` = E1), all in mm — or None when there aren't enough pads.
+    """
+    world = _world_matrices(gltf)
+    pads = _copper_pad_boxes(gltf, world)
+    if len(pads) < 4:
+        return None
+    boxes = list(pads.values())
+    a0, a1 = _board_axes(boxes)
+    centers = np.array([[(b[0][a0] + b[1][a0]) / 2, (b[0][a1] + b[1][a1]) / 2] for b in boxes])
+
+    def n_clusters(vals: np.ndarray, tol: float = 0.3) -> int:
+        return 1 + int(np.sum(np.diff(np.sort(vals)) > tol))
+
+    # The pin-run axis has many pad clusters (one per pin per side); the cross
+    # axis has ~2 (the two columns). Robust to which in-plane axis is which.
+    run = 0 if n_clusters(centers[:, 0]) >= n_clusters(centers[:, 1]) else 1
+    cross = 1 - run
+
+    coords = np.sort(centers[:, run])
+    diffs = np.diff(coords)
+    diffs = diffs[diffs > 1e-3]           # both columns share run coords -> drop 0s
+    pitch = float(np.median(diffs)) if len(diffs) else float("nan")
+
+    cvals = centers[:, cross]
+    cmed = float(np.median(cvals))
+    lo, hi = cvals[cvals < cmed], cvals[cvals >= cmed]
+    row_span = float(abs(np.mean(hi) - np.mean(lo))) if len(lo) and len(hi) else float("nan")
+
+    fab_run = fab_cross = float("nan")
+    root = _root(gltf)
+    body = _find_child(gltf, root, "Body") if root is not None else None
+    fab = _find_child(gltf, body, "fab_layer") if body is not None else None
+    fab_box = _subtree_aabb3(gltf, fab, world) if fab is not None else None
+    if fab_box:
+        run_axis, cross_axis = (a0, a1) if run == 0 else (a1, a0)
+        fab_run = float(fab_box[1][run_axis] - fab_box[0][run_axis])
+        fab_cross = float(fab_box[1][cross_axis] - fab_box[0][cross_axis])
+
+    return {"pitch": pitch, "row_span": row_span, "fab_run": fab_run, "fab_cross": fab_cross}
+
+
+def footprint_dims_verdict(
+    glb_path: str, extracted_dims: Dict[str, float], tol: float = 0.10,
+) -> Optional[Tuple[bool, str]]:
+    """V-02 verdict: does the built footprint realize the datasheet dims?
+
+    Compares the reliably-measurable geometry against ``extracted_dims``:
+    pad pitch -> e, pad-column span -> (E - L, the IPC-7351 inset), fab length
+    -> D/D1, fab width -> E1. Pad size (IPC-expanded) and lead-span E (not drawn
+    directly) are intentionally not compared. Returns ``(ok, message)`` or None
+    when nothing comparable is present.
+    """
+    if GLTF2 is None:
+        return None
+    m = measure_footprint_dims(GLTF2().load_binary(glb_path))
+    if m is None:
+        return None
+    ed = extracted_dims
+    checks: List[Tuple[str, float, float, float]] = []  # label, measured, expected, tol
+    if ed.get("e") is not None:
+        checks.append(("e", m["pitch"], float(ed["e"]), tol))
+    if ed.get("E") is not None and ed.get("L") is not None:
+        checks.append(("E-L", m["row_span"], float(ed["E"]) - float(ed["L"]), max(tol, 0.15)))
+    d_out = ed.get("D1") or ed.get("D")
+    if d_out is not None and not math.isnan(m["fab_run"]):
+        checks.append(("D", m["fab_run"], float(d_out), 0.30))
+    if ed.get("E1") is not None and not math.isnan(m["fab_cross"]):
+        checks.append(("E1", m["fab_cross"], float(ed["E1"]), 0.30))
+    if not checks:
+        return None
+    bad = [f"{lbl} {got:.2f}!={exp:.2f}" for lbl, got, exp, t in checks if abs(got - exp) > t]
+    if bad:
+        return False, "footprint dims off datasheet: " + ", ".join(bad)
+    return True, f"footprint matches datasheet ({len(checks)} dims within tol)"
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")

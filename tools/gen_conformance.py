@@ -94,9 +94,20 @@ def generate_family(fx: FamilyFixture, out_dir: Path) -> tuple:
             component_name=fx.component_name,
             pin_data=pins_for_builder,
             output_path=str(footprint),
+            extracted_dims=fx.extracted_dims,
         )
         if ok and footprint.is_file():
             produced["footprint"] = str(footprint)
+            # V-02: when the fixture carries datasheet dims, grade the built
+            # footprint against them (build-time verdict; UNRUN otherwise).
+            if fx.extracted_dims:
+                from src.conformance.checks import footprint_dims_verdict
+                verdict = footprint_dims_verdict(str(footprint), fx.extracted_dims)
+                if verdict is not None:
+                    passed, msg = verdict
+                    build_results["V-02"] = (
+                        CheckStatus.PASS if passed else CheckStatus.FAIL, msg,
+                    )
     except Exception as e:
         print(f"  [{fx.key}] footprint refused/failed: {e}")
 
@@ -105,7 +116,8 @@ def generate_family(fx: FamilyFixture, out_dir: Path) -> tuple:
     pad_map = None
     if "footprint" in produced:
         try:
-            fb = PcbFootprintBuilder(fx.package_type, fx.pin_count, fx.component_name)
+            fb = PcbFootprintBuilder(fx.package_type, fx.pin_count, fx.component_name,
+                                     extracted_dims=fx.extracted_dims)
             pad_map = {str(p.pin_number): (p.x, p.y) for p in fb.pin_positions}
         except Exception:
             pad_map = None
@@ -116,7 +128,7 @@ def generate_family(fx: FamilyFixture, out_dir: Path) -> tuple:
             package_type=fx.package_type,
             pin_count=fx.pin_count,
             component_name=fx.component_name,
-            extracted_dims=None,
+            extracted_dims=fx.extracted_dims,
             output_base=str(body_base),
             footprint_pad_map=pad_map,
         )

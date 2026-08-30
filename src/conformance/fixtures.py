@@ -25,6 +25,9 @@ class FamilyFixture:
     component_name: str
     lead_style: str                # informational: expected body template
     pins: List[Dict[str, str]] = field(default_factory=list)
+    # Optional synthetic datasheet dims (flat e/E/D/b/L...) to exercise V-02
+    # deterministically — the built footprint must realize these values.
+    extracted_dims: Optional[Dict[str, float]] = None
 
 
 def _pins(n: int) -> List[Dict[str, str]]:
@@ -57,6 +60,10 @@ FIXTURES: List[FamilyFixture] = [
     # Functional-grouping fixture (SYM-04): explicit roles => clears the gate,
     # symbol is laid out by function. Same SOIC-8 geometry as soic8 otherwise.
     FamilyFixture("func8",   "SOIC-8",    8,  "GEN_FUNC8",   "gullwing",     _FUNC8_PINS),
+    # V-02 fixture: SOIC-16 with real datasheet dims (74HC595, TI) so the built
+    # footprint can be graded against them. Deterministic — no extraction.
+    FamilyFixture("soic16d", "SOIC-16",   16, "GEN_SOIC16D", "gullwing",     _pins(16),
+                  extracted_dims={"e": 1.27, "E": 10.325, "D": 9.90, "b": 0.41, "L": 0.835}),
     FamilyFixture("soic16",  "SOIC-16",   16, "GEN_SOIC16",  "gullwing",     _pins(16)),
     FamilyFixture("sop16",   "SOP-16",    16, "GEN_SOP16",   "gullwing",     _pins(16)),
     FamilyFixture("ssop20",  "SSOP-20",   20, "GEN_SSOP20",  "gullwing",     _pins(20)),
