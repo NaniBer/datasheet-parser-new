@@ -1,0 +1,32 @@
+# Keep the build context tiny — only src + packaging metadata are needed.
+.git
+.venv
+venv
+**/__pycache__
+*.pyc
+*.pyo
+
+# Large generated / data dirs (never needed in the image)
+api_jobs
+generated_output
+output
+eval_output
+datasheets
+preview_glbs
+pdfs
+tests
+docs
+
+# Artifacts
+*.glb
+*.step
+*.stl
+*.obj
+*.zip
+
+# Secrets / local
+.env
+.claude
+*.log
+daily_log.md
+*_review*.md
