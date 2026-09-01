@@ -85,6 +85,8 @@ class PcbFootprintBuilder:
     SILK_MARGIN_Y = 0.12   # silk extends this far beyond fab on Y (= LINE_THICKNESS)
     SILK_PAD_CLEARANCE = 0.20  # mm, min silk-to-pad clearance (FP-07/IPC-2612)
     CRTYD_MARGIN_Y = 0.25  # crtyd clearance beyond body/pads (both axes)
+    FAB_PAD_CLEARANCE = 0.05  # mm, keep the fab/body outline this far off pads
+    _MIN_FAB_HALF = 0.40   # mm, floor so a clamped fab outline never collapses
 
     def __init__(self, package_type: str, pin_count: int, component_name: str = "IC",
                  custom_layout: Optional[Dict[str, List[int]]] = None,
@@ -499,6 +501,30 @@ class PcbFootprintBuilder:
             max_y = max(max_y, abs(pos.y) + yd / 2)
         return max_x, max_y
 
+    def _pad_inner_extents(self) -> tuple:
+        """Innermost pad edge toward centre, per axis (QC T-2D-2).
+
+        Only side pads constrain a given axis — left/right pads bound X, top/
+        bottom pads bound Y — so the body/fab outline can be kept inside the pad
+        ring without a top/bottom pad (small |x|) collapsing the X bound. Returns
+        ``(inner_x, inner_y)``; ``inf`` when no pad constrains that axis.
+        """
+        spec = self.pad_spec
+        inner_x = inner_y = float("inf")
+        for pos in self.pin_positions:
+            if spec["shape"] == "rect":
+                if pos.side in ("top", "bottom"):
+                    xd, yd = spec["width"], spec["length"]
+                else:
+                    xd, yd = spec["length"], spec["width"]
+            else:
+                xd = yd = spec["diameter"]
+            if pos.side in ("left", "right"):
+                inner_x = min(inner_x, abs(pos.x) - xd / 2)
+            elif pos.side in ("top", "bottom"):
+                inner_y = min(inner_y, abs(pos.y) - yd / 2)
+        return inner_x, inner_y
+
     def _layer_half_dims(self) -> tuple:
         """Half-dimensions of fab, silk and courtyard layers.
 
@@ -507,6 +533,18 @@ class PcbFootprintBuilder:
         """
         fab_hw = self.fab_outline_width / 2
         fab_hh = self.fab_outline_length / 2
+        # QC T-2D-2: keep the fab/body outline INSIDE the pad ring so the yellow
+        # line never crosses a pad. Clamp each axis just inside the innermost pad
+        # edge (accounting for the line's own half-thickness). Leadless families,
+        # whose body is as wide as the pad span, get a slightly-inset outline —
+        # the accepted convention here (a crossing outline is worse than a
+        # marginally-small one). Guard against collapsing to nothing.
+        inner_x, inner_y = self._pad_inner_extents()
+        margin = self.LINE_THICKNESS / 2.0 + self.FAB_PAD_CLEARANCE
+        if inner_x != float("inf"):
+            fab_hw = min(fab_hw, max(inner_x - margin, self._MIN_FAB_HALF))
+        if inner_y != float("inf"):
+            fab_hh = min(fab_hh, max(inner_y - margin, self._MIN_FAB_HALF))
         silk_hw = fab_hw
         silk_hh = fab_hh + self.SILK_MARGIN_Y
         pad_x, pad_y = self._pad_extents()
@@ -712,28 +750,26 @@ class PcbFootprintBuilder:
 
         x, y = pin1_pos.x, pin1_pos.y
 
-        # FP-07 / FP-08: the SILK pin-1 marker must be clear of every solderable
-        # pad. Place it just OUTSIDE the courtyard, in pin 1's corner, so silk
-        # clipping can never erase it and it can never overlap copper. (The fab
-        # marker below stays at the pad — the fabrication layer is documentation,
-        # not silkscreen, and is not subject to the 0.20 mm silk-to-pad rule.)
+        # QC F3 / FP-08: BOTH pin-1 markers (silk and fab) sit OUTSIDE the
+        # courtyard in pin 1's corner (top-left for a standard part), clear of
+        # every solderable pad — the pointer must never land on copper.
         _, _, _, _, crtyd_hw, crtyd_hh = self._layer_half_dims()
         gap = self.SILK_MARKER_CLEARANCE + self.SILK_MARKER_RADIUS
         sx = -1.0 if x <= 0 else 1.0
         sy = 1.0 if y >= 0 else -1.0
-        silk_x = sx * (crtyd_hw + gap)
-        silk_y = sy * (crtyd_hh + gap)
+        marker_x = sx * (crtyd_hw + gap)
+        marker_y = sy * (crtyd_hh + gap)
 
         # Silk layer marker (outside the courtyard, pin-1 corner)
-        silk_marker = cq.Workplane("XY").center(silk_x, silk_y).circle(
+        silk_marker = cq.Workplane("XY").center(marker_x, marker_y).circle(
             self.SILK_MARKER_RADIUS
         ).extrude(self.SILK_MARKER_HEIGHT)
         silk_marker_assy = cq.Assembly(name="silk_firstPinMarker")
         silk_marker_assy.add(silk_marker, color=self.WHITE_COLOR)
         markers_assy.add(silk_marker_assy)
 
-        # Fab layer marker (documentation — stays at the pad)
-        fab_marker = cq.Workplane("XY").center(x, y).circle(
+        # Fab layer marker — same outside corner, off copper (QC F3).
+        fab_marker = cq.Workplane("XY").center(marker_x, marker_y).circle(
             self.SILK_MARKER_RADIUS
         ).extrude(self.SILK_MARKER_HEIGHT)
         fab_marker_assy = cq.Assembly(name="fab_firstPinMarker")

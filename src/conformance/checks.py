@@ -286,7 +286,13 @@ def check_footprint_layers_present(ctx: PartContext) -> _Outcome:
 
 
 def check_pin1_marker_present(ctx: PartContext) -> _Outcome:
-    """FP-08: a pin-1 marker exists on both silk and assembly (fab) layers."""
+    """FP-08 / QC F3: pin-1 marker on both silk + fab, and BOTH clear of copper.
+
+    Presence on silk and fab, plus a position guard: neither marker may overlap a
+    solderable pad (the pointer belongs outside the body, in pin 1's corner). The
+    off-copper check is what QC F3 requires — it keeps a future change from
+    dropping a marker back onto a pad.
+    """
     miss = _need_glb(ctx, "footprint")
     if miss:
         return miss
@@ -295,14 +301,26 @@ def check_pin1_marker_present(ctx: PartContext) -> _Outcome:
     marker = _find_child(g, root, "FirstPinMarker") if root is not None else None
     if marker is None:
         return _Outcome(CheckStatus.FAIL, "no FirstPinMarker node")
-    has_silk = _find_child(g, marker, "silk_firstPinMarker") is not None
-    has_fab = _find_child(g, marker, "fab_firstPinMarker") is not None
-    if has_silk and has_fab:
-        return _Outcome(CheckStatus.PASS, "pin-1 marker on silk + fab")
-    return _Outcome(
-        CheckStatus.FAIL,
-        f"pin-1 marker incomplete (silk={has_silk}, fab={has_fab})",
-    )
+    silk = _find_child(g, marker, "silk_firstPinMarker")
+    fab = _find_child(g, marker, "fab_firstPinMarker")
+    if silk is None or fab is None:
+        return _Outcome(CheckStatus.FAIL,
+                        f"pin-1 marker incomplete (silk={silk is not None}, fab={fab is not None})")
+    # Position guard: both markers must be clear of every copper pad.
+    world = _world_matrices(g)
+    pads = _copper_pad_boxes(g, world)
+    if pads:
+        axes = _board_axes(list(pads.values()))
+        for name, node in (("silk", silk), ("fab", fab)):
+            box = _subtree_aabb3(g, node, world)
+            if box is None:
+                continue
+            worst = min(_planar_clearance(box, pad, axes) for pad in pads.values())
+            if worst < 0:
+                return _Outcome(CheckStatus.FAIL,
+                                f"{name} pin-1 marker overlaps a pad (depth {abs(worst):.3f} mm)",
+                                measured=f"{worst:.3f} mm")
+    return _Outcome(CheckStatus.PASS, "pin-1 marker on silk + fab, both clear of copper")
 
 
 def _copper_pad_boxes(g, world) -> Dict[str, Box]:
@@ -1275,6 +1293,62 @@ def check_transform_locked(ctx: PartContext) -> _Outcome:
     return _Outcome(CheckStatus.PASS, f"rotation locked on {kinds}", measured=",".join(kinds))
 
 
+def _fab_boxes(g, world) -> List[Box]:
+    """One 3D AABB per fab-layer object (each BodyLine + the fab pin-1 marker)."""
+    root = _root(g)
+    boxes: List[Box] = []
+    if root is None:
+        return boxes
+    body = _find_child(g, root, "Body")
+    if body is not None:
+        fab = _find_child(g, body, "fab_layer")
+        if fab is not None:
+            for obj in (g.nodes[fab].children or []):
+                b = _subtree_aabb3(g, obj, world)
+                if b:
+                    boxes.append(b)
+    marker = _find_child(g, root, "FirstPinMarker")
+    if marker is not None:
+        fm = _find_child(g, marker, "fab_firstPinMarker")
+        if fm is not None:
+            b = _subtree_aabb3(g, fm, world)
+            if b:
+                boxes.append(b)
+    return boxes
+
+
+def check_fab_pad_clearance(ctx: PartContext) -> _Outcome:
+    """FP-19 (QC T-2D-2): the fab/body outline never crosses a copper pad.
+
+    The yellow fab outline must sit inside the pad ring, not over the pads. We
+    require no overlap between any fab object (body outline lines, fab pin-1
+    marker) and any copper pad; touching (0 mm) is allowed, crossing is not.
+    """
+    miss = _need_glb(ctx, "footprint")
+    if miss:
+        return miss
+    g = ctx.glb("footprint")
+    world = _world_matrices(g)
+    pads = _copper_pad_boxes(g, world)
+    fab = _fab_boxes(g, world)
+    if not pads or not fab:
+        return _Outcome(CheckStatus.UNRUN, f"no {'pads' if not pads else 'fab'} geometry")
+    axes = _board_axes(list(pads.values()) + fab)
+    worst = math.inf
+    worst_desc = ""
+    for pin, pad in pads.items():
+        for i, fb in enumerate(fab):
+            gap = _planar_clearance(fb, pad, axes)
+            if gap < worst:
+                worst, worst_desc = gap, f"fab#{i}->pad{pin}"
+    measured = f"min gap {worst:.3f} mm ({worst_desc})"
+    if worst < -1e-3:
+        return _Outcome(CheckStatus.FAIL,
+                        f"fab outline crosses a pad; worst {worst:.3f} mm ({worst_desc})",
+                        measured=measured, threshold=">= 0 mm")
+    return _Outcome(CheckStatus.PASS, measured, measured=measured, threshold=">= 0 mm")
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -1309,5 +1383,6 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "every_object_layer_id": check_every_object_layer_id,
     "provenance_recorded": check_provenance_recorded,
     "transform_locked": check_transform_locked,
+    "fab_pad_clearance": check_fab_pad_clearance,
     "report_emitted": check_report_emitted,
 }

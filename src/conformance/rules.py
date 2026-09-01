@@ -57,6 +57,7 @@ RULES: List[Rule] = [
     Rule("FP-15", "must", "footprint", "Mask/paste derived from copper", "mask_from_copper"),
     Rule("FP-17", "must", "footprint", "Component height recorded on footprint", "component_height_present"),
     Rule("FP-18", "must", "footprint", "Pick-and-place zero orientation set", "pnp_zero_orientation"),
+    Rule("FP-19", "must", "footprint", "Fab/body outline clear of pads (QC)", "fab_pad_clearance"),
 
     # --- layers ----------------------------------------------------------------
     Rule("LAY-01", "must", "footprint", "Full layer tree generated", "footprint_layers_present"),
