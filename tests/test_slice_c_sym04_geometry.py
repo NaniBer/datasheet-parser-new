@@ -56,9 +56,11 @@ def test_side_assignment_by_role():
     pins = [_d(1, "VCC", "supply"), _d(2, "GND", "ground"), _d(3, "CLK", "clock"),
             _d(4, "RST", "reset"), _d(5, "OUT", "output"), _d(6, "IO0", "io")]
     lay = functional_side_layout(pins)
-    assert "1" in lay["top"] and "2" in lay["bottom"]
-    assert [n for n in lay["left"] if n] == ["3", "4"]      # clock before reset
-    assert [n for n in lay["right"] if n] == ["5", "6"]     # output before io
+    # SnapEDA: supply/output/ground on the right; control/inputs/io on the left.
+    assert "1" in lay["right"] and "2" in lay["right"]      # supply + ground right
+    assert not lay["top"] and not lay["bottom"]             # top/bottom unused
+    assert [n for n in lay["left"] if n] == ["3", "4", "6"]   # clock, reset, io
+    assert [n for n in lay["right"] if n] == ["1", "5", "2"]  # supply, output, ground
 
 
 def test_blank_between_role_blocks():
@@ -77,24 +79,26 @@ def test_within_block_sorted_by_pin_number():
     assert lay["left"] == ["3", "7"]                        # sorted, no blank
 
 
-def test_nc_clustered_on_bottom_after_ground():
+def test_nc_clustered_on_left_after_placed():
     pins = [_d(1, "VCC", "supply"), _d(2, "GND", "ground"), _d(3, "CLK", "clock"),
             _d(4, "OUT", "output"), _d(5, "NC", nc=True), _d(6, "DNC", nc=True)]
     lay = functional_side_layout(pins)
-    bottom = lay["bottom"]
-    assert [n for n in bottom if n] == ["2", "5", "6"]      # ground, then NC cluster
-    assert bottom.index("2") < bottom.index(None) < bottom.index("5")
+    # SnapEDA keeps the right column clean (supply/output/ground); NC pins trail
+    # at the BOTTOM of the LEFT column, after the placed clock pin.
+    left = lay["left"]
+    assert [n for n in left if n] == ["3", "5", "6"]        # clock, then NC cluster
+    assert left.index("3") < left.index(None) < left.index("5")
 
 
 def test_shorter_side_centred_by_leading_blanks():
     # 3 left blocks (clock/reset/enable) => left = [3,None,4,None,5] (5 slots);
-    # the lone right pin is centred by floor((5-1)/2)=2 leading blanks.
+    # the 2-block right column (supply/ground => 3 slots) is centred by
+    # floor((5-3)/2)=1 leading blank.
     pins = [_d(1, "VCC", "supply"), _d(2, "GND", "ground"),
-            _d(3, "CLK", "clock"), _d(4, "RST", "reset"), _d(5, "EN", "enable"),
-            _d(6, "OUT", "output")]
+            _d(3, "CLK", "clock"), _d(4, "RST", "reset"), _d(5, "EN", "enable")]
     lay = functional_side_layout(pins)
     assert lay["left"] == ["3", None, "4", None, "5"]
-    assert lay["right"] == [None, None, "6"]                # centred in the 5-slot span
+    assert lay["right"] == [None, "1", None, "2"]           # centred in the 5-slot span
 
 
 # ---------------------------------------------------------------------------
@@ -113,8 +117,9 @@ def test_body_sized_to_even_grid_multiples():
     size_functional_body(lay, pins, params)
     assert _is_even_grid(params.body_width)
     assert _is_even_grid(params.body_height)
-    # height driven by the taller of left/right (3 slots incl. blank)
-    assert params.body_height >= (3 - 1) * GRID
+    # height driven by the taller of left/right. SnapEDA: left = clock/reset/io
+    # (5 slots incl. blanks), right = supply/output/ground (5 slots).
+    assert params.body_height >= (5 - 1) * GRID
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +138,8 @@ def _gated_pd() -> PinData:
 def test_gated_symbol_sides_match_roles_and_stay_conformant():
     glb = _build(_gated_pd())
     ex = _legs(glb)
-    assert _SIDE[ex["1"]["side"]] == "top"        # supply
-    assert _SIDE[ex["2"]["side"]] == "bottom"     # ground
+    assert _SIDE[ex["1"]["side"]] == "right"      # supply
+    assert _SIDE[ex["2"]["side"]] == "right"      # ground
     assert _SIDE[ex["3"]["side"]] == "left"       # clock
     assert _SIDE[ex["5"]["side"]] == "right"      # output
     ctx = PartContext("x", {"symbol": glb})
@@ -143,7 +148,7 @@ def test_gated_symbol_sides_match_roles_and_stay_conformant():
     assert check_symbol_pin_numbering(ctx).status is CheckStatus.PASS  # SYM-12
 
 
-def test_nc_pins_drawn_and_grouped_bottom():
+def test_nc_pins_drawn_and_grouped_left():
     pd = PinData(
         component_name="Y",
         package=PackageInfo(type="SOIC-8", pin_count=8, width=0, height=0),
@@ -155,7 +160,8 @@ def test_nc_pins_drawn_and_grouped_bottom():
     ex = _legs(glb)
     assert set(ex.keys()) == {str(i) for i in range(1, 9)}   # V-01 proxy: none dropped
     assert ex["3"]["nc"] is True and ex["4"]["nc"] is True
-    assert _SIDE[ex["3"]["side"]] == "bottom" and _SIDE[ex["4"]["side"]] == "bottom"
+    # SnapEDA: NC pins trail at the bottom of the LEFT column.
+    assert _SIDE[ex["3"]["side"]] == "left" and _SIDE[ex["4"]["side"]] == "left"
     ctx = PartContext("x", {"symbol": glb})
     assert check_functional_grouping(ctx).status is CheckStatus.PASS
     assert check_symbol_grid(ctx).status is CheckStatus.PASS
