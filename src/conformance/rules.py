@@ -32,6 +32,9 @@ RULES: List[Rule] = [
     Rule("V-03", "must", "cross", "3D model aligns to footprint (origin, leads, height)", None),
     Rule("V-05", "must", "meta", "Machine-readable validation report emitted", "report_emitted"),
 
+    # --- viewer / interaction (house rules from QC review) ---------------------
+    Rule("UI-01", "must", "cross", "Symbol & footprint locked to top-view (not rotatable)", "transform_locked"),
+
     # --- schematic symbol ------------------------------------------------------
     Rule("SYM-01", "must", "symbol", "Layout does not follow physical pin order", "layout_not_physical"),
     Rule("SYM-02", "must", "symbol", "Every pin endpoint on the 2.54 mm grid", "symbol_grid"),

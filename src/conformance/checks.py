@@ -1252,6 +1252,29 @@ def refdes_prefix_verdict(
     return False, f"designator '{value}' != expected '{expected}' for class {device_class!r}"
 
 
+def check_transform_locked(ctx: PartContext) -> _Outcome:
+    """UI-01: the symbol and footprint are flat top-view artifacts — not rotatable.
+
+    Each present symbol/footprint Package root must carry a
+    ``hideTransformControls`` that disables rotation (``rotate == "xyz"``), so the
+    frontend can't spin a 2D symbol/footprint out of plane. Translation/drag is
+    intentionally left available for placement. SKIP when neither artifact exists.
+    """
+    kinds = [k for k in ("symbol", "footprint") if ctx.has(k)]
+    if not kinds:
+        return _Outcome(CheckStatus.SKIP, "no symbol/footprint artifact")
+    bad = []
+    for kind in kinds:
+        g = ctx.glb(kind)
+        root = _root(g)
+        htc = (g.nodes[root].extras or {}).get("hideTransformControls") if root is not None else None
+        if not isinstance(htc, dict) or htc.get("rotate") != "xyz":
+            bad.append(kind)
+    if bad:
+        return _Outcome(CheckStatus.FAIL, f"root not rotation-locked on: {bad}")
+    return _Outcome(CheckStatus.PASS, f"rotation locked on {kinds}", measured=",".join(kinds))
+
+
 def check_report_emitted(ctx: PartContext) -> _Outcome:
     """V-05: a machine-readable report exists — true by construction here."""
     return _Outcome(CheckStatus.PASS, "conformance report generated")
@@ -1285,5 +1308,6 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "component_height_present": check_component_height_present,
     "every_object_layer_id": check_every_object_layer_id,
     "provenance_recorded": check_provenance_recorded,
+    "transform_locked": check_transform_locked,
     "report_emitted": check_report_emitted,
 }

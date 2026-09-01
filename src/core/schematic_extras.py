@@ -20,6 +20,9 @@ except ImportError:  # pragma: no cover - pygltflib is a hard runtime dep
 
 
 _HIDE_TRANSFORM_CONTROLS = {"translate": "xyz", "rotate": "xyz", "scale": "xyz"}
+# The whole symbol is a flat top-view artifact: it must never be rotated or
+# scaled (translation/drag stays allowed for placement). Locked on the root.
+_LOCK_ROTATION = {"rotate": "xyz", "scale": "xyz"}
 _LABEL_TEXT_SIZE = 1.27
 
 
@@ -287,6 +290,7 @@ def inject_schematic_extras(
             "viewType": "schematic",
             "originalName": "Package",
             "renderOrder": 0,
+            "hideTransformControls": _LOCK_ROTATION,  # not rotatable/scalable
         },
     )
 

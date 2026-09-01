@@ -397,6 +397,9 @@ def inject_pcb_footprint_extras(
                 "dragEffect": True,
                 "originalName": "Package",
                 "renderOrder": 0,
+                # The footprint is a flat top-view artifact: never rotated or
+                # scaled (drag/placement stays allowed). Locked on the root.
+                "hideTransformControls": {"rotate": "xyz", "scale": "xyz"},
                 # FP-18: pick-and-place zero orientation. A fixed convention —
                 # 0 deg with pin 1 as the reference — so assembly has a defined
                 # placement datum. Deterministic; no datasheet input needed.
