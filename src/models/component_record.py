@@ -61,11 +61,14 @@ ROLE_ALIASES = {
     "gnd": "ground", "vss": "ground", "analog_io": "analog",
     "no_connect": "nc", "dnc": "nc", "reserved": "nc", "": "other",
 }
+# SnapEDA convention (QC S1): everything is LEFT or RIGHT (no top/bottom). The
+# RIGHT column carries power/outputs/ground/thermal (VCC upper, outputs middle,
+# GND lower); the LEFT column carries control, inputs, I/O, data/analog, other.
 ROLE_SIDE = {
-    "supply": "top", "ground": "bottom", "thermal": "bottom",
-    "input": "left", "clock": "left", "reset": "left", "enable": "left",
-    "control": "left", "address": "left", "oscillator": "left",
-    "output": "right", "io": "right", "data": "right", "analog": "right",
+    "supply": "right", "ground": "right", "thermal": "right", "output": "right",
+    "input": "left", "io": "left", "data": "left", "analog": "left",
+    "clock": "left", "reset": "left", "enable": "left", "control": "left",
+    "address": "left", "oscillator": "left",
     "nc": "unplaced", "other": "left",
 }
 

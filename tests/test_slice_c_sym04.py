@@ -81,8 +81,9 @@ def test_role_extra_written():
 # --- SYM-04 passes once C.4b lays gated parts out by function -----------------
 def test_sym04_passes_on_functional_layout():
     outcome = check_functional_grouping(PartContext("x", {"symbol": _build(_gated_pd())}))
-    # gate passes -> functional layout (C.4b) groups pins by role: supply on top,
-    # ground on bottom, inputs left, outputs right => grouping satisfied.
+    # gate passes -> functional layout groups pins by role under the SnapEDA
+    # convention: supply/output/ground on the right, control/inputs/io on the
+    # left => grouping satisfied.
     assert outcome.status is CheckStatus.PASS
 
 

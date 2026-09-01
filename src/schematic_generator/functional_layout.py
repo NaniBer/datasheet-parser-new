@@ -1,8 +1,10 @@
 """Functional pin grouping for schematic symbols (spec SYM-04, Slice C.4b).
 
 Turns per-pin functional roles into a ``side -> ordered pin numbers`` layout so a
-symbol reads by function (inputs left, outputs right, power top, ground bottom)
-instead of by physical package order. The result is fed through the existing
+symbol reads by function. Under the SnapEDA convention (QC S1) every pin sits in
+the LEFT or RIGHT column: the right column carries power/outputs/ground/thermal
+(VCC upper, outputs middle, GND lower); the left column carries control, inputs,
+I/O, data/analog and other. The result is fed through the existing
 custom-layout channel in ``pin_layout._layout_custom_pins``; a blank slot is
 represented by ``None`` and consumes one grid step without drawing a pin.
 
@@ -22,11 +24,11 @@ from ..package_types.package_geometry import SCHEMATIC_GRID_MM, _snap_up_even
 # block order, one blank grid slot between consecutive non-empty blocks, and
 # sorted by pin number within a block (pin numbers are incidental to grouping).
 BLOCK_ORDER: Dict[str, List[str]] = {
-    "left":   ["clock", "reset", "enable", "control", "address",
-               "oscillator", "input", "other"],
-    "right":  ["output", "io", "data", "analog"],
-    "top":    ["supply"],
-    "bottom": ["ground", "thermal"],
+    "left":   ["control", "clock", "reset", "enable", "address",
+               "oscillator", "input", "io", "data", "analog", "other"],
+    "right":  ["supply", "output", "ground", "thermal"],
+    "top":    [],
+    "bottom": [],
 }
 
 _MIN_BODY_MM = 4 * SCHEMATIC_GRID_MM   # floor so a tiny part still renders a body
@@ -52,9 +54,10 @@ def functional_side_layout(pins: List[Dict[str, Any]]) -> Dict[str, List[Optiona
     """Build ``side -> [pin-number | None]`` (``None`` = one blank grid slot).
 
     Role-block order per side (Decision A2), one blank between blocks, NC pins
-    clustered as a trailing block on the bottom (or right, if no bottom side is
-    in use), then the shorter of each opposing pair is centred by leading blank
-    padding so both sides share one grid lattice (Decision B).
+    clustered as a trailing block at the bottom of the LEFT column (SnapEDA keeps
+    the right column clean power/outputs/ground), then the shorter of each
+    opposing pair is centred by leading blank padding so both sides share one
+    grid lattice (Decision B).
     """
     layout: Dict[str, List[Optional[str]]] = {"left": [], "right": [], "top": [], "bottom": []}
 
@@ -78,9 +81,11 @@ def functional_side_layout(pins: List[Dict[str, Any]]) -> Dict[str, List[Optiona
                 layout[side].append(None)
             layout[side].extend(_num(p) for p in block)
 
-    # NC cluster: trailing block, never dropped (V-01 / SYM-11).
+    # NC cluster: trailing block, never dropped (V-01 / SYM-11). SnapEDA keeps
+    # the right column clean (power/outputs/ground), so NC pins trail at the
+    # BOTTOM of the LEFT column instead of top/bottom (now unused).
     if nc_pins:
-        target = "bottom" if layout["bottom"] else ("right" if layout["right"] else "bottom")
+        target = "left"
         if layout[target]:
             layout[target].append(None)
         layout[target].extend(_num(p) for p in sorted(nc_pins, key=lambda p: _pin_num_key(_num(p))))
@@ -122,6 +127,15 @@ def size_functional_body(
     h = max(len(layout["top"]), len(layout["bottom"]))
     top_span = (h - 1) * grid + 2 * top_margin if h > 0 else 0.0
 
+    # SnapEDA columns can be tall and narrow; the conformance side heuristic
+    # (schematic_extras._pin_side) classifies a pin as top/bottom rather than
+    # left/right once its vertical offset from the body centre exceeds its
+    # horizontal one. The extreme pin of the tallest column sits at +/-((v-1)/2)*grid
+    # vertically, so keep the body at least that wide — the pins then extend a
+    # further pin-length beyond the body edge, landing unambiguously on their
+    # column side regardless of float noise in the body centre.
+    column_floor = (v - 1) * grid
+
     text_w = 0.0
     if params.pin_geometry.pin_name_offset < 0:     # names drawn INSIDE the body
         name_by_num = {_num(p): str(p.get("name") or "") for p in pins}
@@ -133,7 +147,7 @@ def size_functional_body(
 
         text_w = side_name_w("left") + side_name_w("right") + _CENTRE_GAP_SLOTS * grid
 
-    params.body_width = _snap_up_even(max(top_span, text_w, _MIN_BODY_MM))
+    params.body_width = _snap_up_even(max(top_span, text_w, _MIN_BODY_MM, column_floor))
 
 
 def apply_functional_layout(pins: List[Dict[str, Any]], params) -> Dict[str, List[Optional[str]]]:

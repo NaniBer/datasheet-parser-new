@@ -53,10 +53,12 @@ def test_normalize_role(raw, expected):
     assert normalize_role(raw) == expected
 
 
+# SnapEDA convention (QC S1): right = power/outputs/ground/thermal; left = the
+# rest (control, inputs, io, data/analog, other).
 @pytest.mark.parametrize("role, side", [
-    ("supply", "top"), ("ground", "bottom"), ("thermal", "bottom"),
+    ("supply", "right"), ("ground", "right"), ("thermal", "right"),
     ("input", "left"), ("clock", "left"), ("control", "left"),
-    ("output", "right"), ("io", "right"), ("data", "right"), ("analog", "right"),
+    ("output", "right"), ("io", "left"), ("data", "left"), ("analog", "left"),
     ("nc", "unplaced"),
     ("other", "left"), (None, "left"),        # unknown defaults left
 ])
