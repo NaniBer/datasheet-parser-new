@@ -186,15 +186,25 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         }
 
     if family == "QFN":
+        # Leadless: terminals sit on the underside at the body edge, so the
+        # molded body IS the E/D span. Publish it as E1/D1 too, so the drawn
+        # fab outline is sourced from a real body dimension (not a lead span).
         body = _QFN_BODY.get(pin_count, round((pin_count // 4 - 1) * 0.5 + 1.5, 2))
-        return {"e": 0.5, "E": body, "D": body, "b": 0.25, "L": 0.4}
+        return {"e": 0.5, "E": body, "E1": body, "D": body, "D1": body,
+                "b": 0.25, "L": 0.4}
 
     if family in ("DFN", "WSON", "SON"):
+        # Leadless, like QFN: body edge = terminal span, so E1 = E and D1 = D.
+        # Body-based E1/D1 lets the fab outline come from the real body; the
+        # pad-clearance clamp only tightens it where the body would overlap pads.
         pitch = _DFN_PITCH.get(pin_count, 0.5)
+        body_l = max(3.0, _dual_row_body_length(pin_count, pitch, margin=0.7))
         return {
             "e": pitch,
             "E": 3.0,
-            "D": max(3.0, _dual_row_body_length(pin_count, pitch, margin=0.7)),
+            "E1": 3.0,
+            "D": body_l,
+            "D1": body_l,
             "b": 0.3,
             "L": 0.4,
         }

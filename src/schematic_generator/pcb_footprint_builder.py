@@ -430,12 +430,24 @@ class PcbFootprintBuilder:
 
     @property
     def fab_outline_width(self) -> float:
-        """Drawn body width: real body (E1) when known, else lead span."""
+        """Drawn body width — real molded body E1 is the PRIMARY source.
+
+        Every tabulated family (leaded and leadless) publishes E1, so the fab
+        outline is the true body, never the lead span. The ``params.body_width``
+        (= E, the lead span) fallback only applies to an untabulated package with
+        no body dimension at all. The pad-clearance clamp in ``_layer_half_dims``
+        tightens this only where the true body would overlap the pads (T-2D-2).
+        """
         return self._body_outline_w or self.params.body_width
 
     @property
     def fab_outline_length(self) -> float:
-        """Drawn body length: real body (D1) when known, else D."""
+        """Drawn body length — real molded body D1 is the PRIMARY source.
+
+        D1 when published (leadless + quad families now carry it); otherwise D,
+        which for dual-row parts is the body length (no lead protrusion on that
+        axis). Never the lead span.
+        """
         return self._body_outline_l or self.params.body_height
 
     def _compute_pad_spec(self, jedec_defaults: Optional[Dict[str, Any]],
@@ -531,20 +543,23 @@ class PcbFootprintBuilder:
         The courtyard must enclose both the body and the pads, whichever
         reaches further, plus clearance.
         """
+        # PRIMARY source: the real molded body (E1/D1). See fab_outline_width.
         fab_hw = self.fab_outline_width / 2
         fab_hh = self.fab_outline_length / 2
-        # QC T-2D-2: keep the fab/body outline INSIDE the pad ring so the yellow
-        # line never crosses a pad. Clamp each axis just inside the innermost pad
-        # edge (accounting for the line's own half-thickness). Leadless families,
-        # whose body is as wide as the pad span, get a slightly-inset outline —
-        # the accepted convention here (a crossing outline is worse than a
-        # marginally-small one). Guard against collapsing to nothing.
+        # QC T-2D-2 LAST-RESORT clamp: the body outline is drawn at its true
+        # E1/D1 size and is pulled in ONLY when it would actually cross a pad —
+        # i.e. when the outline's outer edge (its centreline plus half the line
+        # thickness) reaches past the innermost pad edge. A body that already
+        # sits inside the pad ring keeps its real size; a crossing body is inset
+        # to leave FAB_PAD_CLEARANCE of copper gap (never below a small floor).
+        # Only side pads bound a given axis, so a body isn't clamped by a pad on
+        # the perpendicular edge (see _pad_inner_extents).
+        half_line = self.LINE_THICKNESS / 2.0
         inner_x, inner_y = self._pad_inner_extents()
-        margin = self.LINE_THICKNESS / 2.0 + self.FAB_PAD_CLEARANCE
-        if inner_x != float("inf"):
-            fab_hw = min(fab_hw, max(inner_x - margin, self._MIN_FAB_HALF))
-        if inner_y != float("inf"):
-            fab_hh = min(fab_hh, max(inner_y - margin, self._MIN_FAB_HALF))
+        if inner_x != float("inf") and fab_hw + half_line > inner_x:
+            fab_hw = max(inner_x - half_line - self.FAB_PAD_CLEARANCE, self._MIN_FAB_HALF)
+        if inner_y != float("inf") and fab_hh + half_line > inner_y:
+            fab_hh = max(inner_y - half_line - self.FAB_PAD_CLEARANCE, self._MIN_FAB_HALF)
         silk_hw = fab_hw
         silk_hh = fab_hh + self.SILK_MARGIN_Y
         pad_x, pad_y = self._pad_extents()
