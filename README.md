@@ -92,6 +92,46 @@ python -m src.main datasheet.pdf output.step --format step
 python -m src.main datasheet.pdf output.glb --verbose
 ```
 
+## HTTP API
+
+A thin async wrapper over the CLI: upload a PDF datasheet, poll the job, then
+download the generated GLB/STEP artifacts. Each job runs the validated pipeline
+in an isolated subprocess. See `docs/plans/2026-08-21-http-api-design.md` for
+the full design.
+
+Run locally:
+
+```bash
+uvicorn src.api.app:app --reload
+# interactive docs at http://127.0.0.1:8000/docs
+```
+
+Endpoints:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/jobs` | Upload a PDF (multipart `file`, optional `part_number`) → `202 {job_id, status}` |
+| `GET` | `/jobs/{id}` | Poll status → `{status, validated, artifacts[], reason?}` |
+| `GET` | `/jobs/{id}/artifacts/{name}` | Download a produced GLB/STEP |
+| `GET` | `/health` | Liveness check |
+
+Job status maps to the CLI exit-code contract: `succeeded` (validated),
+`unvalidated` (best-effort), `failed`, `error`, `timeout`. Artifacts are
+downloadable for `succeeded`/`unvalidated`.
+
+Example:
+
+```bash
+JOB=$(curl -sS -F file=@pdfs/lm358.pdf http://127.0.0.1:8000/jobs | jq -r .job_id)
+curl -sS http://127.0.0.1:8000/jobs/$JOB | jq
+curl -sSO http://127.0.0.1:8000/jobs/$JOB/artifacts/output_body.glb
+```
+
+Configuration (env vars): `API_JOBS_DIR` (work-dir root, default `api_jobs/`),
+`API_WORKERS` (thread pool size), `API_JOB_TIMEOUT` (per-job subprocess timeout,
+seconds). The v1 job store is in-memory — job status is lost on restart, though
+the artifact files on disk survive (they are never auto-deleted).
+
 ## Architecture
 
 ```

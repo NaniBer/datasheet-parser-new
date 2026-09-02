@@ -18,8 +18,18 @@ export DP_URL='https://datasheet-parser.ideeza.com'
 ```
 
 - **Always send `part_number`.** Without it the footprint step fails on a missing
-  reference file `/app/2d.glb` and the API returns **`422`**. With it, a clean part
-  (e.g. NE555) returns all four artifacts.
+  reference file `/app/2d.glb` and the API returns **`422`**.
+- **Note — deployed-image caveat (verified 2026-09-02).** On the currently
+  deployed image, `part_number` alone does **not** rescue every part: several
+  still hit the same `/app/2d.glb` reference failure (`422`). Verified live:
+  | Part (`part_number`) | Result |
+  |----------------------|--------|
+  | `AMS1117` | **`200`** — all 4 artifacts ✅ |
+  | `NE555` | `422` — `Reference GLB not found: /app/2d.glb` |
+  | `LM358` | `422` — same |
+  So the pipeline + auth work end-to-end (proven with AMS1117), but that
+  reference-GLB check still blocks some packages until the deploy bundles
+  `/app/2d.glb` (or the check is made fail-open).
 - Production limits: **25 MB** upload, **2** concurrent parses (`503` if busy),
   **360 s** per job. `POST /parse` is ~25 s for a small part.
 
@@ -89,12 +99,12 @@ Accepts the upload, registers a job, returns immediately with a `job_id`.
 ```bash
 curl -s -X POST "$DP_URL/jobs" \
   -H "apikey: $DP_KEY" \
-  -F "file=@pdfs/ATmega328p.pdf" \
-  -F "part_number=ATmega328P"          # ALWAYS send part_number
+  -F "file=@pdfs/74HC595_TI.pdf" \
+  -F "part_number=SN74HC595"           # ALWAYS send part_number
 ```
 **Corresponding output** (`202`)
 ```json
-{ "job_id": "6fbbe3cf54124b05b8ec59edeabd3209", "status": "queued" }
+{ "job_id": "60333c6d0a9b4d0a857b50276c543fd0", "status": "queued" }
 ```
 
 ---
@@ -112,28 +122,28 @@ Returns the job's current state and, once terminal & downloadable, its artifact 
 **Example input**
 ```bash
 curl -s -H "apikey: $DP_KEY" \
-  "$DP_URL/jobs/6fbbe3cf54124b05b8ec59edeabd3209"
+  "$DP_URL/jobs/60333c6d0a9b4d0a857b50276c543fd0"
 ```
 **Corresponding output while running** (`200`)
 ```json
-{ "job_id": "6fbbe3cf54124b05b8ec59edeabd3209", "status": "running",
+{ "job_id": "60333c6d0a9b4d0a857b50276c543fd0", "status": "running",
   "validated": null, "artifacts": [], "reason": null }
 ```
 **Corresponding output once finished** (`200`) — real response:
 ```json
 {
-  "job_id": "6fbbe3cf54124b05b8ec59edeabd3209",
+  "job_id": "60333c6d0a9b4d0a857b50276c543fd0",
   "status": "succeeded",
   "validated": true,
   "artifacts": [
     { "name": "output_schematic.glb", "type": "model/gltf-binary", "size": 2823960,
-      "download_url": "/jobs/6fbbe3cf54124b05b8ec59edeabd3209/artifacts/output_schematic.glb" },
+      "download_url": "/jobs/60333c6d0a9b4d0a857b50276c543fd0/artifacts/output_schematic.glb" },
     { "name": "output_footprint.glb", "type": "model/gltf-binary", "size": 1215072,
-      "download_url": "/jobs/6fbbe3cf54124b05b8ec59edeabd3209/artifacts/output_footprint.glb" },
+      "download_url": "/jobs/60333c6d0a9b4d0a857b50276c543fd0/artifacts/output_footprint.glb" },
     { "name": "output_body.glb", "type": "model/gltf-binary", "size": 534552,
-      "download_url": "/jobs/6fbbe3cf54124b05b8ec59edeabd3209/artifacts/output_body.glb" },
+      "download_url": "/jobs/60333c6d0a9b4d0a857b50276c543fd0/artifacts/output_body.glb" },
     { "name": "output_body.step", "type": "application/step", "size": 847560,
-      "download_url": "/jobs/6fbbe3cf54124b05b8ec59edeabd3209/artifacts/output_body.step" }
+      "download_url": "/jobs/60333c6d0a9b4d0a857b50276c543fd0/artifacts/output_body.step" }
   ],
   "reason": null
 }
@@ -160,7 +170,7 @@ Streams a single generated artifact.
 **Example input**
 ```bash
 curl -s -OJ -H "apikey: $DP_KEY" \
-  "$DP_URL/jobs/6fbbe3cf54124b05b8ec59edeabd3209/artifacts/output_schematic.glb"
+  "$DP_URL/jobs/60333c6d0a9b4d0a857b50276c543fd0/artifacts/output_schematic.glb"
 ```
 **Corresponding output**: binary GLB written to `output_schematic.glb` (2,823,960 bytes), `Content-Type: model/gltf-binary`.
 
@@ -181,19 +191,26 @@ Blocks for the whole pipeline (~1–2 min) and streams back **all** artifacts as
   | `503` | Too many concurrent parses | `{ "detail": "Server busy: too many concurrent parses. …" }` |
   | `504` | Pipeline exceeded the timeout | `{ "detail": "Job exceeded API_JOB_TIMEOUT (360s). …" }` |
 
-**Example input**
+**Example input** (a part verified live — see the deployed-image caveat above)
 ```bash
 curl -s -X POST "$DP_URL/parse" \
   -H "apikey: $DP_KEY" \
-  -F "file=@pdfs/NE555.PDF" \
-  -F "part_number=NE555" \
+  -F "file=@pdfs/AMS1117.pdf" \
+  -F "part_number=AMS1117" \
   -OJ -D headers.txt                   # ZIP + response headers
 ```
-**Corresponding output**: binary ZIP written to `NE555_artifacts.zip` containing `output_schematic.glb`, `output_footprint.glb`, `output_body.glb`, `output_body.step`. Response headers:
+**Corresponding output** (real, captured 2026-09-02): binary ZIP written to `AMS1117_artifacts.zip` (698 KB) containing the four artifacts — validated as well-formed GLB/STEP:
 ```
-HTTP/1.1 200 OK
+output_schematic.glb   1609112 bytes   model/gltf-binary
+output_footprint.glb    616412 bytes   model/gltf-binary
+output_body.glb         377292 bytes   model/gltf-binary
+output_body.step        546413 bytes   application/step
+```
+Response headers:
+```
+HTTP/2 200
 content-type: application/zip
-content-disposition: attachment; filename="ATmega328p_artifacts.zip"
+content-disposition: attachment; filename="AMS1117_artifacts.zip"
 x-job-status: succeeded
 x-validated: true
 ```

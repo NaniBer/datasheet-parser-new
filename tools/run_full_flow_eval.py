@@ -72,7 +72,9 @@ EXPECT_FAIL_OK = {
 # footprint that measured perfectly consistent).
 EXPECTED_PINS = {
     # --- pdfs/ regression fixtures (pre-corpus) ---
-    "74HC595_TI": 16, "ADXL345": 14, "AMS1117": 8, "ATmega328p": 28, "cd74hc4017": 16,
+    # AMS1117 is a 3-terminal regulator (SOT-223); the datasheet's SOIC-8 is a
+    # minority variant. Corrected 8 -> 3 after datasheet audit (2026-08-11).
+    "74HC595_TI": 16, "ADXL345": 14, "AMS1117": 3, "ATmega328p": 28, "cd74hc4017": 16,
     "DFN": 8, "DS3231": 16, "DS_SX1261_2_V2-2": 24, "esp32-c3_datasheet_en": 32,
     "FT232R": 28, "INA219": 8, "L293D": 16, "lm358": 8, "MAX1487-MAX491": 8,
     "MAX202E": 16, "MC74HC595A": 16, "MCP3208": 16, "MPU-6000-Datasheet1": 24,
