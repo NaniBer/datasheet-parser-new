@@ -1,0 +1,138 @@
+# CI/CD for the Datasheet Parser API — build the image on GitLab, deploy it to
+# ideeza-dev-cluster with helm from the jumphost. Same shape as every other IDEEZA app
+# project (reference: ai-product-design-agent).
+#
+# .github/workflows/ci.yml never runs: origin is GitLab, so the unit tests are ported to
+# the `unit-tests` job below.
+#
+# Runner: project runner `runnergcp` (untagged, GitLab shared runners disabled on this
+# project). Do NOT add `tags:` — the runner picks up untagged jobs, and leaving shared
+# runners on makes the two race for the pipeline.
+#
+# Project CI/CD variables (all created 2026-09-02):
+#   CI_REGISTRY, CI_REGISTRY_USER, CI_REGISTRY_PASSWORD   GitLab-provided
+#   PRIV_KEY_JUMPHOST         [file] jumphost SSH private key
+#   SSH_JUMPHOST_USER               jumphost account
+#   SSH_JUMPHOST_HOME_PATH          jumphost home
+#   env_ai_datasheet_parser   [file] the app's .env — ARCHIVE ONLY, see below
+#
+# All four are UNPROTECTED, because no branch here is protected: a protected variable is
+# absent on an unprotected ref, and the deploy job would then run with an empty key path.
+#
+# WHY env_ai_datasheet_parser is not used by any job: this image deliberately bakes no
+# .env (unlike the older fleet images, which are being un-baked service by service). At
+# runtime the pod reads FASTCHAT_API_KEY from the off-git Secret
+# ideeza-ai-datasheet-parser-env and everything else from the chart ConfigMap
+# (deployments: charts/default/ideeza-ai-datasheet-parser). The variable is the archived
+# source of truth for that Secret, so after editing it run
+#   deployments/scripts/probes-rollout/sync-env-secret.sh ai-datasheet-parser \
+#     env_ai_datasheet_parser default ideeza-ai-datasheet-parser-env ideeza-ai-datasheet-parser
+# An image rebuild changes nothing at runtime.
+
+stages:
+  - test
+  - publish
+  - deploy
+
+# --- test ----------------------------------------------------------------------------
+# Unpinned base on purpose: this job only needs the same Python minor as the runtime
+# image, and the digest pin that actually matters is in the Dockerfile. The apt list
+# mirrors the Dockerfile because tests/test_suite.py imports cadquery, which dlopens
+# libGL — without these the suite fails at import, not on a real assertion.
+unit-tests:
+  stage: test
+  image: python:3.11-slim
+  # allow_failure until the suite has been seen green on our own runner: a pre-existing
+  # red test must not block the initial go-live. Flip to false once it passes (dev).
+  allow_failure: true
+  timeout: 30m
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+  cache:
+    key:
+      files:
+        - requirements.txt
+    paths:
+      - .pip-cache
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends libgl1 libglu1-mesa libxrender1 libxext6 libsm6 libx11-6 fontconfig fonts-dejavu-core
+    - pip install --no-cache-dir --upgrade pip
+    - pip install -r requirements.txt
+    - pip install -e . --no-deps
+    - pip install pytest pytest-cov
+  script:
+    - python -m pytest tests/test_suite.py -m "not integration" --tb=short -q
+
+# --- publish -------------------------------------------------------------------------
+# Build-only gate for merge requests. Without it, the first real test of a Dockerfile
+# change is the deploy itself, because publish-image on main auto-deploys. Never pushes.
+build-check:
+  stage: publish
+  image: docker:latest
+  services:
+    - docker:dind
+  timeout: 45m
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  script:
+    - docker build -t "$CI_REGISTRY_IMAGE/$CI_COMMIT_REF_SLUG:mr-$CI_COMMIT_SHORT_SHA" .
+  only:
+    - merge_requests
+
+# The branch lives in the image PATH, not the tag: fleet convention, and it keeps the
+# chart's image.repository (…/ai-datasheet-parser/main) honest if this project ever grows
+# a second deployed branch. 45m because cadquery-ocp/OCCT is ~1GB of wheels.
+publish-image:
+  variables:
+    TAG_LATEST_APP: $CI_REGISTRY_IMAGE/$CI_COMMIT_REF_NAME:app-latest
+  stage: publish
+  image: docker:latest
+  services:
+    - docker:dind
+  timeout: 45m
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  script:
+    - docker build -t "$TAG_LATEST_APP" .
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+    - docker push "$TAG_LATEST_APP"
+  only:
+    - main
+
+# --- deploy --------------------------------------------------------------------------
+# alpine + openssh-client instead of the fleet's czala/iotg-ssh-client: this is the one
+# job that holds the jumphost private key, so it should not also depend on an unpinned
+# third-party image.
+#
+# No `sed` on values.yaml (the fleet copies one that is a no-op against `tag: app-latest`
+# anyway). What actually rolls the new image is pullPolicy: Always plus the chart's
+# rollme annotation, which restarts the pod on every upgrade.
+deploy-image:
+  stage: deploy
+  image: alpine:3.20
+  timeout: 15m
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  before_script:
+    - apk add --no-cache openssh-client
+  script:
+    # Copy the key into the job rather than chmod-ing the variable file, and force a
+    # trailing newline: a GitLab file variable can arrive without one depending on how it
+    # was set, and OpenSSH then refuses the key ("error in libcrypto"). A trailing blank
+    # line after the END marker is ignored, a missing newline is not.
+    - umask 077
+    - '{ cat "$PRIV_KEY_JUMPHOST"; echo; } > /tmp/jh_key'
+    - chmod 400 /tmp/jh_key
+    - ssh -o StrictHostKeyChecking=no -i /tmp/jh_key "$SSH_JUMPHOST_USER@jumphost.ideeza.com" "cd $SSH_JUMPHOST_HOME_PATH/ideeza-helm-chart/charts/default/ideeza-ai-datasheet-parser && /usr/local/bin/helm -n default upgrade --install ideeza-ai-datasheet-parser ."
+  only:
+    - main
