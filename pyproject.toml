@@ -37,6 +37,14 @@ dependencies = [
     "requests>=2.31.0",
     "python-dotenv>=1.0.0",
     "nest_asyncio>=1.5.0",
+    # HTTP API layer (src/api/, and the Dockerfile CMD `uvicorn src.api.app:app`).
+    # python-multipart is not optional: FastAPI raises at route-definition time for
+    # File()/Form() parameters without it, which POST /jobs and POST /parse both use.
+    # Plain uvicorn, not uvicorn[standard] — h11 is already in the tree and the extra
+    # (uvloop/httptools/watchfiles/websockets) buys nothing for this workload.
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
