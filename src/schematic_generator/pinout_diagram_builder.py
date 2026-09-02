@@ -145,15 +145,34 @@ class PinoutDiagramBuilder:
         # and resize the body to fit. Below the gate, layout_arg stays the
         # original custom_layout (usually None) => byte-identical physical layout.
         layout_arg: Optional[Dict[str, List]] = custom_layout
+        _functional = False
         if custom_layout is None and pin_data:
             from ..models import functional_layout_applicable
             if functional_layout_applicable([p.get("role") for p in pin_data]):
                 from .functional_layout import apply_functional_layout
                 layout_arg = apply_functional_layout(pin_data, self.params)
+                _functional = True
                 logger.info(
                     "SYM-04 functional layout: %s",
                     {k: [n for n in v if n] for k, v in layout_arg.items() if any(v)},
                 )
+
+        # Universal body sizing for the physical / explicit-custom paths (the
+        # functional path already sized itself above): fit the pin NAMES inside
+        # the body (QC H3) and trim the tall-narrow tower (QC S2). Two-pass — a
+        # throwaway layout reveals each pin's side (independent of body size),
+        # then we size the body from the per-side names and lay out for real.
+        if not _functional and pin_data:
+            from .functional_layout import size_symbol_body
+            probe = layout_pins(self.params, layout_arg)
+            name_by_num = {
+                str(p.get("number", p.get("pin_num", ""))): (p.get("name") or p.get("pin_name") or "")
+                for p in pin_data
+            }
+            side_names: Dict[str, List[str]] = {"left": [], "right": [], "top": [], "bottom": []}
+            for pos in probe:
+                side_names.setdefault(pos.side, []).append(name_by_num.get(str(pos.pin_number), ""))
+            size_symbol_body(self.params, side_names)
 
         # Calculate pin positions
         self.pin_positions = layout_pins(self.params, layout_arg)
@@ -215,7 +234,10 @@ class PinoutDiagramBuilder:
         """
         bw = self.params.body_width
         bh = self.params.body_height
-        thick = self.params.body_geometry.border_thickness
+        # QC S2: the body outline must not be drawn heavier than the pin legs —
+        # cap the stroke at the leg width so it reads as a thin border, not a slab.
+        thick = min(self.params.body_geometry.border_thickness,
+                    self.params.pin_geometry.leg_width)
         height = self.params.body_geometry.border_height
 
         # Build 4 sides and fuse into a single mesh

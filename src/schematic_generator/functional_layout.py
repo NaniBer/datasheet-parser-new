@@ -34,6 +34,8 @@ BLOCK_ORDER: Dict[str, List[str]] = {
 _MIN_BODY_MM = 4 * SCHEMATIC_GRID_MM   # floor so a tiny part still renders a body
 _NAME_CHAR_W = 0.6                     # ~char width per font unit (matches label bbox math)
 _CENTRE_GAP_SLOTS = 2                  # grid cols kept clear between inside-drawn L/R names
+_INSIDE_NAME_INSET = 0.6               # mm the name text is inset INSIDE the body edge (QC H3)
+_END_MARGIN = SCHEMATIC_GRID_MM        # clearance beyond the extreme pin, each end (QC S2 height trim)
 
 
 def _num(pin: Dict[str, Any]) -> str:
@@ -104,54 +106,77 @@ def _centre_pair(layout: Dict[str, List[Optional[str]]], a: str, b: str) -> None
             layout[side] = [None] * pad + layout[side]
 
 
+def size_symbol_body(params, side_names: Dict[str, List[str]]) -> None:
+    """Universal schematic-body sizing for BOTH the functional and physical paths.
+
+    ``side_names`` maps ``side -> [name-or-"" per slot]`` (blanks = "" keep the
+    slot count for centring but contribute no text). It:
+
+    * forces pin NAMES inside the body (negative offset) so they never sit on the
+      leg (QC H3);
+    * sizes ``body_width`` to fit the longest left + right names drawn inside,
+      plus a centre gap and the two insets — floored by ``column_floor`` (so a
+      tall column can't be geometrically misread as top/bottom), any top/bottom
+      pin span, and a minimum body;
+    * sizes ``body_height`` to the tallest vertical column with one grid step of
+      clearance at each end, trimming the old tall-and-narrow "tower" (QC S2);
+    * keeps ``top_margin`` equal to that end clearance so pins stay centred.
+
+    Both dims are snapped to an even grid multiple so the symmetric-about-origin
+    geometry stays on the grid. Mutates ``params`` + ``pin_geometry`` in place.
+    """
+    grid = params.pin_pitch                         # 2.54 after grid normalization
+    size = params.pin_geometry.pin_name_size
+    params.pin_geometry.pin_name_offset = -_INSIDE_NAME_INSET   # names INSIDE (QC H3)
+    inset = _INSIDE_NAME_INSET
+
+    def slots(side: str) -> List[str]:
+        return side_names.get(side, [])
+
+    def name_w(side: str) -> float:
+        names = [s for s in slots(side) if s]
+        return max((len(s) for s in names), default=0) * size * _NAME_CHAR_W
+
+    # Height: tallest vertical column (slots incl. blanks) + one grid step each end.
+    v = max(len(slots("left")), len(slots("right")), 1)
+    end_margin = _END_MARGIN
+    params.body_geometry.top_margin = end_margin
+    params.body_height = _snap_up_even((v - 1) * grid + 2 * end_margin)
+
+    # Width: fit inside-drawn L/R names (+ centre gap + insets), never narrower
+    # than the tall column (column_floor), the top/bottom pin span, or the floor.
+    h = max(len(slots("top")), len(slots("bottom")))
+    top_span = (h - 1) * grid + 2 * end_margin if h > 0 else 0.0
+    column_floor = (v - 1) * grid
+    text_w = name_w("left") + name_w("right") + _CENTRE_GAP_SLOTS * grid + 2 * inset
+    params.body_width = _snap_up_even(max(top_span, text_w, _MIN_BODY_MM, column_floor))
+
+
 def size_functional_body(
     layout: Dict[str, List[Optional[str]]],
     pins: List[Dict[str, Any]],
     params,
 ) -> None:
-    """Resize ``params.body_width/height`` from the grouped layout (Decision B).
+    """Resize ``params`` from the grouped functional layout (Decision B).
 
-    Height comes from the taller of left/right (slots incl. blanks); width from
-    the wider of the top/bottom pin span and — when names are drawn inside the
-    body — the combined left+right name text plus a centre gap. Both are snapped
-    to an even grid multiple so the symmetric-about-origin geometry stays on the
-    2.54 mm grid. Mutates ``params`` in place (called before the body/labels are
-    built from these dims).
+    Thin adapter over :func:`size_symbol_body`: maps the pin-number slots to
+    their name strings (blanks preserved as "") and delegates the sizing.
     """
-    grid = params.pin_pitch                         # 2.54 after grid normalization
-    top_margin = params.body_geometry.top_margin
-
-    v = max(len(layout["left"]), len(layout["right"]), 1)
-    params.body_height = _snap_up_even((v - 1) * grid + 2 * top_margin)
-
-    h = max(len(layout["top"]), len(layout["bottom"]))
-    top_span = (h - 1) * grid + 2 * top_margin if h > 0 else 0.0
-
-    # SnapEDA columns can be tall and narrow; the conformance side heuristic
-    # (schematic_extras._pin_side) classifies a pin as top/bottom rather than
-    # left/right once its vertical offset from the body centre exceeds its
-    # horizontal one. The extreme pin of the tallest column sits at +/-((v-1)/2)*grid
-    # vertically, so keep the body at least that wide — the pins then extend a
-    # further pin-length beyond the body edge, landing unambiguously on their
-    # column side regardless of float noise in the body centre.
-    column_floor = (v - 1) * grid
-
-    text_w = 0.0
-    if params.pin_geometry.pin_name_offset < 0:     # names drawn INSIDE the body
-        name_by_num = {_num(p): str(p.get("name") or "") for p in pins}
-        size = params.pin_geometry.pin_name_size
-
-        def side_name_w(side: str) -> float:
-            names = [name_by_num.get(n, "") for n in layout[side] if n]
-            return max((len(s) for s in names), default=0) * size * _NAME_CHAR_W
-
-        text_w = side_name_w("left") + side_name_w("right") + _CENTRE_GAP_SLOTS * grid
-
-    params.body_width = _snap_up_even(max(top_span, text_w, _MIN_BODY_MM, column_floor))
+    name_by_num = {_num(p): str(p.get("name") or "") for p in pins}
+    side_names = {
+        side: [name_by_num.get(n, "") if n else "" for n in slots]
+        for side, slots in layout.items()
+    }
+    size_symbol_body(params, side_names)
 
 
 def apply_functional_layout(pins: List[Dict[str, Any]], params) -> Dict[str, List[Optional[str]]]:
-    """Compute the functional layout and resize ``params`` to fit it."""
+    """Compute the functional layout and resize ``params`` to fit it.
+
+    Sizing (via :func:`size_symbol_body`) forces pin NAMES inside the body
+    (QC H3) — the package default ``pin_name_offset`` is often positive, which
+    would push names onto the leg. Numbers stay on the leg (unchanged).
+    """
     layout = functional_side_layout(pins)
     size_functional_body(layout, pins, params)
     return layout

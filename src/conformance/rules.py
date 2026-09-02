@@ -45,6 +45,7 @@ RULES: List[Rule] = [
     Rule("SYM-10", "must", "symbol", "Reference designator prefix correct for class", None),
     Rule("SYM-11", "must", "symbol", "No-connect pins handled explicitly", "nc_pins_marked"),
     Rule("SYM-12", "must", "symbol", "No duplicated or skipped pin numbers", "symbol_pin_numbering"),
+    Rule("SYM-13", "must", "symbol", "Pin name text inside body outline (not on leg)", "pin_name_inside_body"),
 
     # --- land pattern / footprint ----------------------------------------------
     Rule("FP-03", "must", "footprint", "Origin at body centroid", "origin_at_centroid"),

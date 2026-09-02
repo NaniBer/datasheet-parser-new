@@ -169,19 +169,31 @@ def test_nc_pins_drawn_and_grouped_left():
 
 
 # ---------------------------------------------------------------------------
-# Below-gate parts stay byte-identical to the physical layout
+# Below-gate parts keep the PHYSICAL dual-row layout (sides + counter-clockwise
+# order), but the body is now universally sized to fit the pin NAMES inside
+# (QC H3) and trim the tall-narrow tower (QC S2) — it is no longer the old
+# fixed-width constant. (Formerly asserted byte-identical to physical.)
 # ---------------------------------------------------------------------------
-def test_below_gate_layout_identical_to_physical():
-    # 8 pins, no roles -> gate fails -> physical dual-row layout, unchanged.
+def test_below_gate_keeps_physical_layout_with_name_fitted_body():
+    # 8 pins, no roles -> gate fails -> physical dual-row layout, not functional.
     pin_data = [_d(i, f"P{i}") for i in range(1, 9)]
     builder = PinoutDiagramBuilder("DIP-8", 8, "X", pin_data=pin_data)
     physical = layout_pins(get_schematic_parameters("DIP-8", 8))
-    got = [(p.pin_number, round(p.x, 6), round(p.y, 6), p.side) for p in builder.pin_positions]
-    want = [(p.pin_number, round(p.x, 6), round(p.y, 6), p.side) for p in physical]
-    assert got == want
-    # and body dims are the untouched physical params
-    assert builder.params.body_width == get_schematic_parameters("DIP-8", 8).body_width
-    assert builder.params.body_height == get_schematic_parameters("DIP-8", 8).body_height
+
+    # Dual-row SIDES and counter-clockwise pin ORDER are unchanged (still the
+    # physical layout, never functional grouping).
+    assert [(p.pin_number, p.side) for p in builder.pin_positions] == \
+           [(p.pin_number, p.side) for p in physical]
+
+    # Names are now drawn INSIDE the body (off the leg), the body is name-fitted
+    # rather than the old fixed default, and the aspect is a sane portrait — no
+    # longer the tall-narrow tower.
+    assert builder.params.pin_geometry.pin_name_offset < 0        # names inside
+    edge = builder.params.body_width / 2
+    for p in builder.pin_positions:                               # name anchor inboard of edge
+        assert abs(p.text_x) < edge + 1e-6
+    aspect = builder.params.body_height / builder.params.body_width
+    assert 0.3 <= aspect <= 3.0                                   # not a tower
 
 
 def test_vision_custom_layout_wins_over_functional():

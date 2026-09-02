@@ -40,6 +40,7 @@ ANNULAR_RING_MIN_MM = 0.05     # FP-10 (IPC-2221 Class 2 external ring)
 SCHEM_GRID_MM = 2.54           # SYM-02
 GRID_TOL_MM = 0.05             # SYM-02 snap tolerance
 CENTROID_TOL_MM = 0.10         # FP-03 origin vs body centroid
+PIN_NAME_INSIDE_TOL_MM = 0.05  # SYM-13 pin-name text inside the body outline
 COURTYARD_TOL_MM = 0.05        # 3D-11 body envelope inside courtyard
 SEATING_TOL_MM = 0.10          # 3D-02 seating plane
 BODY_VERTICAL_AXIS = 1         # body GLB is Y-up (exporter bakes Z-up->Y-up)
@@ -978,6 +979,90 @@ def check_functional_grouping(ctx: PartContext) -> _Outcome:
                     measured=measured)
 
 
+def _bodyline_x_bounds(g, world) -> Optional[Tuple[float, float]]:
+    """World-space X extent [min_x, max_x] of the schematic body outline.
+
+    The root ``Package`` node holds a ``BodyLine`` GROUP whose single child owns
+    the body-outline mesh (the group node itself has ``mesh=None``). We take the
+    subtree AABB, which unions every POSITION primitive of that mesh, and return
+    its horizontal (X) span — the axis the exporter's Z-up->Y-up rotation leaves
+    unchanged, so it is the same left/right axis the pins are laid out on.
+    """
+    root = _root(g)
+    if root is None:
+        return None
+    bl = _find_child(g, root, "BodyLine")
+    if bl is None:
+        return None
+    box = _subtree_aabb3(g, bl, world)
+    if box is None:
+        return None
+    return float(box[0][0]), float(box[1][0])
+
+
+def check_pin_name_inside_body(ctx: PartContext) -> _Outcome:
+    """SYM-13 (QC H3): each pin's NAME text sits inside the body outline.
+
+    Every generated symbol — functional grouping AND the physical dual-row /
+    quad layout — now draws the pin *name* inside the body box (inward from the
+    pin's edge), never out on the pin leg; the body is universally sized to fit
+    the names (see ``functional_layout.size_symbol_body``). This guards the
+    reported defect where the name was rendered on top of the leg, outside the
+    body edge.
+
+    Every pin's ``pinName`` mesh (union of all its glyph primitives) must be
+    contained in the body's X-span ``[body_min_x, body_max_x]`` within a small
+    tolerance; a name left on the leg shows up as ``min_x < body_min_x`` (left
+    pins) or ``max_x > body_max_x`` (right pins). SKIPs only when there is no
+    symbol artifact or no pin-name geometry to grade.
+    """
+    miss = _need_glb(ctx, "symbol")
+    if miss:
+        return miss
+    g = ctx.glb("symbol")
+    root = _root(g)
+    legs = _find_child(g, root, "Legs") if root is not None else None
+    if legs is None:
+        return _Outcome(CheckStatus.UNRUN, "no Legs in symbol")
+    pins = g.nodes[legs].children or []
+
+    world = _world_matrices(g)
+    bounds = _bodyline_x_bounds(g, world)
+    if bounds is None:
+        return _Outcome(CheckStatus.UNRUN, "no BodyLine outline geometry in symbol")
+    body_min_x, body_max_x = bounds
+
+    graded = 0
+    outside: List[str] = []
+    worst = 0.0
+    for p in pins:
+        name_node = _find_child(g, p, "pinName")
+        if name_node is None:
+            continue
+        box = _subtree_aabb3(g, name_node, world)
+        if box is None:
+            continue
+        graded += 1
+        nmin, nmax = float(box[0][0]), float(box[1][0])
+        # Overshoot past either body edge (positive = sticks out onto the leg).
+        over = max(body_min_x - nmin, nmax - body_max_x)
+        worst = max(worst, over)
+        if over > PIN_NAME_INSIDE_TOL_MM:
+            outside.append(f"{g.nodes[p].name}[{nmin:.2f},{nmax:.2f}]")
+    if graded == 0:
+        return _Outcome(CheckStatus.UNRUN, "no pinName geometry to grade")
+    measured = f"{graded - len(outside)}/{graded} inside, worst overshoot {worst:.3f} mm"
+    threshold = f"<= {PIN_NAME_INSIDE_TOL_MM} mm past body edge"
+    if outside:
+        return _Outcome(
+            CheckStatus.FAIL,
+            f"{len(outside)} pin name(s) outside body outline "
+            f"[{body_min_x:.2f},{body_max_x:.2f}]: {outside[:5]}",
+            measured=measured, threshold=threshold)
+    return _Outcome(CheckStatus.PASS, f"all {graded} pin names inside body outline ({measured})",
+                    measured=measured, threshold=threshold)
+
+
 def check_power_ground_visible(ctx: PartContext) -> _Outcome:
     """SYM-05: power and ground pins are identified and drawn on the symbol.
 
@@ -1376,6 +1461,7 @@ REGISTRY: Dict[str, Callable[[PartContext], _Outcome]] = {
     "nc_pins_marked": check_nc_pins_marked,
     "active_low_notation": check_active_low_notation,
     "functional_grouping": check_functional_grouping,
+    "pin_name_inside_body": check_pin_name_inside_body,
     "power_ground_visible": check_power_ground_visible,
     "layout_not_physical": check_layout_not_physical,
     "pnp_zero_orientation": check_pnp_zero_orientation,
