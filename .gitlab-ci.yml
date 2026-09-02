@@ -1,0 +1,58 @@
+# Build the image on GitLab, deploy it with helm from the jumphost.
+#
+# Required CI/CD variables — all must be UNPROTECTED, since no branch here is protected
+# (a protected variable is absent on an unprotected ref, and deploy then runs with an
+# empty key path):
+#   PRIV_KEY_JUMPHOST [file] · SSH_JUMPHOST_USER · SSH_JUMPHOST_HOME_PATH
+#   env_ai_datasheet_parser [file] — the app's .env, ARCHIVE ONLY. No .env is baked into
+#     the image: the pod reads Secret ideeza-ai-datasheet-parser-env, so editing this
+#     variable changes nothing at runtime until you run
+#     deployments/scripts/probes-rollout/sync-env-secret.sh
+#
+# Runner: project runner `runnergcp`, untagged — do NOT add `tags:`.
+
+stages:
+  - publish
+  - deploy
+
+publish-image:
+  # Branch in the image PATH, tag stays app-latest — must match the chart's image.repository.
+  variables:
+    TAG_LATEST_APP: $CI_REGISTRY_IMAGE/$CI_COMMIT_REF_NAME:app-latest
+  stage: publish
+  image: docker:latest
+  services:
+    - docker:dind
+  timeout: 45m
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  script:
+    - docker build -t "$TAG_LATEST_APP" .
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+    - docker push "$TAG_LATEST_APP"
+  only:
+    - main
+
+deploy-image:
+  stage: deploy
+  image: alpine:3.20
+  timeout: 15m
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  before_script:
+    - apk add --no-cache openssh-client
+  script:
+    # Force a trailing newline on the key: a GitLab file variable can arrive without one
+    # and OpenSSH then refuses it ("error in libcrypto"). A trailing blank line is ignored.
+    - umask 077
+    - '{ cat "$PRIV_KEY_JUMPHOST"; echo; } > /tmp/jh_key'
+    - chmod 400 /tmp/jh_key
+    - ssh -o StrictHostKeyChecking=no -i /tmp/jh_key "$SSH_JUMPHOST_USER@jumphost.ideeza.com" "cd $SSH_JUMPHOST_HOME_PATH/ideeza-helm-chart/charts/default/ideeza-ai-datasheet-parser && /usr/local/bin/helm -n default upgrade --install ideeza-ai-datasheet-parser ."
+  only:
+    - main
