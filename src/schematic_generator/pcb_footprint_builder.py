@@ -31,7 +31,6 @@ from ..core import (
     inject_pcb_footprint_extras,
     normalize_pcb_footprint_bodyline_names,
     optimize_glb_hierarchy,
-    validate_glb_similarity_to_reference,
     validate_pcb_footprint_glb,
 )
 from .pin_layout import PinPosition, layout_pins
@@ -1097,23 +1096,14 @@ class PcbFootprintBuilder:
                     )
                     return False
 
-            # Keep through-hole workflow output structurally aligned with the reference 2d.glb.
-            if self.is_through_hole():
-                try:
-                    is_similar, similarity_errors = validate_glb_similarity_to_reference(
-                        work_path
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Skipping reference hierarchy similarity check: %s" % exc
-                    )
-                else:
-                    if not is_similar:
-                        logger.error(
-                            "Reference hierarchy similarity check failed: %s"
-                            % "; ".join(similarity_errors)
-                        )
-                        return False
+            # NOTE: the through-hole footprint hierarchy is produced deterministically
+            # and its structure is asserted in CI — both against the documented
+            # standard (validate_pcb_footprint_hierarchy) and the golden reference
+            # 2d.glb (tests/test_suite.py). A per-request golden-file comparison here
+            # was redundant: it never changed the output, only gated it, and it hard-
+            # failed whenever 2d.glb was absent (it is a dev-only, gitignored asset
+            # never shipped in the deployed image), 422-ing every through-hole part.
+            # Structural regressions are caught in CI where the reference is present.
 
             if not os.path.exists(work_path):
                 logger.error("GLB file not created: %s" % output_path)
