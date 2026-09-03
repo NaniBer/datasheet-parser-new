@@ -20,6 +20,7 @@ from typing import Callable, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
+from starlette.background import BackgroundTask
 
 from .jobs import (
     DOWNLOADABLE,
@@ -29,7 +30,9 @@ from .jobs import (
     WORKERS,
     Job,
     JobStore,
+    cleanup_job,
     run_pipeline,
+    sweep_expired,
 )
 from .models import Artifact, JobCreated, JobStatus
 
@@ -64,6 +67,10 @@ def create_app(
     executor = executor or ThreadPoolExecutor(max_workers=WORKERS)
     jobs_dir = jobs_dir or DEFAULT_JOBS_DIR
     jobs_dir.mkdir(parents=True, exist_ok=True)
+    # On boot the in-memory store is empty, so any work dirs left on disk are
+    # restart-orphans; reap the ones past the TTL now, then opportunistically on
+    # each new submit (no background thread needed).
+    sweep_expired(store, jobs_dir)
     # Bounds the number of in-flight synchronous /parse builds (each spawns an
     # OCCT subprocess); excess callers get a 503 rather than exhausting the host.
     parse_sem = threading.Semaphore(MAX_CONCURRENT_PARSE)
@@ -139,6 +146,7 @@ def create_app(
         file: Optional[UploadFile] = File(None),
         part_number: Optional[str] = Form(None),
     ) -> JobCreated:
+        sweep_expired(store, jobs_dir)  # opportunistic TTL reap on each submit
         job = _accept_upload(file, part_number)
         executor.submit(runner, job, store)
         return JobCreated(job_id=job.id, status=job.status)
@@ -159,6 +167,7 @@ def create_app(
         Runs the full pipeline inline (~1-2 min) — no polling. The connection is
         held for the whole run, so callers/proxies must allow a long timeout.
         """
+        sweep_expired(store, jobs_dir)  # opportunistic TTL reap on each submit
         if not parse_sem.acquire(blocking=False):
             raise HTTPException(
                 status_code=503,
@@ -172,6 +181,8 @@ def create_app(
             parse_sem.release()
 
         if job.status not in DOWNLOADABLE:
+            # Nothing to hand back — drop the work dir before surfacing the error.
+            cleanup_job(job, store)
             raise HTTPException(
                 status_code=_HTTP_FOR_STATUS.get(job.status, 500),
                 detail=job.reason or f"Parse ended with status {job.status!r}.",
@@ -181,12 +192,16 @@ def create_app(
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for art in job.artifacts:
                 zf.write(art.path, arcname=art.name)
-        zip_bytes = buf.getvalue()
+        zip_bytes = buf.getvalue()  # the zip now lives fully in memory
 
+        # The zip IS the response body (never written to disk) and /parse has no
+        # download-later step, so the work dir is pure scratch. Delete it — and the
+        # now-useless record — AFTER the response is fully sent, via a BackgroundTask.
         stem = Path(file.filename).stem if file and file.filename else "artifacts"
         return Response(
             content=zip_bytes,
             media_type="application/zip",
+            background=BackgroundTask(cleanup_job, job, store),
             headers={
                 "Content-Disposition": f'attachment; filename="{stem}_artifacts.zip"',
                 "X-Job-Status": job.status,

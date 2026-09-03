@@ -18,6 +18,7 @@ from src.api.app import create_app
 from src.api.jobs import (
     ARTIFACT_SPECS,
     DOWNLOADABLE,
+    FAILED,
     OUTPUT_BASE,
     RUNNING,
     SUCCEEDED,
@@ -25,6 +26,7 @@ from src.api.jobs import (
     Job,
     JobStore,
     collect_artifacts,
+    sweep_expired,
 )
 
 PDF_BYTES = b"%PDF-1.4\n%fake datasheet\n"
@@ -310,3 +312,76 @@ def test_real_cli_end_to_end(tmp_path):
     assert body["artifacts"], "expected at least the schematic + footprint artifacts"
     first = body["artifacts"][0]
     assert client.get(first["download_url"]).status_code == 200
+
+
+# --- work-dir cleanup + TTL sweep --------------------------------------------
+
+def _job_dirs(jobs_dir: Path):
+    return sorted(p.name for p in jobs_dir.iterdir() if p.is_dir()) if jobs_dir.exists() else []
+
+
+def test_parse_deletes_workdir_after_response(tmp_path):
+    # /parse's zip IS the response body; the work dir is scratch and must be gone
+    # once the response is delivered (TestClient runs the BackgroundTask for us).
+    jobs_dir = tmp_path / "api_jobs"
+    client = client_for(make_fake_runner(SUCCEEDED), tmp_path)
+    assert _upload_parse(client).status_code == 200
+    assert _job_dirs(jobs_dir) == []
+
+
+def test_parse_failure_deletes_workdir(tmp_path):
+    # A failed sync parse hands nothing back, so its work dir must not linger.
+    jobs_dir = tmp_path / "api_jobs"
+    client = client_for(make_fake_runner(FAILED), tmp_path)
+    assert _upload_parse(client).status_code == 422
+    assert _job_dirs(jobs_dir) == []
+
+
+def test_async_jobs_keep_workdir_for_download(tmp_path):
+    # The async flow has a download-later step, so its files must persist.
+    jobs_dir = tmp_path / "api_jobs"
+    client = client_for(make_fake_runner(SUCCEEDED), tmp_path)
+    job_id = _upload(client).json()["job_id"]
+    assert job_id in _job_dirs(jobs_dir)
+    first = client.get(f"/jobs/{job_id}").json()["artifacts"][0]
+    assert client.get(first["download_url"]).status_code == 200
+
+
+def test_sweep_removes_expired_dirs_and_evicts_records(tmp_path):
+    jobs_dir = tmp_path / "api_jobs"
+    jobs_dir.mkdir()
+    store = JobStore()
+    old = jobs_dir / "oldjob"
+    old.mkdir()
+    (old / f"{OUTPUT_BASE}_schematic.glb").write_bytes(b"x")
+    store.add(Job(id="oldjob", workdir=old))
+    os.utime(old, (0, 0))  # epoch mtime -> far past any TTL
+    fresh = jobs_dir / "newjob"
+    fresh.mkdir()
+    store.add(Job(id="newjob", workdir=fresh))
+
+    assert sweep_expired(store, jobs_dir, ttl_seconds=3600) == 1
+    assert not old.exists() and fresh.exists()
+    assert store.get("oldjob") is None and store.get("newjob") is not None
+
+
+def test_sweep_reaps_restart_orphan_without_record(tmp_path):
+    # After a restart the store is empty; aged on-disk dirs are still reaped.
+    jobs_dir = tmp_path / "api_jobs"
+    jobs_dir.mkdir()
+    orphan = jobs_dir / "orphan"
+    orphan.mkdir()
+    (orphan / f"{OUTPUT_BASE}_body.step").write_bytes(b"x")
+    os.utime(orphan, (0, 0))
+    assert sweep_expired(JobStore(), jobs_dir, ttl_seconds=3600) == 1
+    assert not orphan.exists()
+
+
+def test_sweep_ttl_zero_disables(tmp_path):
+    jobs_dir = tmp_path / "api_jobs"
+    jobs_dir.mkdir()
+    keep = jobs_dir / "keep"
+    keep.mkdir()
+    os.utime(keep, (0, 0))
+    assert sweep_expired(JobStore(), jobs_dir, ttl_seconds=0) == 0
+    assert keep.exists()

@@ -10,9 +10,11 @@ This mirrors the pattern already used by ``tools/run_full_flow_eval.py``.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -57,6 +59,11 @@ ARTIFACT_SPECS = [
 # Tunables (reuse the flow-eval defaults so behaviour matches the CLI runner).
 JOB_TIMEOUT = int(os.environ.get("API_JOB_TIMEOUT", os.environ.get("FLOW_EVAL_TIMEOUT", "360")))
 WORKERS = int(os.environ.get("API_WORKERS", os.environ.get("FLOW_EVAL_WORKERS", "4")))
+
+# How long an async /jobs work dir is kept for the client to download before it
+# is swept. Sync /parse dirs are deleted immediately (their zip is the response),
+# so this only bounds the async retention + reaps restart-orphans. 0 disables.
+JOB_TTL_SECONDS = int(os.environ.get("API_JOB_TTL_HOURS", "24")) * 3600
 
 # How much CLI output to keep as the failure `reason`.
 _REASON_TAIL = 2000
@@ -108,6 +115,10 @@ class JobStore:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def remove(self, job_id: str) -> None:
+        with self._lock:
+            self._jobs.pop(job_id, None)
+
     def set_status(
         self,
         job_id: str,
@@ -128,6 +139,47 @@ class JobStore:
                 job.reason = reason
             if artifacts is not None:
                 job.artifacts = artifacts
+
+
+def cleanup_job(job: Job, store: JobStore) -> None:
+    """Delete a job's work dir and evict its in-memory record. Idempotent.
+
+    Used to reclaim a synchronous /parse dir the moment its response has been
+    delivered (the zip is the response body, so nothing on disk is still needed).
+    """
+    shutil.rmtree(job.workdir, ignore_errors=True)
+    store.remove(job.id)
+
+
+def sweep_expired(store: JobStore, jobs_dir: Path, ttl_seconds: int = JOB_TTL_SECONDS) -> int:
+    """Delete job work dirs older than the TTL and evict their records.
+
+    Age comes from the work-dir mtime (~ last artifact write / completion), so an
+    in-flight job (mtime keeps updating, TTL >> job timeout) is never swept early.
+    This also reaps restart-orphans: after a restart the in-memory store is empty,
+    so on-disk dirs with no record are removed once they age past the TTL. Returns
+    the number of dirs removed. ``ttl_seconds <= 0`` disables the sweep.
+    """
+    if ttl_seconds <= 0:
+        return 0
+    cutoff = time.time() - ttl_seconds
+    removed = 0
+    try:
+        entries = list(jobs_dir.iterdir())
+    except FileNotFoundError:
+        return 0
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        try:
+            if entry.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+        store.remove(entry.name)  # dir name == job id; no-op if not in the store
+        removed += 1
+    return removed
 
 
 def collect_artifacts(workdir: Path, base: str = OUTPUT_BASE) -> List[ArtifactRecord]:
