@@ -45,6 +45,148 @@ except ImportError:  # pragma: no cover - compatibility for top-level imports
 _NO_CONNECT_NAMES = {"NC", "DNC", "NCDNC", "NOCONNECT", "NOCONNECTION"}
 
 
+# ---------------------------------------------------------------------------
+# Provenance / corroboration (Task 1: stop & trace hallucinations)
+#
+# The number-grounding above only ever drops fabricated NC pins. This section
+# answers a different, broader question for every pin: "is the (number, name)
+# pairing actually evidenced in the datasheet?" — and records that evidence on
+# the pin. It is deliberately split into three tiers so the abstention gate can
+# be tuned from measured data instead of a guess:
+#
+#   grounded    - the pin's number AND name appear together on one source line
+#                 or table row (the shape a real pin table / connection diagram
+#                 takes). Strongest evidence.
+#   weak        - the name (or all its word-segments) appears somewhere in the
+#                 source, but not co-located with the pin number. Generic names
+#                 (V+, GND, IN) land here on a hallucinated pinout because they
+#                 occur in prose everywhere — which is exactly why "appears
+#                 anywhere" is too weak to trust on its own.
+#   unsupported - the name appears nowhere in the source. Almost certainly
+#                 invented (or the source page was never captured).
+#   nc          - a no-connect pin; low signal, excluded from corroboration.
+# ---------------------------------------------------------------------------
+
+
+def _normalize(text) -> str:
+    """Uppercase, strip every non-alphanumeric char (mirrors the validator)."""
+    return re.sub(r"[^A-Za-z0-9]", "", str(text or "")).upper()
+
+
+def _name_segments(name: str) -> List[str]:
+    """Word-segments of a pin name, each normalized, length >= 2."""
+    segments = [_normalize(seg) for seg in re.split(r"[^A-Za-z0-9]+", str(name or ""))]
+    return [seg for seg in segments if len(seg) >= 2]
+
+
+def _source_lines(content) -> List[tuple]:
+    """(page_number, raw_line, normalized_line) for every text line and table row.
+
+    Page is tracked from the "--- Page N ---" markers content_extractor emits;
+    table rows carry their own page number.
+    """
+    lines: List[tuple] = []
+    text = getattr(content, "text_content", "") or ""
+    current_page = None
+    page_marker = re.compile(r"---\s*Page\s+(\d+)")
+    for raw in text.split("\n"):
+        marker = page_marker.search(raw)
+        if marker:
+            current_page = int(marker.group(1))
+            continue
+        if raw.strip():
+            lines.append((current_page, raw, _normalize(raw)))
+
+    for page_number, table in getattr(content, "tables", None) or []:
+        for row in table or []:
+            joined = " ".join(str(cell) for cell in row if cell)
+            if joined.strip():
+                lines.append((page_number, joined, _normalize(joined)))
+
+    return lines
+
+
+def _line_has_number(raw_line: str, number: int) -> bool:
+    """True if the pin number appears as a standalone token on the line."""
+    return re.search(rf"(?<!\d){number}(?!\d)", raw_line) is not None
+
+
+def _grade_pin(number, name, lines: List[tuple]):
+    """Return (status, source_page, evidence) for one pin against the source."""
+    if _is_no_connect(name):
+        return "nc", None, None
+
+    segments = _name_segments(name)
+    raw_name = str(name or "").strip()
+    if not segments and len(raw_name) < 2:
+        # Single-char names (+, -, K) carry too little signal to judge.
+        return "weak", None, None
+
+    def name_on_line(raw_line: str, norm_line: str) -> bool:
+        if segments:  # multi-char words: match segments in the punctuation-stripped line
+            return all(seg in norm_line for seg in segments)
+        # Short symbolic names (V+, V-, IN+): match the token literally on the raw line
+        return raw_name in raw_line
+
+    name_appears_anywhere = False
+    for page, raw, norm in lines:
+        if name_on_line(raw, norm):
+            name_appears_anywhere = True
+            if number is not None and _line_has_number(raw, int(number)):
+                return "grounded", page, raw.strip()[:160]
+
+    return ("weak", None, None) if name_appears_anywhere else ("unsupported", None, None)
+
+
+def _pins_of(pin_data):
+    """Yield the (mutable) pin objects to assess, across both PinData shapes."""
+    packages = getattr(pin_data, "packages", None)
+    if packages:
+        for package in packages:
+            if isinstance(package, dict):
+                for pin in package.get("pins") or []:
+                    yield pin
+    pins = getattr(pin_data, "pins", None)
+    if pins:
+        for pin in pins:
+            yield pin
+
+
+def _pin_get(pin, key):
+    return pin.get(key) if isinstance(pin, dict) else getattr(pin, key, None)
+
+
+def _pin_set(pin, key, value):
+    if isinstance(pin, dict):
+        pin[key] = value
+    else:
+        setattr(pin, key, value)
+
+
+def assess_pin_grounding(pin_data, content) -> Dict[str, int]:
+    """Tag every pin with its provenance and return a status tally.
+
+    Populates each pin's ``grounding`` / ``source_page`` / ``source_evidence``
+    in place, and returns counts like ``{"grounded": 6, "weak": 1,
+    "unsupported": 1, "nc": 0, "total": 8}``. Pure instrumentation — no pin is
+    added, dropped, or renamed. The abstention gate reads this tally.
+    """
+    lines = _source_lines(content)
+    tally = {"grounded": 0, "weak": 0, "unsupported": 0, "nc": 0, "total": 0}
+
+    for pin in _pins_of(pin_data):
+        number = _pin_get(pin, "number")
+        name = _pin_get(pin, "name")
+        status, page, evidence = _grade_pin(number, name, lines)
+        _pin_set(pin, "grounding", status)
+        _pin_set(pin, "source_page", page)
+        _pin_set(pin, "source_evidence", evidence)
+        tally[status] += 1
+        tally["total"] += 1
+
+    return tally
+
+
 def _is_no_connect(name) -> bool:
     """True for a no-connect pin label (NC / DNC / N.C. / "no connect")."""
     if not name:
