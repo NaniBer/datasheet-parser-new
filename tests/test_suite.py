@@ -272,10 +272,13 @@ def test_page_detector_early_page_gets_position_bonus(detector):
     assert score == 1
 
 
-def test_page_detector_cover_page_no_position_bonus(detector):
+def test_page_detector_cover_page_gets_position_bonus(detector):
+    # Recall bias: the cover page now earns the plausible-position bonus too,
+    # because short/medium datasheets often put the pinout ("Connection Diagram")
+    # on page 1. It must not be penalised for being first.
     detector.total_pages = 40
     score, _ = detector._check_page_position(1)
-    assert score == 0
+    assert score == 1
 
 
 # ---------------------------------------------------------------------------
@@ -3682,8 +3685,8 @@ def test_position_neutral_in_long_document():
 def test_position_bonus_kept_for_medium_document():
     """Short/medium datasheets keep the plausible-position bonus (regression)."""
     det = _detector_with_total(30)
-    # Cover page earns nothing; a mid-document page earns the +1 bonus.
-    assert det._check_page_position(1)[0] == 0
+    # Recall bias: cover page and mid-document pages both earn the +1 bonus.
+    assert det._check_page_position(1)[0] == 1
     assert det._check_page_position(3)[0] == 1
     # Very short sheets: any page is plausible.
     short = _detector_with_total(3)

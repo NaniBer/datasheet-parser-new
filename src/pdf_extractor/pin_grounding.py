@@ -163,6 +163,34 @@ def _pin_set(pin, key, value):
         setattr(pin, key, value)
 
 
+def pin_number_coverage(pin_data, content) -> float:
+    """Fraction of the extracted pins whose NUMBER appears as a standalone token
+    anywhere in the source (text or table rows).
+
+    This distinguishes a pinout invented from prose (the source contains no pin
+    numbers at all -> ~0.0) from a real but graphical/discrete pinout whose
+    package drawing does carry the numbers (-> high). It is deliberately about
+    the *numbers*, not the names: a diode drawing may only print "1 2" beside
+    the leads, which grounds by number even when the names don't ground by text.
+    Returns 1.0 when there are no pins to judge (no evidence of invention).
+    """
+    lines = _source_lines(content)
+    pins = list(_pins_of(pin_data))
+    numbers = []
+    for pin in pins:
+        n = _pin_get(pin, "number")
+        try:
+            numbers.append(int(n))
+        except (TypeError, ValueError):
+            continue
+    if not numbers:
+        return 1.0
+    present = sum(
+        1 for n in numbers if any(_line_has_number(raw, n) for _p, raw, _norm in lines)
+    )
+    return present / len(numbers)
+
+
 def assess_pin_grounding(pin_data, content) -> Dict[str, int]:
     """Tag every pin with its provenance and return a status tally.
 
