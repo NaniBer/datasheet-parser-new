@@ -125,6 +125,23 @@ class PageDetector:
         relevant_pages = [
             c for c in candidates if c.confidence_score >= min_confidence
         ]
+
+        # Recall bias (short/medium datasheets only): never silently drop the
+        # pinout page. Beyond the threshold-passers, always include the cover +
+        # first content page (pages 1-2) and any page carrying a strong pinout
+        # signal (a pinout heading, pinout table, or captioned diagram). A false
+        # include costs a little LLM context; a false drop loses the pinout
+        # entirely. Long manuals are left on the pure-threshold path so a
+        # 400-page reference doesn't flood the model.
+        if 0 < self.total_pages <= self.LONG_DOCUMENT_PAGE_COUNT:
+            already = {c.page_number for c in relevant_pages}
+            for c in candidates:
+                if c.page_number in already:
+                    continue
+                has_heading = any("heading" in r.lower() for r in c.reasons)
+                if c.page_number <= 2 or c.has_table or c.has_diagram or has_heading:
+                    relevant_pages.append(c)
+                    already.add(c.page_number)
         # Mark pages that need LLM verification
         for c in candidates:
             if c.needs_verification or (
@@ -350,8 +367,11 @@ class PageDetector:
 
         position_pct = page_num / self.total_pages
 
-        if page_num >= 2 and position_pct <= 0.85:
-            return 1, "Page in plausible pinout position (past cover, before tail)"
+        # Recall bias: the cover page no longer earns a penalty. On short/medium
+        # datasheets the pinout is frequently a "Connection Diagram" on page 1,
+        # so page 1 gets the same plausible-position bonus as any early page.
+        if position_pct <= 0.85:
+            return 1, "Page in plausible pinout position (before tail)"
 
         return 0, ""
 

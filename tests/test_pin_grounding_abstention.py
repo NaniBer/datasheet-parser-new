@@ -10,7 +10,7 @@ Covers two pieces:
 
 import pytest
 
-from src.pdf_extractor.pin_grounding import assess_pin_grounding
+from src.pdf_extractor.pin_grounding import assess_pin_grounding, pin_number_coverage
 from src.main import _apply_grounding_gate
 from src.models.pin_data import PinData, Pin
 from src.exceptions import ValidationError
@@ -100,3 +100,35 @@ def test_gate_noop_when_no_signal_pins():
     pd = PinData(component_name="X", pins=[Pin(1, "NC"), Pin(2, "NC")])
     _apply_grounding_gate(pd, _Content(TABLE_SRC), force_best_effort=False)  # no raise
     assert not pd.validation_errors
+
+
+# ------------------- coverage self-check (invention vs graphical) -------------------
+
+def test_pin_number_coverage_separates_invention_from_graphical():
+    # Invented pinout: the pins' numbers appear nowhere in the prose source.
+    prose = "--- Page 1 ---\nThe ZXQ is a 14-pin quad op-amp with V+ and V- supplies."
+    invented = PinData(component_name="ZXQ", pins=[Pin(i, f"IN{i}") for i in range(1, 15)])
+    assert pin_number_coverage(invented, _Content(prose)) < 0.5
+
+    # Real discrete: names don't ground, but the package drawing carries "1 2 3".
+    drawing = "--- Page 1 ---\nPin 1 Pin 2 Pin 3   TO-92 package outline"
+    real = PinData(component_name="REG", pins=[Pin(1, "VIN"), Pin(2, "GND"), Pin(3, "VOUT")])
+    assert pin_number_coverage(real, _Content(drawing)) >= 0.5
+
+
+def test_gate_refuses_invented_pinout_low_number_coverage():
+    # Numbers absent from source -> invented -> refuse (this is the trap case).
+    prose = "--- Page 1 ---\nThe ZXQ is a 14-pin quad op-amp with V+ and V- supplies."
+    pd = PinData(component_name="ZXQ", pins=[Pin(i, f"IN{i}") for i in range(1, 15)])
+    with pytest.raises(ValidationError) as exc:
+        _apply_grounding_gate(pd, _Content(prose), force_best_effort=False)
+    assert "not grounded" in str(exc.value)
+
+
+def test_gate_keeps_graphical_discrete_when_numbers_present():
+    # Names garbled/ungrounded, but pin numbers are in the drawing -> flag, not refuse.
+    drawing = "--- Page 1 ---\n1 2 3 4   bridge rectifier package outline"
+    pd = PinData(component_name="MB10F", pins=[
+        Pin(1, "AC1"), Pin(2, "AC2"), Pin(3, "PLUS"), Pin(4, "MINUS")])
+    _apply_grounding_gate(pd, _Content(drawing), force_best_effort=False)  # must NOT raise
+    assert pd.validation_errors and any("unverified" in e for e in pd.validation_errors)

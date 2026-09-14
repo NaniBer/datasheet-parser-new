@@ -332,6 +332,14 @@ def _grounding_source_text(content) -> str:
 # path to confirm later.
 _GROUNDING_TRUST = 0.6
 
+# Below this fraction of pins whose NUMBER appears anywhere in the source, the
+# pinout is unanchored from the datasheet — the signature of a pinout invented
+# from prose/priors (measured: a fabricated part scored 7% here, while real
+# discrete/graphical parts whose package drawings carry the numbers scored
+# 67–100%). This is what separates invention from a garbled-but-real graphical
+# pinout, which name-grounding alone cannot.
+_COVERAGE_MIN = 0.5
+
 
 def _apply_grounding_gate(
     pin_data, content, force_best_effort: bool, verbose: bool = False
@@ -339,18 +347,41 @@ def _apply_grounding_gate(
     """Task 1 abstention gate: refuse pinouts that are provably hallucinated.
 
     Tags every pin with provenance (grounding/source_page/source_evidence), then:
+      * almost no pin NUMBER appears in the source -> invented from prose -> REFUSE;
       * unsupported pin(s) amid an otherwise-grounded pinout -> REFUSE
         (fail-closed by default; --force-best-effort downgrades to a watermark);
-      * uniformly low grounding -> cannot verify from text (likely graphical) ->
-        flag "unverified" (watermark), do NOT refuse;
+      * uniformly low grounding but numbers present -> cannot verify from text
+        (likely a graphical/discrete pinout) -> flag "unverified", do NOT refuse;
       * well-grounded -> pass untouched.
     """
-    from .pdf_extractor.pin_grounding import assess_pin_grounding
+    from .pdf_extractor.pin_grounding import assess_pin_grounding, pin_number_coverage
 
     tally = assess_pin_grounding(pin_data, content)
     signal = tally["grounded"] + tally["weak"] + tally["unsupported"]
     if signal == 0:
         return  # no judgeable pins (all NC, or none) — nothing to gate
+
+    coverage = pin_number_coverage(pin_data, content)
+
+    # Invention signature: the pins' numbers are essentially absent from the
+    # datasheet, so the pinout was not read from it. Refuse. (A real graphical
+    # part keeps its numbers in the package drawing and clears this easily.)
+    if coverage < _COVERAGE_MIN:
+        reason = (
+            f"only {coverage:.0%} of the extracted pin numbers appear anywhere in "
+            f"the datasheet — the pinout is not grounded in the document (likely "
+            f"invented from prior knowledge)"
+        )
+        if force_best_effort:
+            _record_degraded(pin_data, [f"cannot determine pinout: {reason}"])
+            print(f"Warning: {reason}. Proceeding UNVALIDATED (--force-best-effort).")
+            return
+        raise ValidationError(
+            f"Cannot determine pinout: {reason}. "
+            "Re-run with --force-best-effort to emit unvalidated output.",
+            error_code=ErrorCodes.EXTRACTION_VALIDATION_FAILED,
+            details={"pin_number_coverage": coverage},
+        )
 
     grounded_frac = tally["grounded"] / signal
     unsupported = [
