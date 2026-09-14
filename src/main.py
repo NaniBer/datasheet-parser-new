@@ -322,6 +322,103 @@ def _grounding_source_text(content) -> str:
     return "\n".join(parts)
 
 
+# Above this fraction of grounded (non-NC) pins we trust the grounding signal
+# enough to treat a leftover *unsupported* pin as a real hallucination and
+# refuse. Below it, grounding itself is unreliable — the classic case is a
+# graphical/connection-diagram pinout whose text layer is garbled glyphs
+# (measured: MCP3208 100% grounded, TL072 83%, but a correct AD712 only 25%),
+# so we must NOT refuse on low grounding or we'd reject every picture-based
+# pinout. Those are flagged "unverified" (watermark) instead, for the vision
+# path to confirm later.
+_GROUNDING_TRUST = 0.6
+
+
+def _apply_grounding_gate(
+    pin_data, content, force_best_effort: bool, verbose: bool = False
+) -> None:
+    """Task 1 abstention gate: refuse pinouts that are provably hallucinated.
+
+    Tags every pin with provenance (grounding/source_page/source_evidence), then:
+      * unsupported pin(s) amid an otherwise-grounded pinout -> REFUSE
+        (fail-closed by default; --force-best-effort downgrades to a watermark);
+      * uniformly low grounding -> cannot verify from text (likely graphical) ->
+        flag "unverified" (watermark), do NOT refuse;
+      * well-grounded -> pass untouched.
+    """
+    from .pdf_extractor.pin_grounding import assess_pin_grounding
+
+    tally = assess_pin_grounding(pin_data, content)
+    signal = tally["grounded"] + tally["weak"] + tally["unsupported"]
+    if signal == 0:
+        return  # no judgeable pins (all NC, or none) — nothing to gate
+
+    grounded_frac = tally["grounded"] / signal
+    unsupported = [
+        _pin_name(pin)
+        for pin in _iter_all_pins(pin_data)
+        if _pin_field(pin, "grounding") == "unsupported"
+    ]
+
+    if verbose:
+        print(
+            f"  Grounding: {tally['grounded']} grounded, {tally['weak']} weak, "
+            f"{tally['unsupported']} unsupported, {tally['nc']} nc "
+            f"({grounded_frac:.0%} grounded)"
+        )
+
+    # Trustworthy context: most pins grounded, but some name is found nowhere in
+    # the datasheet -> those are hallucinated. Refuse.
+    if unsupported and grounded_frac >= _GROUNDING_TRUST:
+        reason = (
+            f"{len(unsupported)} pin name(s) appear nowhere in the datasheet "
+            f"({', '.join(repr(n) for n in unsupported[:6])}"
+            f"{', …' if len(unsupported) > 6 else ''}) while the rest are grounded — "
+            f"likely hallucinated"
+        )
+        if force_best_effort:
+            _record_degraded(pin_data, [f"cannot determine pinout: {reason}"])
+            print(f"Warning: {reason}. Proceeding UNVALIDATED (--force-best-effort).")
+            return
+        raise ValidationError(
+            f"Cannot determine pinout: {reason}. "
+            "Re-run with --force-best-effort to emit unvalidated output.",
+            error_code=ErrorCodes.EXTRACTION_VALIDATION_FAILED,
+            details={"unsupported_pins": unsupported},
+        )
+
+    # Low grounding overall: text can't verify this pinout (likely a graphical
+    # connection diagram). Don't refuse — flag it unverified for the vision path.
+    if grounded_frac < _GROUNDING_TRUST:
+        _record_degraded(
+            pin_data,
+            [
+                f"pinout unverified: only {tally['grounded']}/{signal} pins grounded "
+                f"in the datasheet text (likely a graphical pinout; needs vision)"
+            ],
+        )
+
+
+def _iter_all_pins(pin_data):
+    packages = getattr(pin_data, "packages", None)
+    if packages:
+        for package in packages:
+            if isinstance(package, dict):
+                for pin in package.get("pins") or []:
+                    yield pin
+    pins = getattr(pin_data, "pins", None)
+    if pins:
+        for pin in pins:
+            yield pin
+
+
+def _pin_field(pin, key):
+    return pin.get(key) if isinstance(pin, dict) else getattr(pin, key, None)
+
+
+def _pin_name(pin):
+    return _pin_field(pin, "name")
+
+
 def extract_pin_data(
     content,
     model: str,
@@ -385,6 +482,11 @@ def extract_pin_data(
         )
 
         if deterministic_validation.is_valid:
+            # Deterministic pins come straight from table rows, so they ground by
+            # construction; run the gate anyway for provenance tags + consistency.
+            _apply_grounding_gate(
+                deterministic_pin_data, content, force_best_effort, verbose
+            )
             if verbose:
                 print("Using deterministic table parser")
                 _print_pin_data_summary(deterministic_pin_data, deterministic_validation)
@@ -462,6 +564,8 @@ def extract_pin_data(
         last_validation = validation
 
         if validation.is_valid:
+            # Abstention gate: refuse provably-hallucinated pinouts before they ship.
+            _apply_grounding_gate(pin_data, content, force_best_effort, verbose)
             if verbose:
                 _print_pin_data_summary(pin_data, validation)
 

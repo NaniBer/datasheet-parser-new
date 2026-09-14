@@ -40,6 +40,12 @@ class PageDetector:
         r"mechanical\s*data\b",
         r"package\s*(?:information|drawing|specification)s?\b",
         r"pin\s*functions?\b",
+        # Analog Devices / TI style: the authoritative pinout is a labelled
+        # "Connection Diagram" (or "Pin Configuration Diagram"), and on those
+        # datasheets it sits on the cover page — which earns no position bonus
+        # and would otherwise be dropped, leaving the LLM to hallucinate the
+        # pinout from body prose.
+        r"connection\s*diagram\b",
     ]
 
     # Table column patterns for pinout tables

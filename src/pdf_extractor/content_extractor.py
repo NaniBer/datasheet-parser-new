@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -118,6 +119,17 @@ class ContentExtractor:
             images=filtered.images
         )
 
+    # A pinout drawn as a "Connection Diagram" / "Pin Configuration Diagram"
+    # (Analog Devices, TI, ...) is a 2D graphic: pin numbers sit in columns
+    # with signal labels beside them. Default extract_text() linearises that
+    # into a scrambled stream (e.g. "8 7 6 5 1 2 3 4 / OUTPUT V+ ...") that
+    # destroys the pin->label mapping, so the LLM cannot recover the pinout
+    # and hallucinates a plausible-but-wrong one. When we see the signal we
+    # additionally emit a layout-preserving render so the geometry survives.
+    _DIAGRAM_SIGNAL = re.compile(
+        r"connection\s*diagram|pin\s*configuration", re.IGNORECASE
+    )
+
     def _extract_text_from_page(
         self, page, page_num: int
     ) -> str:
@@ -132,7 +144,29 @@ class ContentExtractor:
             Extracted text with page markers
         """
         text = page.extract_text() or ""
-        return f"--- Page {page_num} ---\n{text}"
+        block = f"--- Page {page_num} ---\n{text}"
+
+        if self._DIAGRAM_SIGNAL.search(text):
+            layout_text = self._extract_layout_text(page)
+            if layout_text:
+                block += (
+                    f"\n\n--- Page {page_num} (connection diagram, layout "
+                    "preserved: pin numbers and their signal labels are aligned "
+                    "in columns; read pin<->label by position) ---\n"
+                    f"{layout_text}"
+                )
+        return block
+
+    def _extract_layout_text(self, page) -> str:
+        """Render the page keeping 2D whitespace so column geometry survives.
+
+        Returns an empty string if layout extraction is unavailable so the
+        caller falls back to the normal linear text.
+        """
+        try:
+            return page.extract_text(layout=True) or ""
+        except Exception:
+            return ""
 
     def _extract_images_from_page(
         self, page, page_num: int

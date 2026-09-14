@@ -148,6 +148,18 @@ def test_page_detector_no_heading_scores_zero(detector):
     assert reason == ""
 
 
+def test_page_detector_connection_diagram_scores_heading(detector):
+    # Analog Devices / TI put the authoritative pinout in a "Connection
+    # Diagram" on the cover page; that heading must earn the pinout-heading
+    # bonus or the cover (which gets no position bonus) is dropped and the
+    # LLM hallucinates the pinout from body prose (see AD712 regression).
+    score, reason = detector._check_pinout_heading(
+        "FEATURES CONNECTION DIAGRAM\n8 7 6 5 1 2 3 4"
+    )
+    assert score == 3
+    assert "heading" in reason.lower()
+
+
 def test_page_detector_pinout_table_scores(detector):
     table = [
         ["Pin No.", "Name", "Description"],
@@ -307,6 +319,37 @@ def test_benchmark_recall_all_expected_pages_detected(case_id, pdf_path, expecte
 
 from src.pdf_extractor import content_extractor as content_extractor_module
 from src.pdf_extractor.content_extractor import ContentExtractor
+
+
+def test_content_extractor_appends_layout_block_for_connection_diagram():
+    """A connection-diagram page also gets a layout-preserving render so the
+    pin<->label column geometry survives (plain extract_text() scrambles it)."""
+    extractor = ContentExtractor.__new__(ContentExtractor)
+    page = MagicMock()
+
+    def _extract_text(layout=False):
+        if layout:
+            return "OUTPUT 1   8 V+\nV- 4        5 NONINVERTING"
+        return "CONNECTION DIAGRAM\n8 7 6 5 1 2 3 4 OUTPUT V+"
+
+    page.extract_text.side_effect = _extract_text
+    out = extractor._extract_text_from_page(page, 1)
+
+    assert "--- Page 1 ---" in out
+    assert "layout preserved" in out
+    assert "OUTPUT 1   8 V+" in out  # 2D structure retained
+
+
+def test_content_extractor_no_layout_block_for_plain_page():
+    """Ordinary pages (no connection-diagram signal) are unchanged."""
+    extractor = ContentExtractor.__new__(ContentExtractor)
+    page = MagicMock()
+    page.extract_text.return_value = "Electrical Characteristics\nVcc max 5V"
+    out = extractor._extract_text_from_page(page, 4)
+
+    assert "layout preserved" not in out
+    # layout-mode extraction is not invoked when there is no diagram signal
+    page.extract_text.assert_called_once_with()
 
 
 @pytest.mark.integration
