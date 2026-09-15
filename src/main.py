@@ -173,6 +173,30 @@ def _body_output_base(output: str) -> str:
 # Pipeline Functions
 # ============================================================================
 
+_PINOUT_HEADING_RE = re.compile(
+    r"pin\s*(?:configuration|out|assignment|description|function|mapping|definition)s?"
+    r"|connection\s*diagram|terminal\s*assignment",
+    re.IGNORECASE,
+)
+_PINTABLE_HEADER_RE = re.compile(
+    r"pin\s*\.?\s*(?:no\.?|number|#)\b.*(?:name|function|description|symbol|signal)",
+    re.IGNORECASE,
+)
+
+
+def _page_pinout_hint(text: str) -> str:
+    """Cheap flag for the locate-index: does this page look like a pin page?
+
+    Returns a short tag ("[PINOUT?]") when the page carries a pinout heading or
+    a pin-table header, else "". Computed from text already extracted, so no
+    extra cost. Deliberately high-recall/low-precision — it only *hints* the
+    LLM, which makes the final call.
+    """
+    if _PINOUT_HEADING_RE.search(text) or _PINTABLE_HEADER_RE.search(text):
+        return "[PINOUT?]"
+    return ""
+
+
 def _build_page_heading_index(input_path: str, max_pages: int = 600) -> list:
     """Build a compact ``(page_number, heading)`` index of a whole document.
 
@@ -190,6 +214,12 @@ def _build_page_heading_index(input_path: str, max_pages: int = 600) -> list:
                 text = page.extract_text() or ""
                 lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
                 heading = " | ".join(lines[:2]) if lines else ""
+                # Prepend a cheap pinout hint (prepended so it survives the
+                # heading truncation in the locate prompt) — gives the LLM real
+                # signal to pick the deep pin page instead of a look-alike.
+                hint = _page_pinout_hint(text)
+                if hint:
+                    heading = f"{hint} {heading}"
                 index.append((page_num, heading))
     except Exception as e:
         print(f"Warning: could not build page heading index: {e}")
@@ -210,8 +240,8 @@ def _verify_pin_page_fallback(input_path: str, model: str, verbose: bool = False
 
     if verbose:
         print(
-            f"  Deterministic detection empty; asking LLM to locate the "
-            f"pin-assignment page across {len(page_index)} pages..."
+            f"  Asking LLM to locate the pin-assignment page across "
+            f"{len(page_index)} pages (deep-document check)..."
         )
 
     try:
@@ -259,17 +289,32 @@ def detect_relevant_pages(
 
     with PageDetector(input_path) as detector:
         candidates = detector.detect_relevant_pages(min_confidence=min_confidence)
+        total_pages = detector.total_pages
+        long_doc_threshold = detector.LONG_DOCUMENT_PAGE_COUNT
 
     if verbose:
         print(f"Found {len(candidates)} relevant pages:")
         for c in candidates:
             print(f"  - Page {c.page_number} (confidence: {c.confidence_score}): {', '.join(c.reasons)}")
 
+    # Long documents: the real pin-assignment page can sit deep in the manual
+    # (p385/400) with wording the keyword detector misses, and the recall-bias
+    # in PageDetector is scoped to short/medium sheets — so it does not help
+    # here. Always ask the LLM to locate the pin page over a compact heading
+    # index and MERGE it in, even when threshold detection already surfaced
+    # pages (which on a long doc are often the wrong ones — spec tables, etc.).
+    located_attempted = False
+    if model is not None and total_pages > long_doc_threshold:
+        located = _verify_pin_page_fallback(input_path, model, verbose)
+        located_attempted = True
+        if located:
+            have = {c.page_number for c in candidates}
+            candidates += [c for c in located if c.page_number not in have]
+
     if not candidates:
-        # No page cleared the confidence threshold. Before giving up, ask the
-        # LLM to locate the pin-assignment page over a compact heading index
-        # (handles deep pages in long documents). Fail closed if it can't.
-        if model is not None:
+        # No page cleared the threshold. Before giving up, ask the LLM to locate
+        # the pin-assignment page (unless we already tried above). Fail closed.
+        if model is not None and not located_attempted:
             candidates = _verify_pin_page_fallback(input_path, model, verbose)
 
         if not candidates:
