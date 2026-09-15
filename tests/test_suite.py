@@ -272,10 +272,13 @@ def test_page_detector_early_page_gets_position_bonus(detector):
     assert score == 1
 
 
-def test_page_detector_cover_page_no_position_bonus(detector):
+def test_page_detector_cover_page_gets_position_bonus(detector):
+    # Recall bias: the cover page now earns the plausible-position bonus too,
+    # because short/medium datasheets often put the pinout ("Connection Diagram")
+    # on page 1. It must not be penalised for being first.
     detector.total_pages = 40
     score, _ = detector._check_page_position(1)
-    assert score == 0
+    assert score == 1
 
 
 # ---------------------------------------------------------------------------
@@ -3682,8 +3685,8 @@ def test_position_neutral_in_long_document():
 def test_position_bonus_kept_for_medium_document():
     """Short/medium datasheets keep the plausible-position bonus (regression)."""
     det = _detector_with_total(30)
-    # Cover page earns nothing; a mid-document page earns the +1 bonus.
-    assert det._check_page_position(1)[0] == 0
+    # Recall bias: cover page and mid-document pages both earn the +1 bonus.
+    assert det._check_page_position(1)[0] == 1
     assert det._check_page_position(3)[0] == 1
     # Very short sheets: any page is plausible.
     short = _detector_with_total(3)
@@ -3730,7 +3733,7 @@ def test_page_verifier_locate_parses_page_number(monkeypatch):
     import src.llm.page_verifier as pv
     monkeypatch.setattr(
         pv, "get_completion_from_messages",
-        lambda messages, model=None: "385"
+        lambda messages, model=None, **kw:"385"
     )
     client = MagicMock()
     client.model = "test-model"
@@ -3745,7 +3748,7 @@ def test_page_verifier_locate_fails_closed_on_none(monkeypatch):
     import src.llm.page_verifier as pv
     monkeypatch.setattr(
         pv, "get_completion_from_messages",
-        lambda messages, model=None: "NONE - no pinout table present"
+        lambda messages, model=None, **kw:"NONE - no pinout table present"
     )
     client = MagicMock()
     client.model = "test-model"
@@ -3759,12 +3762,63 @@ def test_page_verifier_locate_rejects_out_of_range(monkeypatch):
     import src.llm.page_verifier as pv
     monkeypatch.setattr(
         pv, "get_completion_from_messages",
-        lambda messages, model=None: "999"
+        lambda messages, model=None, **kw:"999"
     )
     client = MagicMock()
     client.model = "test-model"
     verifier = PageVerifier(client)
     assert verifier.locate_pin_assignment_page([(1, "Cover"), (2, "Pinout")]) is None
+
+
+def test_page_pinout_hint_flags_pin_pages():
+    from src.main import _page_pinout_hint
+    assert _page_pinout_hint("... Pin Configuration ...") == "[PINOUT?]"
+    assert _page_pinout_hint("CONNECTION DIAGRAM\n8 7 6 5") == "[PINOUT?]"
+    assert _page_pinout_hint("Pin No. Pin Name Function\n1 VCC power") == "[PINOUT?]"
+    assert _page_pinout_hint("Electrical Characteristics\nVcc max 5V") == ""
+
+
+def test_long_doc_merges_llm_located_page(monkeypatch):
+    """On a long document the LLM-located pin page is merged into the candidate
+    set even when threshold detection already found (wrong) pages."""
+    import src.main as m
+    from src.pdf_extractor.page_detector import PageCandidate
+
+    fake_det = MagicMock()
+    fake_det.detect_relevant_pages.return_value = [PageCandidate(page_number=12, confidence_score=5)]
+    fake_det.total_pages = 400
+    fake_det.LONG_DOCUMENT_PAGE_COUNT = 50
+    fake_det.__enter__ = lambda s: s
+    fake_det.__exit__ = lambda s, *a: False
+    monkeypatch.setattr(m, "PageDetector", lambda *a, **k: fake_det)
+    monkeypatch.setattr(
+        m, "_verify_pin_page_fallback",
+        lambda path, model, verbose=False: [PageCandidate(page_number=385, confidence_score=5)],
+    )
+    pages = {c.page_number for c in m.detect_relevant_pages("x.pdf", 5, False, "llama-3")}
+    assert pages == {12, 385}  # merged, not replaced
+
+
+def test_short_doc_does_not_call_locate(monkeypatch):
+    """Short/medium docs are untouched by the long-doc locate step."""
+    import src.main as m
+    from src.pdf_extractor.page_detector import PageCandidate
+
+    fake_det = MagicMock()
+    fake_det.detect_relevant_pages.return_value = [PageCandidate(page_number=2, confidence_score=5)]
+    fake_det.total_pages = 20
+    fake_det.LONG_DOCUMENT_PAGE_COUNT = 50
+    fake_det.__enter__ = lambda s: s
+    fake_det.__exit__ = lambda s, *a: False
+    monkeypatch.setattr(m, "PageDetector", lambda *a, **k: fake_det)
+    called = {"n": 0}
+    def _spy(*a, **k):
+        called["n"] += 1
+        return None
+    monkeypatch.setattr(m, "_verify_pin_page_fallback", _spy)
+    pages = {c.page_number for c in m.detect_relevant_pages("x.pdf", 5, False, "llama-3")}
+    assert pages == {2}
+    assert called["n"] == 0
 
 
 def test_page_verifier_locate_fails_closed_on_llm_error(monkeypatch):
@@ -3786,6 +3840,9 @@ def _patch_empty_detector(monkeypatch):
     import src.main as m
 
     class FakeDetector:
+        total_pages = 20
+        LONG_DOCUMENT_PAGE_COUNT = 50
+
         def __init__(self, path):
             pass
 
@@ -3858,6 +3915,9 @@ def test_detect_pages_no_fallback_when_detector_succeeds(monkeypatch):
     early = PageCandidate(page_number=3, confidence_score=7, reasons=["heading"])
 
     class FakeDetector:
+        total_pages = 20
+        LONG_DOCUMENT_PAGE_COUNT = 50
+
         def __init__(self, path):
             pass
 

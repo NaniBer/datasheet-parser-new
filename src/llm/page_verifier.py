@@ -93,7 +93,11 @@ class PageVerifier:
 
         messages = self._build_locate_messages(page_index)
         try:
-            response = get_completion_from_messages(messages, model=self.model)
+            # Deterministic: the same manual must locate the same page across
+            # runs (run-to-run consistency was a core complaint).
+            response = get_completion_from_messages(
+                messages, model=self.model, temperature=0.0
+            )
         except Exception as e:
             # Fail closed on any LLM/transport error: do not guess a page.
             print(f"Warning: LLM page location failed: {e}. Failing closed.")
