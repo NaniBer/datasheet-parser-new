@@ -495,6 +495,91 @@ def _pin_name(pin):
     return _pin_field(pin, "name")
 
 
+def _active_pins(pin_data):
+    """Return (pins_list, container) for the selected package or legacy pins."""
+    packages = getattr(pin_data, "packages", None)
+    if packages:
+        idx = getattr(pin_data, "selected_package_index", None) or 0
+        if idx < len(packages) and isinstance(packages[idx], dict):
+            pkg = packages[idx]
+            return pkg.get("pins") or [], pkg
+    if getattr(pin_data, "pins", None):
+        return pin_data.pins, pin_data
+    return [], None
+
+
+def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=False):
+    """When text can't ground the pinout (graphical parts), read it via vision.
+
+    Grounding is imperfect but conservative here: we only reach for vision when
+    the text pinout is poorly grounded (the graphical/analog case), render the
+    pinout page(s), read the pinout with the vision endpoint, and — if it returns
+    a confident pinout — replace the ungrounded text pins with the vision ones.
+    Well-grounded parts are left untouched (text is reliable there, and this
+    keeps the vision call off the common path). Measured identity: this gated
+    merge reached ~56% vs ~44% text; broad text-vs-vision arbitration was slower
+    and no better (vision is noisy run-to-run and loses the parts text gets
+    right), so it is deliberately not used.
+    """
+    from .pdf_extractor.pin_grounding import assess_pin_grounding
+    from .llm.vision_pinout import extract_pinout_best_page
+
+    tally = assess_pin_grounding(pin_data, content)
+    signal = tally["grounded"] + tally["weak"] + tally["unsupported"]
+    if signal == 0:
+        return
+    if tally["grounded"] / signal >= _GROUNDING_TRUST:
+        return  # text is well-grounded — trust it, skip the vision call
+
+    pages = list(getattr(content, "pages", None) or [])
+    if not pages or input_path is None:
+        return
+
+    text_pins, _container = _active_pins(pin_data)
+    expected = len(text_pins) or None
+    if verbose:
+        print("  Low text grounding — trying the vision path on the pinout page(s)...")
+    vision_pins = extract_pinout_best_page(
+        str(input_path), pages, part_number=part_number,
+        expected_pin_count=expected, verbose=verbose,
+    )
+    named = [
+        p for p in vision_pins
+        if str(p.get("name")).strip() not in ("", str(p.get("number")))
+    ]
+    if len(named) < max(2, (expected or 0) // 2):
+        if verbose:
+            print("  Vision fallback: no confident pinout; keeping text extraction.")
+        return
+
+    _replace_pins_with_vision(pin_data, vision_pins)
+    _record_degraded(
+        pin_data,
+        [f"pinout read via vision on the rendered page ({len(vision_pins)} pins); "
+         "text could not be grounded"],
+    )
+    if verbose:
+        print(f"  Vision fallback: replaced text pins with {len(vision_pins)} vision-read pins.")
+
+
+
+def _replace_pins_with_vision(pin_data, vision_pins):
+    """Swap the active package's pins for the vision-read pinout (both shapes)."""
+    pins_list, container = _active_pins(pin_data)
+    if container is None:
+        return
+    if isinstance(container, dict):
+        container["pins"] = [
+            {"number": p["number"], "name": p["name"]} for p in vision_pins
+        ]
+        container["pin_count"] = len(vision_pins)
+    else:  # legacy PinData: rebuild Pin objects
+        pin_data.pins = [Pin(number=p["number"], name=p["name"]) for p in vision_pins]
+        if getattr(pin_data, "package", None) is not None:
+            pin_data.package.pin_count = len(vision_pins)
+    pin_data.extraction_method = "Vision"
+
+
 def extract_pin_data(
     content,
     model: str,
@@ -1415,6 +1500,12 @@ def process_datasheet(
             verbose,
             part_number=resolved_part_number,
             force_best_effort=force_best_effort,
+        )
+
+        # When the text extraction couldn't be grounded in the datasheet (the
+        # graphical/analog case), read the pinout from a rendered image instead.
+        _apply_vision_fallback(
+            pin_data, content, input_path, resolved_part_number, verbose
         )
 
         # Phase 2: build the canonical ComponentRecord at the extraction seam.
