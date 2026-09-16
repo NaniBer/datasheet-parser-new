@@ -265,6 +265,23 @@ def _verify_pin_page_fallback(input_path: str, model: str, verbose: bool = False
     return [candidate]
 
 
+def _has_strong_pinout_signal(candidates) -> bool:
+    """True when at least one detected page carries a real pinout signal.
+
+    A "strong" signal is a pinout table, a captioned diagram, or a pinout
+    heading — i.e. the deterministic detector actually recognised a pin page,
+    not merely a recall-bias include (cover / first content page). When this is
+    False the detection is low-confidence and we escalate to the LLM page
+    classifier (Task 3: comprehension only when the cheap signals are weak).
+    """
+    for c in candidates:
+        if getattr(c, "has_table", False) or getattr(c, "has_diagram", False):
+            return True
+        if any("heading" in r.lower() for r in getattr(c, "reasons", []) or []):
+            return True
+    return False
+
+
 def detect_relevant_pages(
     input_path: str,
     min_confidence: int,
@@ -297,14 +314,24 @@ def detect_relevant_pages(
         for c in candidates:
             print(f"  - Page {c.page_number} (confidence: {c.confidence_score}): {', '.join(c.reasons)}")
 
-    # Long documents: the real pin-assignment page can sit deep in the manual
-    # (p385/400) with wording the keyword detector misses, and the recall-bias
-    # in PageDetector is scoped to short/medium sheets — so it does not help
-    # here. Always ask the LLM to locate the pin page over a compact heading
-    # index and MERGE it in, even when threshold detection already surfaced
-    # pages (which on a long doc are often the wrong ones — spec tables, etc.).
+    # Escalate to the LLM page classifier (Task 3) in two low-signal situations,
+    # MERGING its located page in rather than replacing:
+    #   * Long documents — the real pin-assignment page can sit deep in the
+    #     manual (p385/400) with wording the keyword detector misses, and the
+    #     PageDetector recall-bias is scoped to short/medium sheets. Even when
+    #     threshold detection surfaced pages, on a long doc they are often the
+    #     wrong ones (spec tables, etc.), so we always ask.
+    #   * Weak detection on any length — nothing the detector returned carries a
+    #     real pinout signal (table / captioned diagram / pinout heading); the
+    #     candidates are only recall-bias includes. Comprehension is exactly
+    #     what is needed here, so escalate. Well-detected parts (a clear pinout
+    #     table or diagram) skip the LLM, keeping the common path cheap.
     located_attempted = False
-    if model is not None and total_pages > long_doc_threshold:
+    weak_detection = not _has_strong_pinout_signal(candidates)
+    if model is not None and (total_pages > long_doc_threshold or weak_detection):
+        if verbose and weak_detection and total_pages <= long_doc_threshold:
+            print("  Detection signal weak (no pinout table/diagram/heading) — "
+                  "escalating to the LLM page classifier...")
         located = _verify_pin_page_fallback(input_path, model, verbose)
         located_attempted = True
         if located:

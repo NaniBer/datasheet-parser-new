@@ -3799,13 +3799,15 @@ def test_long_doc_merges_llm_located_page(monkeypatch):
     assert pages == {12, 385}  # merged, not replaced
 
 
-def test_short_doc_does_not_call_locate(monkeypatch):
-    """Short/medium docs are untouched by the long-doc locate step."""
+def test_short_doc_strong_signal_does_not_call_locate(monkeypatch):
+    """A well-detected short doc (a real pinout table) skips the LLM classifier."""
     import src.main as m
     from src.pdf_extractor.page_detector import PageCandidate
 
+    strong = PageCandidate(page_number=2, confidence_score=5)
+    strong.has_table = True  # a genuine pinout signal
     fake_det = MagicMock()
-    fake_det.detect_relevant_pages.return_value = [PageCandidate(page_number=2, confidence_score=5)]
+    fake_det.detect_relevant_pages.return_value = [strong]
     fake_det.total_pages = 20
     fake_det.LONG_DOCUMENT_PAGE_COUNT = 50
     fake_det.__enter__ = lambda s: s
@@ -3819,6 +3821,32 @@ def test_short_doc_does_not_call_locate(monkeypatch):
     pages = {c.page_number for c in m.detect_relevant_pages("x.pdf", 5, False, "llama-3")}
     assert pages == {2}
     assert called["n"] == 0
+
+
+def test_short_doc_weak_signal_escalates_and_merges(monkeypatch):
+    """A short doc whose only candidates are recall-bias includes (no pinout
+    table/diagram/heading) escalates to the LLM classifier and merges its page."""
+    import src.main as m
+    from src.pdf_extractor.page_detector import PageCandidate
+
+    # page 1 recall-bias include, no strong signal -> weak detection
+    weak = PageCandidate(page_number=1, confidence_score=5,
+                         reasons=["cover page position"])
+    fake_det = MagicMock()
+    fake_det.detect_relevant_pages.return_value = [weak]
+    fake_det.total_pages = 20
+    fake_det.LONG_DOCUMENT_PAGE_COUNT = 50
+    fake_det.__enter__ = lambda s: s
+    fake_det.__exit__ = lambda s, *a: False
+    monkeypatch.setattr(m, "PageDetector", lambda *a, **k: fake_det)
+    called = {"n": 0}
+    def _locate(path, model, verbose=False):
+        called["n"] += 1
+        return [PageCandidate(page_number=7, confidence_score=5)]
+    monkeypatch.setattr(m, "_verify_pin_page_fallback", _locate)
+    pages = {c.page_number for c in m.detect_relevant_pages("x.pdf", 5, False, "llama-3")}
+    assert pages == {1, 7}       # merged, not replaced
+    assert called["n"] == 1      # escalated exactly once
 
 
 def test_page_verifier_locate_fails_closed_on_llm_error(monkeypatch):
