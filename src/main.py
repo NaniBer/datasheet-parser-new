@@ -268,14 +268,16 @@ def _verify_pin_page_fallback(input_path: str, model: str, verbose: bool = False
 def _has_strong_pinout_signal(candidates) -> bool:
     """True when at least one detected page carries a real pinout signal.
 
-    A "strong" signal is a pinout table, a captioned diagram, or a pinout
-    heading — i.e. the deterministic detector actually recognised a pin page,
-    not merely a recall-bias include (cover / first content page). When this is
-    False the detection is low-confidence and we escalate to the LLM page
-    classifier (Task 3: comprehension only when the cheap signals are weak).
+    A "strong" signal is a pinout table, a captioned diagram, a structural
+    pinout shape (numbered pins beside labels), or a pinout heading — i.e. the
+    deterministic detector actually recognised a pin page, not merely a
+    recall-bias include (cover / first content page). When this is False the
+    detection is low-confidence and we escalate to the LLM page classifier
+    (Task 3: comprehension only when the cheap signals are weak).
     """
     for c in candidates:
-        if getattr(c, "has_table", False) or getattr(c, "has_diagram", False):
+        if (getattr(c, "has_table", False) or getattr(c, "has_diagram", False)
+                or getattr(c, "has_shape", False)):
             return True
         if any("heading" in r.lower() for r in getattr(c, "reasons", []) or []):
             return True
