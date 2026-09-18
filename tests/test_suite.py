@@ -3799,13 +3799,15 @@ def test_long_doc_merges_llm_located_page(monkeypatch):
     assert pages == {12, 385}  # merged, not replaced
 
 
-def test_short_doc_does_not_call_locate(monkeypatch):
-    """Short/medium docs are untouched by the long-doc locate step."""
+def test_short_doc_strong_signal_does_not_call_locate(monkeypatch):
+    """A well-detected short doc (a real pinout table) skips the LLM classifier."""
     import src.main as m
     from src.pdf_extractor.page_detector import PageCandidate
 
+    strong = PageCandidate(page_number=2, confidence_score=5)
+    strong.has_table = True  # a genuine pinout signal
     fake_det = MagicMock()
-    fake_det.detect_relevant_pages.return_value = [PageCandidate(page_number=2, confidence_score=5)]
+    fake_det.detect_relevant_pages.return_value = [strong]
     fake_det.total_pages = 20
     fake_det.LONG_DOCUMENT_PAGE_COUNT = 50
     fake_det.__enter__ = lambda s: s
@@ -3819,6 +3821,104 @@ def test_short_doc_does_not_call_locate(monkeypatch):
     pages = {c.page_number for c in m.detect_relevant_pages("x.pdf", 5, False, "llama-3")}
     assert pages == {2}
     assert called["n"] == 0
+
+
+def test_short_doc_weak_signal_escalates_and_merges(monkeypatch):
+    """A short doc whose only candidates are recall-bias includes (no pinout
+    table/diagram/heading) escalates to the LLM classifier and merges its page."""
+    import src.main as m
+    from src.pdf_extractor.page_detector import PageCandidate
+
+    # page 1 recall-bias include, no strong signal -> weak detection
+    weak = PageCandidate(page_number=1, confidence_score=5,
+                         reasons=["cover page position"])
+    fake_det = MagicMock()
+    fake_det.detect_relevant_pages.return_value = [weak]
+    fake_det.total_pages = 20
+    fake_det.LONG_DOCUMENT_PAGE_COUNT = 50
+    fake_det.__enter__ = lambda s: s
+    fake_det.__exit__ = lambda s, *a: False
+    monkeypatch.setattr(m, "PageDetector", lambda *a, **k: fake_det)
+    called = {"n": 0}
+    def _locate(path, model, verbose=False):
+        called["n"] += 1
+        return [PageCandidate(page_number=7, confidence_score=5)]
+    monkeypatch.setattr(m, "_verify_pin_page_fallback", _locate)
+    pages = {c.page_number for c in m.detect_relevant_pages("x.pdf", 5, False, "llama-3")}
+    assert pages == {1, 7}       # merged, not replaced
+    assert called["n"] == 1      # escalated exactly once
+
+
+# --------------------------- Task 4: detect by shape ---------------------------
+
+def _word(text, x0, top, w=22.0, h=10.0):
+    """Build a pdfplumber-style word dict at a given position."""
+    return {"text": text, "x0": x0, "x1": x0 + w, "top": top, "bottom": top + h}
+
+
+class _FakeShapePage:
+    def __init__(self, words):
+        self._words = words
+
+    def extract_words(self, use_text_flow=False):
+        return self._words
+
+
+def _detector():
+    """A PageDetector instance without opening a PDF (methods are pure)."""
+    from src.pdf_extractor.page_detector import PageDetector
+    return PageDetector.__new__(PageDetector)
+
+
+def test_pinout_shape_detects_numbered_pins_beside_labels():
+    """A connection-diagram layout — pin numbers 1..8 each beside a signal
+    label on the same row — is recognised by geometry, no keywords needed."""
+    det = _detector()
+    labels = ["OUT1", "IN1-", "IN1+", "VEE", "IN2+", "IN2-", "OUT2", "VCC"]
+    words = []
+    for i, name in enumerate(labels):
+        y = 100.0 + i * 20.0
+        words.append(_word(str(i + 1), 50.0, y))      # pin number
+        words.append(_word(name, 80.0, y))            # label on the same row
+    score, has_shape, reason = det._check_pinout_shape(_FakeShapePage(words))
+    assert has_shape is True
+    assert score == 3            # clean ascending run from pin 1
+    assert "8 numbered pins" in reason
+
+
+def test_pinout_shape_ignores_bare_numbers_without_labels():
+    """A column of numbers with no adjacent labels (e.g. a spec table) does
+    not qualify as a pinout shape."""
+    det = _detector()
+    words = [_word(str(n), 50.0, 100.0 + n * 20.0) for n in range(1, 9)]
+    score, has_shape, _ = det._check_pinout_shape(_FakeShapePage(words))
+    assert has_shape is False
+    assert score == 0
+
+
+def test_pinout_shape_requires_run_starting_near_pin_1():
+    """Numbers that pair with labels but do not form an ascending run from
+    pin 1 (e.g. a ratings table numbered 20..24) are not a clean pinout."""
+    det = _detector()
+    words = []
+    for k, n in enumerate([20, 24, 31, 45]):          # non-sequential, high
+        y = 100.0 + k * 20.0
+        words.append(_word(str(n), 50.0, y))
+        words.append(_word("VAL", 80.0, y))
+    score, has_shape, _ = det._check_pinout_shape(_FakeShapePage(words))
+    assert has_shape is False
+    assert score == 0
+
+
+def test_pinout_shape_marks_candidate_and_counts_as_strong_signal():
+    """has_shape flows through _analyze_page and counts as a strong pinout
+    signal for the Task 3 escalation gate."""
+    import src.main as m
+    from src.pdf_extractor.page_detector import PageCandidate
+
+    c = PageCandidate(page_number=3, confidence_score=3)
+    c.has_shape = True
+    assert m._has_strong_pinout_signal([c]) is True
 
 
 def test_page_verifier_locate_fails_closed_on_llm_error(monkeypatch):
