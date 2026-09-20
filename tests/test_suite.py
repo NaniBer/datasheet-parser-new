@@ -3520,6 +3520,157 @@ def test_ordered_family_unrecognized_string_does_not_refuse():
 
 
 # ===========================================================================
+# Targeted re-extraction: when the ordering table grounds a package (pin
+# count/family) that NO extracted variant matches — and NC-padding can't
+# explain it — the LLM read the wrong variant and there is nothing to switch
+# to. Re-extract THAT specific package's pinout and install it if it comes back
+# clean and complete; otherwise keep the original (fallback-safe). The LLM call
+# is mocked here (real behaviour is exercised by the W25Q128 end-to-end run).
+# ===========================================================================
+def _fake_client_returning(pin_data):
+    class _Fake:
+        def __init__(self, *a, **k):
+            pass
+
+        def reextract_package_pinout(self, **kwargs):
+            return pin_data
+
+    return _Fake
+
+
+def test_reextract_installs_matching_variant(monkeypatch):
+    import src.main as main_mod
+    from src.models.pin_data import PinData, PackageInfo, Pin
+
+    # Original extraction read the WRONG 16-pin variant.
+    pd = PinData(
+        component_name="W25Q128",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+        ordered_pin_count=8,
+        ordered_package_type="SOIC",
+    )
+    good = PinData(
+        component_name="W25Q128",
+        package=PackageInfo(type="SOIC-8", pin_count=8, width=0.0, height=0.0),
+        pins=[Pin(number=i, name=n) for i, n in enumerate(
+            ["/CS", "DO", "/WP", "GND", "DI", "CLK", "/HOLD", "VCC"], start=1)],
+    )
+    monkeypatch.setattr(main_mod, "LLMClient", _fake_client_returning(good))
+
+    assert main_mod._reextract_ordered_variant(pd, "content", "W25Q128JVSIM", "m")
+    assert pd.package.pin_count == 8
+    assert len(pd.pins) == 8
+    assert pd.package.type == "SOIC-8"  # relabelled to the grounded family/count
+    assert pd.pins[0].name == "/CS"
+
+
+def test_reextract_degenerate_result_keeps_original(monkeypatch):
+    import src.main as main_mod
+    from src.models.pin_data import PinData, PackageInfo, Pin
+
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+        ordered_pin_count=8,
+        ordered_package_type="SOIC",
+    )
+    # Re-extraction returns a short/degenerate result (3 pins, not 8).
+    degenerate = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-8", pin_count=3, width=0.0, height=0.0),
+        pins=[Pin(number=i, name=f"Q{i}") for i in range(1, 4)],
+    )
+    monkeypatch.setattr(main_mod, "LLMClient", _fake_client_returning(degenerate))
+
+    assert not main_mod._reextract_ordered_variant(pd, "content", "PART", "m")
+    # Original extraction is untouched.
+    assert len(pd.pins) == 16
+    assert pd.package.pin_count == 16
+    assert pd.package.type == "SOIC-16"
+
+
+def test_apply_ordering_reextraction_fixes_wrong_variant(monkeypatch):
+    # End-to-end wiring: a grounded 8-pin SOIC that matches no extracted variant
+    # triggers re-extraction, whose clean 8-pin result is installed — so strict
+    # enforcement no longer fails closed.
+    import src.main as main_mod
+    from src.pdf_extractor import ordering_table as ot
+    from src.pdf_extractor.ordering_table import OrderingMatch
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    from pathlib import Path
+
+    monkeypatch.setattr(ot, "full_pdf_text", lambda p: "Pin Configuration text")
+    monkeypatch.setattr(
+        ot, "find_ordering_match",
+        lambda t, pn: OrderingMatch(
+            orderable=pn, package="SOIC", pin_count=8, exact=True, reason="r"),
+    )
+    good = PinData(
+        component_name="W",
+        package=PackageInfo(type="SOIC-8", pin_count=8, width=0.0, height=0.0),
+        pins=[Pin(number=i, name=n) for i, n in enumerate("ABCDEFGH", start=1)],
+    )
+    monkeypatch.setattr(main_mod, "LLMClient", _fake_client_returning(good))
+
+    pd = PinData(
+        component_name="W",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+    )
+    # force_best_effort=False (strict): must NOT raise, because re-extraction
+    # replaced the wrong variant with the grounded 8-pin one.
+    main_mod.apply_ordering_ground_truth(
+        pd, Path("x.pdf"), "W25Q128JVSIM", "m", force_best_effort=False
+    )
+    assert len(pd.pins) == 8
+    assert pd.package.pin_count == 8
+
+
+def test_apply_ordering_reextraction_skipped_when_nc_padding_reconciles(monkeypatch):
+    # The NC-padding path (TPS51100) must be preserved: when trimming fabricated
+    # NC pins alone reconciles the count, re-extraction must NOT fire (no wasted
+    # LLM call, existing behaviour unchanged).
+    import src.main as main_mod
+    from src.pdf_extractor import ordering_table as ot
+    from src.pdf_extractor.ordering_table import OrderingMatch
+    from src.models.pin_data import PinData
+    from pathlib import Path
+
+    monkeypatch.setattr(ot, "full_pdf_text", lambda p: "text")
+    monkeypatch.setattr(
+        ot, "find_ordering_match",
+        lambda t, pn: OrderingMatch(
+            orderable=pn, package=None, pin_count=10, exact=True, reason="r"),
+    )
+    called = {"n": 0}
+
+    class _Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        def reextract_package_pinout(self, **kwargs):
+            called["n"] += 1
+            raise AssertionError("re-extraction should not run for NC padding")
+
+    monkeypatch.setattr(main_mod, "LLMClient", _Boom)
+
+    real = [{"number": i, "name": n, "function": None} for i, n in enumerate(
+        ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"], start=1)]
+    nc = [{"number": i, "name": "NC", "function": "none"} for i in range(11, 21)]
+    pd = PinData(
+        component_name="TPS51100",
+        packages=[{"type": "QFN-20", "pin_count": 20, "pins": real + nc}],
+    )
+    main_mod.apply_ordering_ground_truth(
+        pd, Path("x.pdf"), "TPS51100DGQ", "m", force_best_effort=False
+    )
+    assert called["n"] == 0
+    assert pd.packages[0]["pin_count"] == 10  # NC padding trimmed, as before
+
+
+# ===========================================================================
 # Fix 5 (completion): auto-degraded signal — lossy/unverified footprint output
 # watermarks the GLB (validated=false) and exits 3 WITHOUT --force-best-effort,
 # while cleanly-grounded output stays exit 0.

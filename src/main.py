@@ -1351,6 +1351,194 @@ def _enforce_ordered_package_family(
     )
 
 
+def _ordered_variant_matches(pin_data: PinData, ordered: int) -> bool:
+    """True when some extracted variant already has the grounded pin count."""
+    counts = _extracted_pin_counts(pin_data)
+    return bool(counts) and any(count == ordered for count in counts)
+
+
+def _nc_padding_can_reconcile(pin_data: PinData, ordered: int) -> bool:
+    """True when trimming fabricated NC padding alone would make a variant match
+    the grounded count (the TPS51100 case).
+
+    Used to skip the (LLM) re-extraction when the cheap NC trim inside
+    _enforce_ordered_pin_count will already reconcile the mismatch — so the
+    well-tested NC-padding path is preserved unchanged and re-extraction only
+    fires when the correct variant is genuinely missing from the extraction.
+    """
+    if pin_data.packages:
+        for pkg in pin_data.packages:
+            pins = pkg.get("pins") or []
+            try:
+                count = int(pkg.get("pin_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            count = count or len(pins)
+            if count > ordered and _trim_nc_padding(pins, ordered)[1]:
+                return True
+    elif pin_data.package and pin_data.pins:
+        count = pin_data.package.pin_count or len(pin_data.pins)
+        if count > ordered and _trim_nc_padding(pin_data.pins, ordered)[1]:
+            return True
+    return False
+
+
+def _pinout_region_text(doc_text: str, max_chars: int = 12000) -> str:
+    """A bounded slice of full document text around the first pinout heading.
+
+    Fallback source for the targeted re-extraction when the caller did not pass
+    the already-extracted (bounded) page content: the full sheet can be 150k+
+    chars, so we window from the first pinout/connection heading, which is where
+    the package drawings live.
+    """
+    if not doc_text:
+        return ""
+    match = _PINOUT_HEADING_RE.search(doc_text)
+    start = match.start() if match else 0
+    return doc_text[start:start + max_chars]
+
+
+def _package_label(base: Optional[str], count: int) -> Optional[str]:
+    """Build a "<FAMILY>-<count>" label, stripping any trailing count on base."""
+    base = re.sub(r"[-\s]*\d+\s*$", "", str(base or "")).strip()
+    return f"{base}-{count}" if base else None
+
+
+def _pin_to_dict(pin) -> dict:
+    """Normalize a pin (dict or Pin) to a dict for a packages-format container."""
+    out = {"number": _pin_field(pin, "number"), "name": _pin_field(pin, "name")}
+    for key in ("electrical_type", "role", "active_low", "nc", "nc_instruction", "function"):
+        value = _pin_field(pin, key)
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _as_pin_obj(pin) -> Pin:
+    """Normalize a pin (dict or Pin) to a Pin object for a legacy container."""
+    if isinstance(pin, Pin):
+        return pin
+    return Pin(
+        number=_pin_field(pin, "number") or 0,
+        name=_pin_field(pin, "name") or "",
+        function=_pin_field(pin, "function"),
+        electrical_type=_pin_field(pin, "electrical_type"),
+        role=_pin_field(pin, "role"),
+        active_low=bool(_pin_field(pin, "active_low")),
+        nc=bool(_pin_field(pin, "nc")),
+        nc_instruction=_pin_field(pin, "nc_instruction"),
+    )
+
+
+def _install_reextracted_pins(
+    pin_data: PinData, new_pins: list, label: Optional[str], count: int
+) -> None:
+    """Swap the active package's pins for a re-extracted variant (both shapes)."""
+    _pins_list, container = _active_pins(pin_data)
+    if isinstance(container, dict):
+        container["pins"] = [_pin_to_dict(p) for p in new_pins]
+        container["pin_count"] = count
+        if label:
+            container["type"] = label
+    elif container is not None:  # legacy PinData
+        pin_data.pins = [_as_pin_obj(p) for p in new_pins]
+        if getattr(pin_data, "package", None) is not None:
+            pin_data.package.pin_count = count
+            if label:
+                pin_data.package.type = label
+    else:  # no existing container — build a legacy one
+        pin_data.pins = [_as_pin_obj(p) for p in new_pins]
+        pin_data.package = PackageInfo(
+            type=label or f"PKG-{count}", pin_count=count, width=0, height=0
+        )
+    pin_data.extraction_method = "Re-extraction"
+    pin_data.selection_reason = (
+        f"Re-extracted the {label or f'{count}-pin'} package to match the "
+        "ordering-table ground truth"
+    )
+
+
+def _reextract_ordered_variant(
+    pin_data: PinData,
+    source_text: str,
+    part_number: Optional[str],
+    model: str,
+    verbose: bool = False,
+) -> bool:
+    """Targeted re-extraction of the grounded package when no variant matches it.
+
+    The ordering table grounded a package (pin count / family) that the first
+    extraction never produced and NC-padding can't explain — the LLM read the
+    wrong variant and there is nothing for selection to switch to. Ask the LLM
+    to re-extract ONLY that specific package's pinout and, if it returns a clean
+    result with exactly the grounded pin count, install it.
+
+    Fallback-safe: returns False and leaves ``pin_data`` untouched on any
+    failure or degenerate/short/duplicate result, so the caller keeps its
+    fail-closed/warn behaviour. Never makes a well-extracted part worse.
+    """
+    ordered = pin_data.ordered_pin_count
+    if not ordered or not source_text:
+        return False
+    ordered_type = pin_data.ordered_package_type
+
+    if verbose:
+        print(
+            f"  No extracted variant matches the grounded {ordered}-pin "
+            f"{ordered_type or ''} package; attempting a targeted re-extraction..."
+        )
+
+    try:
+        client = LLMClient(model=model)
+        new_pin_data = client.reextract_package_pinout(
+            content=source_text,
+            part_number=part_number,
+            pin_count=ordered,
+            package_type=ordered_type,
+        )
+    except Exception as exc:  # never let re-extraction break the pipeline
+        if verbose:
+            print(f"  Targeted re-extraction skipped: {exc}")
+        return False
+
+    new_pins, _container = _active_pins(new_pin_data)
+
+    # Degenerate-result guard: install only a clean, complete pinout.
+    if len(new_pins) != ordered:
+        if verbose:
+            print(
+                f"  Re-extraction returned {len(new_pins)} pins (need {ordered}); "
+                "keeping the original extraction."
+            )
+        return False
+    names = [str(_pin_field(p, "name") or "").strip() for p in new_pins]
+    if any(not n for n in names):
+        if verbose:
+            print("  Re-extraction returned unnamed pins; keeping original.")
+        return False
+    numbers = [_pin_field(p, "number") for p in new_pins]
+    if len(set(numbers)) != len(numbers):
+        if verbose:
+            print("  Re-extraction returned duplicate pin numbers; keeping original.")
+        return False
+
+    new_type, _t = None, None
+    _np, ncontainer = _active_pins(new_pin_data)
+    if isinstance(ncontainer, dict):
+        new_type = ncontainer.get("type")
+    elif getattr(new_pin_data, "package", None) is not None:
+        new_type = new_pin_data.package.type
+    label = _package_label(ordered_type or new_type, ordered)
+
+    _install_reextracted_pins(pin_data, new_pins, label, ordered)
+    print(
+        f"Note: re-extracted the {label or f'{ordered}-pin'} pinout for "
+        f"{part_number!r} to match the ordering-table ground truth "
+        f"({ordered} pins)."
+    )
+    return True
+
+
 def apply_ordering_ground_truth(
     pin_data: PinData,
     input_path: Path,
@@ -1358,6 +1546,7 @@ def apply_ordering_ground_truth(
     model: str,
     verbose: bool = False,
     force_best_effort: bool = False,
+    content=None,
 ) -> None:
     """Ground the ordered variant in the datasheet's own ordering table.
 
@@ -1398,6 +1587,29 @@ def apply_ordering_ground_truth(
         pin_data.ordered_package_type = match.package
     if verbose:
         print(f"  Ordering table: {match.reason}")
+
+    # Targeted re-extraction: the grounded package matches no extracted variant
+    # and NC-padding can't explain it -> the wrong variant was read and there is
+    # nothing to switch to. Re-extract THAT specific package's pinout from the
+    # datasheet (the correct variant is present, just not the one first read).
+    # Fully fallback-safe: a failed/degenerate re-extraction leaves pin_data
+    # untouched and the enforcement below keeps its fail-closed/warn behaviour.
+    ordered = pin_data.ordered_pin_count
+    if (
+        ordered
+        and not _ordered_variant_matches(pin_data, ordered)
+        and not _nc_padding_can_reconcile(pin_data, ordered)
+    ):
+        source_text = None
+        if content is not None:
+            try:
+                from .pdf_extractor.content_extractor import ContentExtractor
+                source_text = ContentExtractor.format_for_llm(content)
+            except Exception:
+                source_text = None
+        if not source_text:
+            source_text = _pinout_region_text(doc_text)
+        _reextract_ordered_variant(pin_data, source_text, part_number, model, verbose)
 
     _enforce_ordered_pin_count(pin_data, part_number, force_best_effort)
     _enforce_ordered_package_family(pin_data, part_number, force_best_effort)
@@ -1553,6 +1765,7 @@ def process_datasheet(
             model,
             verbose=verbose,
             force_best_effort=force_best_effort,
+            content=content,
         )
 
         # Modules/SiPs/grid-array parts: emit schematic only (no chip footprint).

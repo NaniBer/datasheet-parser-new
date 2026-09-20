@@ -245,6 +245,37 @@ class LLMClient:
 
         raise last_error
 
+    def reextract_package_pinout(
+        self,
+        content: str,
+        part_number: Optional[str],
+        pin_count: int,
+        package_type: Optional[str] = None,
+    ) -> PinData:
+        """Targeted re-extraction of ONE specific package variant's pinout.
+
+        Called when the ordering table grounds a package (pin count / family)
+        that the first extraction never produced. Uses the focused prompt to
+        steer the model to that single variant and reuses ``_parse_llm_response``
+        so the result is a normal single-package ``PinData``. The caller
+        validates the pin count before installing, so any degenerate answer is
+        harmless.
+        """
+        from ..chat_bot import build_focused_pinout_prompt
+
+        messages = build_focused_pinout_prompt(
+            content,
+            part_number=part_number or "",
+            pin_count=pin_count,
+            package_type=package_type,
+        )
+        response = get_completion_from_messages(
+            messages,
+            model=self.model,
+            temperature=0.0,
+        )
+        return self._parse_llm_response(response)
+
     def _get_active_pins_and_package(self, pin_data: PinData):
         """Return (pins, package_type_str) for the selected package variant."""
         if pin_data.packages:
