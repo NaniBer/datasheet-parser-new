@@ -3219,6 +3219,63 @@ def test_ordering_llm_api_failure_returns_none(monkeypatch):
     assert find_ordering_match_llm(_ST_ORDERING, "L293DD") is None
 
 
+# Ordering-region selection: when a datasheet has NO ordering-section heading,
+# the old code handed the model the document head/tail, which on some parts
+# (e.g. MCP1700, headed by pages of trademark boilerplate) contained no
+# package info at all -> LLM found nothing. The region must instead anchor on
+# where the order code co-occurs with a package-family name.
+from src.pdf_extractor.ordering_table import (
+    _ordering_region,
+    _cooccurrence_region,
+    _prefix_token,
+)
+
+# No heading anywhere; the real package info sits in the MIDDLE, walled off by
+# >6000 chars of family-free boilerplate on both sides so neither the head nor
+# the tail window can reach it -- only co-occurrence anchoring can.
+_BOILERPLATE = ("Trademarks and legal notice; all names are the property "
+                "of their owners. ") * 130           # ~9k chars, no family token
+_MIDDLE = ("ACME1234 Product Identification System.\n"
+           "ACME1234T-500 : 5.0V VOUT, 3-Pin SOT-23 Package.\n")
+_SYNTH = _BOILERPLATE + _MIDDLE + _BOILERPLATE
+
+
+def test_prefix_token_is_family_root():
+    assert _prefix_token("MCP1700T-3002E-MB") == "MCP1700"
+    assert _prefix_token("SN6505A") == "SN6505"
+    assert _prefix_token("L293DD") == "L293"
+
+
+def test_ordering_region_anchors_on_cooccurrence():
+    # Sanity: the buried info is unreachable from either edge window.
+    assert "SOT-23" not in _SYNTH[:6000]
+    assert "SOT-23" not in _SYNTH[-6000:]
+    region = _ordering_region(_SYNTH, "ACME1234T-500")
+    assert "SOT-23" in region
+    assert "ACME1234T-500" in region
+
+
+def test_ordering_region_falls_back_when_no_cooccurrence():
+    # No package family present at all -> no anchor -> preserve old behaviour
+    # (the document tail), never crash.
+    plain = _BOILERPLATE + _BOILERPLATE
+    assert _cooccurrence_region(plain, "ACME1234T-500") is None
+    assert _ordering_region(plain, "ACME1234T-500") == plain[-6000:]
+
+
+def test_ordering_region_no_part_number_is_unchanged():
+    # The no-part-number path must behave exactly as before (tail window).
+    assert _ordering_region(_SYNTH) == _SYNTH[-6000:]
+
+
+def test_ordering_region_heading_wins_over_cooccurrence():
+    # An explicit ordering heading still takes precedence (no regression for
+    # parts that already worked via the header strategy).
+    headed = "ORDERING INFORMATION\nACME1234T-500  SOT-23  3-Pin\n" + _BOILERPLATE
+    region = _ordering_region(headed, "ACME1234T-500")
+    assert region.startswith("ORDERING INFORMATION")
+
+
 # Fix 6: pin-number cells that use enclosed/decorated numerals must parse,
 # not crash. XC6218P332HR-G numbers its pins with circled digits and hit an
 # unhandled ValueError: int('①②').
