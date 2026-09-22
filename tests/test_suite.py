@@ -3219,6 +3219,63 @@ def test_ordering_llm_api_failure_returns_none(monkeypatch):
     assert find_ordering_match_llm(_ST_ORDERING, "L293DD") is None
 
 
+# Ordering-region selection: when a datasheet has NO ordering-section heading,
+# the old code handed the model the document head/tail, which on some parts
+# (e.g. MCP1700, headed by pages of trademark boilerplate) contained no
+# package info at all -> LLM found nothing. The region must instead anchor on
+# where the order code co-occurs with a package-family name.
+from src.pdf_extractor.ordering_table import (
+    _ordering_region,
+    _cooccurrence_region,
+    _prefix_token,
+)
+
+# No heading anywhere; the real package info sits in the MIDDLE, walled off by
+# >6000 chars of family-free boilerplate on both sides so neither the head nor
+# the tail window can reach it -- only co-occurrence anchoring can.
+_BOILERPLATE = ("Trademarks and legal notice; all names are the property "
+                "of their owners. ") * 130           # ~9k chars, no family token
+_MIDDLE = ("ACME1234 Product Identification System.\n"
+           "ACME1234T-500 : 5.0V VOUT, 3-Pin SOT-23 Package.\n")
+_SYNTH = _BOILERPLATE + _MIDDLE + _BOILERPLATE
+
+
+def test_prefix_token_is_family_root():
+    assert _prefix_token("MCP1700T-3002E-MB") == "MCP1700"
+    assert _prefix_token("SN6505A") == "SN6505"
+    assert _prefix_token("L293DD") == "L293"
+
+
+def test_ordering_region_anchors_on_cooccurrence():
+    # Sanity: the buried info is unreachable from either edge window.
+    assert "SOT-23" not in _SYNTH[:6000]
+    assert "SOT-23" not in _SYNTH[-6000:]
+    region = _ordering_region(_SYNTH, "ACME1234T-500")
+    assert "SOT-23" in region
+    assert "ACME1234T-500" in region
+
+
+def test_ordering_region_falls_back_when_no_cooccurrence():
+    # No package family present at all -> no anchor -> preserve old behaviour
+    # (the document tail), never crash.
+    plain = _BOILERPLATE + _BOILERPLATE
+    assert _cooccurrence_region(plain, "ACME1234T-500") is None
+    assert _ordering_region(plain, "ACME1234T-500") == plain[-6000:]
+
+
+def test_ordering_region_no_part_number_is_unchanged():
+    # The no-part-number path must behave exactly as before (tail window).
+    assert _ordering_region(_SYNTH) == _SYNTH[-6000:]
+
+
+def test_ordering_region_heading_wins_over_cooccurrence():
+    # An explicit ordering heading still takes precedence (no regression for
+    # parts that already worked via the header strategy).
+    headed = "ORDERING INFORMATION\nACME1234T-500  SOT-23  3-Pin\n" + _BOILERPLATE
+    region = _ordering_region(headed, "ACME1234T-500")
+    assert region.startswith("ORDERING INFORMATION")
+
+
 # Fix 6: pin-number cells that use enclosed/decorated numerals must parse,
 # not crash. XC6218P332HR-G numbers its pins with circled digits and hit an
 # unhandled ValueError: int('①②').
@@ -3460,6 +3517,157 @@ def test_ordered_family_unrecognized_string_does_not_refuse():
                  pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
                  ordered_package_type="SO20")
     _enforce_ordered_package_family(pd, "L293DD", force_best_effort=False)  # no raise
+
+
+# ===========================================================================
+# Targeted re-extraction: when the ordering table grounds a package (pin
+# count/family) that NO extracted variant matches — and NC-padding can't
+# explain it — the LLM read the wrong variant and there is nothing to switch
+# to. Re-extract THAT specific package's pinout and install it if it comes back
+# clean and complete; otherwise keep the original (fallback-safe). The LLM call
+# is mocked here (real behaviour is exercised by the W25Q128 end-to-end run).
+# ===========================================================================
+def _fake_client_returning(pin_data):
+    class _Fake:
+        def __init__(self, *a, **k):
+            pass
+
+        def reextract_package_pinout(self, **kwargs):
+            return pin_data
+
+    return _Fake
+
+
+def test_reextract_installs_matching_variant(monkeypatch):
+    import src.main as main_mod
+    from src.models.pin_data import PinData, PackageInfo, Pin
+
+    # Original extraction read the WRONG 16-pin variant.
+    pd = PinData(
+        component_name="W25Q128",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+        ordered_pin_count=8,
+        ordered_package_type="SOIC",
+    )
+    good = PinData(
+        component_name="W25Q128",
+        package=PackageInfo(type="SOIC-8", pin_count=8, width=0.0, height=0.0),
+        pins=[Pin(number=i, name=n) for i, n in enumerate(
+            ["/CS", "DO", "/WP", "GND", "DI", "CLK", "/HOLD", "VCC"], start=1)],
+    )
+    monkeypatch.setattr(main_mod, "LLMClient", _fake_client_returning(good))
+
+    assert main_mod._reextract_ordered_variant(pd, "content", "W25Q128JVSIM", "m")
+    assert pd.package.pin_count == 8
+    assert len(pd.pins) == 8
+    assert pd.package.type == "SOIC-8"  # relabelled to the grounded family/count
+    assert pd.pins[0].name == "/CS"
+
+
+def test_reextract_degenerate_result_keeps_original(monkeypatch):
+    import src.main as main_mod
+    from src.models.pin_data import PinData, PackageInfo, Pin
+
+    pd = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+        ordered_pin_count=8,
+        ordered_package_type="SOIC",
+    )
+    # Re-extraction returns a short/degenerate result (3 pins, not 8).
+    degenerate = PinData(
+        component_name="X",
+        package=PackageInfo(type="SOIC-8", pin_count=3, width=0.0, height=0.0),
+        pins=[Pin(number=i, name=f"Q{i}") for i in range(1, 4)],
+    )
+    monkeypatch.setattr(main_mod, "LLMClient", _fake_client_returning(degenerate))
+
+    assert not main_mod._reextract_ordered_variant(pd, "content", "PART", "m")
+    # Original extraction is untouched.
+    assert len(pd.pins) == 16
+    assert pd.package.pin_count == 16
+    assert pd.package.type == "SOIC-16"
+
+
+def test_apply_ordering_reextraction_fixes_wrong_variant(monkeypatch):
+    # End-to-end wiring: a grounded 8-pin SOIC that matches no extracted variant
+    # triggers re-extraction, whose clean 8-pin result is installed — so strict
+    # enforcement no longer fails closed.
+    import src.main as main_mod
+    from src.pdf_extractor import ordering_table as ot
+    from src.pdf_extractor.ordering_table import OrderingMatch
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    from pathlib import Path
+
+    monkeypatch.setattr(ot, "full_pdf_text", lambda p: "Pin Configuration text")
+    monkeypatch.setattr(
+        ot, "find_ordering_match",
+        lambda t, pn: OrderingMatch(
+            orderable=pn, package="SOIC", pin_count=8, exact=True, reason="r"),
+    )
+    good = PinData(
+        component_name="W",
+        package=PackageInfo(type="SOIC-8", pin_count=8, width=0.0, height=0.0),
+        pins=[Pin(number=i, name=n) for i, n in enumerate("ABCDEFGH", start=1)],
+    )
+    monkeypatch.setattr(main_mod, "LLMClient", _fake_client_returning(good))
+
+    pd = PinData(
+        component_name="W",
+        package=PackageInfo(type="SOIC-16", pin_count=16, width=1.0, height=1.0),
+        pins=[Pin(number=i, name=f"P{i}") for i in range(1, 17)],
+    )
+    # force_best_effort=False (strict): must NOT raise, because re-extraction
+    # replaced the wrong variant with the grounded 8-pin one.
+    main_mod.apply_ordering_ground_truth(
+        pd, Path("x.pdf"), "W25Q128JVSIM", "m", force_best_effort=False
+    )
+    assert len(pd.pins) == 8
+    assert pd.package.pin_count == 8
+
+
+def test_apply_ordering_reextraction_skipped_when_nc_padding_reconciles(monkeypatch):
+    # The NC-padding path (TPS51100) must be preserved: when trimming fabricated
+    # NC pins alone reconciles the count, re-extraction must NOT fire (no wasted
+    # LLM call, existing behaviour unchanged).
+    import src.main as main_mod
+    from src.pdf_extractor import ordering_table as ot
+    from src.pdf_extractor.ordering_table import OrderingMatch
+    from src.models.pin_data import PinData
+    from pathlib import Path
+
+    monkeypatch.setattr(ot, "full_pdf_text", lambda p: "text")
+    monkeypatch.setattr(
+        ot, "find_ordering_match",
+        lambda t, pn: OrderingMatch(
+            orderable=pn, package=None, pin_count=10, exact=True, reason="r"),
+    )
+    called = {"n": 0}
+
+    class _Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        def reextract_package_pinout(self, **kwargs):
+            called["n"] += 1
+            raise AssertionError("re-extraction should not run for NC padding")
+
+    monkeypatch.setattr(main_mod, "LLMClient", _Boom)
+
+    real = [{"number": i, "name": n, "function": None} for i, n in enumerate(
+        ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"], start=1)]
+    nc = [{"number": i, "name": "NC", "function": "none"} for i in range(11, 21)]
+    pd = PinData(
+        component_name="TPS51100",
+        packages=[{"type": "QFN-20", "pin_count": 20, "pins": real + nc}],
+    )
+    main_mod.apply_ordering_ground_truth(
+        pd, Path("x.pdf"), "TPS51100DGQ", "m", force_best_effort=False
+    )
+    assert called["n"] == 0
+    assert pd.packages[0]["pin_count"] == 10  # NC padding trimmed, as before
 
 
 # ===========================================================================
@@ -3799,13 +4007,15 @@ def test_long_doc_merges_llm_located_page(monkeypatch):
     assert pages == {12, 385}  # merged, not replaced
 
 
-def test_short_doc_does_not_call_locate(monkeypatch):
-    """Short/medium docs are untouched by the long-doc locate step."""
+def test_short_doc_strong_signal_does_not_call_locate(monkeypatch):
+    """A well-detected short doc (a real pinout table) skips the LLM classifier."""
     import src.main as m
     from src.pdf_extractor.page_detector import PageCandidate
 
+    strong = PageCandidate(page_number=2, confidence_score=5)
+    strong.has_table = True  # a genuine pinout signal
     fake_det = MagicMock()
-    fake_det.detect_relevant_pages.return_value = [PageCandidate(page_number=2, confidence_score=5)]
+    fake_det.detect_relevant_pages.return_value = [strong]
     fake_det.total_pages = 20
     fake_det.LONG_DOCUMENT_PAGE_COUNT = 50
     fake_det.__enter__ = lambda s: s
@@ -3819,6 +4029,104 @@ def test_short_doc_does_not_call_locate(monkeypatch):
     pages = {c.page_number for c in m.detect_relevant_pages("x.pdf", 5, False, "llama-3")}
     assert pages == {2}
     assert called["n"] == 0
+
+
+def test_short_doc_weak_signal_escalates_and_merges(monkeypatch):
+    """A short doc whose only candidates are recall-bias includes (no pinout
+    table/diagram/heading) escalates to the LLM classifier and merges its page."""
+    import src.main as m
+    from src.pdf_extractor.page_detector import PageCandidate
+
+    # page 1 recall-bias include, no strong signal -> weak detection
+    weak = PageCandidate(page_number=1, confidence_score=5,
+                         reasons=["cover page position"])
+    fake_det = MagicMock()
+    fake_det.detect_relevant_pages.return_value = [weak]
+    fake_det.total_pages = 20
+    fake_det.LONG_DOCUMENT_PAGE_COUNT = 50
+    fake_det.__enter__ = lambda s: s
+    fake_det.__exit__ = lambda s, *a: False
+    monkeypatch.setattr(m, "PageDetector", lambda *a, **k: fake_det)
+    called = {"n": 0}
+    def _locate(path, model, verbose=False):
+        called["n"] += 1
+        return [PageCandidate(page_number=7, confidence_score=5)]
+    monkeypatch.setattr(m, "_verify_pin_page_fallback", _locate)
+    pages = {c.page_number for c in m.detect_relevant_pages("x.pdf", 5, False, "llama-3")}
+    assert pages == {1, 7}       # merged, not replaced
+    assert called["n"] == 1      # escalated exactly once
+
+
+# --------------------------- Task 4: detect by shape ---------------------------
+
+def _word(text, x0, top, w=22.0, h=10.0):
+    """Build a pdfplumber-style word dict at a given position."""
+    return {"text": text, "x0": x0, "x1": x0 + w, "top": top, "bottom": top + h}
+
+
+class _FakeShapePage:
+    def __init__(self, words):
+        self._words = words
+
+    def extract_words(self, use_text_flow=False):
+        return self._words
+
+
+def _detector():
+    """A PageDetector instance without opening a PDF (methods are pure)."""
+    from src.pdf_extractor.page_detector import PageDetector
+    return PageDetector.__new__(PageDetector)
+
+
+def test_pinout_shape_detects_numbered_pins_beside_labels():
+    """A connection-diagram layout — pin numbers 1..8 each beside a signal
+    label on the same row — is recognised by geometry, no keywords needed."""
+    det = _detector()
+    labels = ["OUT1", "IN1-", "IN1+", "VEE", "IN2+", "IN2-", "OUT2", "VCC"]
+    words = []
+    for i, name in enumerate(labels):
+        y = 100.0 + i * 20.0
+        words.append(_word(str(i + 1), 50.0, y))      # pin number
+        words.append(_word(name, 80.0, y))            # label on the same row
+    score, has_shape, reason = det._check_pinout_shape(_FakeShapePage(words))
+    assert has_shape is True
+    assert score == 3            # clean ascending run from pin 1
+    assert "8 numbered pins" in reason
+
+
+def test_pinout_shape_ignores_bare_numbers_without_labels():
+    """A column of numbers with no adjacent labels (e.g. a spec table) does
+    not qualify as a pinout shape."""
+    det = _detector()
+    words = [_word(str(n), 50.0, 100.0 + n * 20.0) for n in range(1, 9)]
+    score, has_shape, _ = det._check_pinout_shape(_FakeShapePage(words))
+    assert has_shape is False
+    assert score == 0
+
+
+def test_pinout_shape_requires_run_starting_near_pin_1():
+    """Numbers that pair with labels but do not form an ascending run from
+    pin 1 (e.g. a ratings table numbered 20..24) are not a clean pinout."""
+    det = _detector()
+    words = []
+    for k, n in enumerate([20, 24, 31, 45]):          # non-sequential, high
+        y = 100.0 + k * 20.0
+        words.append(_word(str(n), 50.0, y))
+        words.append(_word("VAL", 80.0, y))
+    score, has_shape, _ = det._check_pinout_shape(_FakeShapePage(words))
+    assert has_shape is False
+    assert score == 0
+
+
+def test_pinout_shape_marks_candidate_and_counts_as_strong_signal():
+    """has_shape flows through _analyze_page and counts as a strong pinout
+    signal for the Task 3 escalation gate."""
+    import src.main as m
+    from src.pdf_extractor.page_detector import PageCandidate
+
+    c = PageCandidate(page_number=3, confidence_score=3)
+    c.has_shape = True
+    assert m._has_strong_pinout_signal([c]) is True
 
 
 def test_page_verifier_locate_fails_closed_on_llm_error(monkeypatch):

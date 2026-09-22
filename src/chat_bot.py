@@ -294,6 +294,82 @@ def build_table_extraction_prompt(
     return messages
 
 
+def build_focused_pinout_prompt(
+    datasheet_content: str,
+    part_number: str,
+    pin_count: int,
+    package_type: str = None,
+) -> list:
+    """Prompt for a TARGETED re-extraction of one specific package variant.
+
+    Used when the datasheet's own ordering table grounds a package (pin count /
+    family) that the first extraction never produced — the LLM read the wrong
+    variant and there is nothing to switch to. Datasheets that carry several
+    package drawings (e.g. an 8-pin SOIC beside a 16-pin SOIC) need the model
+    steered to ONE of them, so this asks for exactly that variant's pinout and
+    for a full 1..N pin list, and pins the output to the legacy single-package
+    JSON shape LLMClient._parse_llm_response already understands.
+    """
+    pkg_phrase = f"{package_type} " if package_type else ""
+    system_content = (
+        "You are a Senior EDA Technical Data Compiler. Extract the pinout for "
+        "ONE SPECIFIC package variant of a component from its datasheet.\n\n"
+        f"TARGET: the {pin_count}-pin {pkg_phrase}package of part "
+        f"{part_number}.\n\n"
+        "RULES:\n"
+        f"1. This datasheet may show several package variants. Extract ONLY the "
+        f"{pin_count}-pin {pkg_phrase}variant — ignore every other package "
+        f"drawing/table.\n"
+        f"2. List ALL {pin_count} pins, numbered 1..{pin_count} in order, with "
+        f"names EXACTLY as printed (keep overbars/slashes, e.g. /CS, /WP).\n"
+        "3. Read the pin numbers from the drawing/table for THIS variant only; "
+        "do not borrow numbers from a different variant's column.\n"
+        "4. No-connect pins (NC / N/C / DNC) are real pins: keep them with "
+        "name 'NC'.\n"
+        "5. Exposed/thermal/die/center pads are NOT pins unless the datasheet "
+        "gives them an explicit pin number.\n"
+        "6. Ground everything in the provided text — never invent pins to reach "
+        f"{pin_count}. If the {pin_count}-pin variant is genuinely not present, "
+        "return an empty pins array.\n\n"
+        "PIN SEMANTICS (use these EXACT values; use \"unspecified\"/\"other\" "
+        "when unclear - do NOT guess):\n"
+        "- electrical_type: input, output, bidirectional, tri_state, passive, "
+        "power_in, power_out, open_collector, open_emitter, no_connect, "
+        "unspecified\n"
+        "- role: supply, ground, input, output, io, clock, reset, enable, "
+        "control, address, data, analog, oscillator, thermal, nc, other\n"
+        "- active_low: true ONLY if the name marks inversion (overbar, leading "
+        "/, trailing #, _N suffix); else false\n"
+        "- nc: true for NC/DNC/RESERVED pins\n\n"
+        "OUTPUT FORMAT — return ONLY raw JSON (no markdown, no prose):\n"
+        "{\n"
+        "  \"component_name\": \"Component name\",\n"
+        "  \"package\": {\n"
+        f"    \"type\": \"{package_type or 'Package'}-{pin_count}\",\n"
+        f"    \"pin_count\": {pin_count},\n"
+        "    \"width\": null, \"height\": null, \"pitch\": null\n"
+        "  },\n"
+        "  \"pins\": [\n"
+        "    {\"number\": 1, \"name\": \"/CS\", \"electrical_type\": \"input\", "
+        "\"role\": \"control\", \"active_low\": true, \"nc\": false},\n"
+        "    ...\n"
+        "  ],\n"
+        "  \"extraction_method\": \"Diagram\"\n"
+        "}\n"
+    )
+    user_content = (
+        f"Extract ONLY the {pin_count}-pin {pkg_phrase}package pinout for part "
+        f"{part_number}. List all {pin_count} pins in order (1..{pin_count}).\n\n"
+        "--- DATASHEET CONTENT START ---\n"
+        f"{datasheet_content}\n"
+        "--- DATASHEET CONTENT END ---"
+    )
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+    ]
+
+
 def build_pin_extraction_prompt(
     datasheet_content: str,
     part_number: str = None,

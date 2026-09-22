@@ -21,6 +21,7 @@ class PageCandidate:
     text: str = ""
     has_table: bool = False
     has_diagram: bool = False
+    has_shape: bool = False
     needs_verification: bool = False
 
 
@@ -139,7 +140,8 @@ class PageDetector:
                 if c.page_number in already:
                     continue
                 has_heading = any("heading" in r.lower() for r in c.reasons)
-                if c.page_number <= 2 or c.has_table or c.has_diagram or has_heading:
+                if (c.page_number <= 2 or c.has_table or c.has_diagram
+                        or c.has_shape or has_heading):
                     relevant_pages.append(c)
                     already.add(c.page_number)
         # Mark pages that need LLM verification
@@ -207,6 +209,14 @@ class PageDetector:
         if position_score > 0:
             candidate.confidence_score += position_score
             candidate.reasons.append(position_reason)
+
+        # 6. Structural pinout shape — numbered pins beside labels (+2/+3),
+        #    recognises a pinout by geometry when keywords/tables are absent.
+        shape_score, has_shape, shape_reason = self._check_pinout_shape(page)
+        candidate.has_shape = has_shape
+        if shape_score > 0:
+            candidate.confidence_score += shape_score
+            candidate.reasons.append(shape_reason)
 
         # Mark for verification if unusual structure
         if self._has_unusual_structure(candidate):
@@ -313,6 +323,114 @@ class PageDetector:
             if re.search(pattern, text_lower, re.IGNORECASE):
                 return 2, True, f"Contains diagram with caption matching: '{pattern}'"
 
+        return 0, False, ""
+
+    # A pinout label is a short signal name: VCC, GND, IN+, PB4, SCL, D0,
+    # /RESET, VREF-. Starts with a letter or a leading '/' (active-low), then a
+    # few name characters. Deliberately narrow (<=11 trailing chars) so prose
+    # words and numbers do not qualify as labels.
+    _PIN_LABEL_RE = re.compile(r"^/?[A-Za-z][A-Za-z0-9/_.+\-]{0,11}$")
+
+    # Spec/ratings tables also number their rows next to short tokens, but those
+    # tokens are units and table-structure words, not signal names. Excluding
+    # them (plus the uniqueness test below) keeps the shape signal on real
+    # pinouts. NOT a signal vocabulary — no real pin names appear here.
+    _LABEL_STOPWORDS = frozenset({
+        "min", "max", "typ", "nom", "unit", "units", "note", "notes", "test",
+        "tests", "symbol", "parameter", "parameters", "cond", "conditions",
+        "value", "values", "rating", "ratings", "characteristic",
+        "characteristics", "description", "fig", "figure", "table", "page",
+        "rev", "no", "item", "part",
+        # units
+        "v", "mv", "kv", "uv", "a", "ma", "ua", "na", "pa", "w", "mw", "kw",
+        "ns", "us", "ms", "ps", "mhz", "khz", "hz", "ghz", "pf", "nf", "uf",
+        "ohm", "ohms", "db", "dbm", "deg", "tj", "ta", "tc", "tstg", "vf",
+    })
+
+    def _check_pinout_shape(self, page) -> Tuple[int, bool, str]:
+        """Recognise a pinout page by GEOMETRY, not vocabulary.
+
+        A pinout — whether a connection diagram or a pin table — places pin
+        NUMBERS next to short signal LABELS in aligned rows. We pair each pin
+        number with a label on roughly the same row nearby, then reward a clean
+        ascending run that starts at pin 1 (real pinouts number from 1). This
+        fires on pages that carry no "pinout" wording and no extractable
+        <table>, which the keyword/table checks miss.
+
+        Precision guard: a spec/ratings table is the same shape (numbered rows
+        beside short tokens), so we require the paired labels to be mostly
+        DISTINCT — a pinout's signal names are unique, whereas a table repeats
+        Min/Max/Typ/Unit down the column — and drop unit/structure stopwords.
+
+        High-recall on real pinouts; a false positive only adds a page to the
+        context, never drops one. Returns ``(score, has_shape, reason)``.
+        """
+        try:
+            words = page.extract_words(use_text_flow=False)
+        except Exception:
+            return 0, False, ""
+        if not words:
+            return 0, False, ""
+
+        numbers = []  # (n, x0, x1, cy, height)
+        labels = []   # (x0, x1, cy, height, text)
+        for w in words:
+            text = (w.get("text") or "").strip()
+            if not text:
+                continue
+            top, bottom = w["top"], w["bottom"]
+            cy = (top + bottom) / 2.0
+            height = max(1.0, bottom - top)
+            if text.isdigit():
+                n = int(text)
+                if 1 <= n <= 256:
+                    numbers.append((n, w["x0"], w["x1"], cy, height))
+            elif self._PIN_LABEL_RE.match(text) and \
+                    text.lower() not in self._LABEL_STOPWORDS:
+                labels.append((w["x0"], w["x1"], cy, height, text))
+
+        if len(numbers) < 4 or not labels:
+            return 0, False, ""
+
+        # A pin number is "paired" when a label sits on the same row (within ~1
+        # line height) and within a few characters horizontally — i.e. the
+        # "number  LABEL" adjacency of a pinout, in either column order.
+        paired = {}  # pin number -> the label text it pairs with
+        for n, nx0, nx1, ncy, nh in numbers:
+            for lx0, lx1, lcy, lh, ltext in labels:
+                same_row = abs(lcy - ncy) <= nh
+                gap = min(abs(lx0 - nx1), abs(nx0 - lx1))
+                if same_row and gap <= 6 * nh:
+                    paired[n] = ltext
+                    break
+
+        if len(paired) < 4:
+            return 0, False, ""
+
+        # Uniqueness gate: a pinout's labels are (nearly) all distinct; a spec
+        # table repeats a handful of tokens. A few repeats (NC/DNC) are fine.
+        distinct = len({t.lower() for t in paired.values()})
+        if distinct / len(paired) < 0.6:
+            return 0, False, ""
+
+        # Longest ascending consecutive run among the paired pin numbers.
+        seq = sorted(paired)
+        best = run = 1
+        for a, b in zip(seq, seq[1:]):
+            run = run + 1 if b == a + 1 else 1
+            best = max(best, run)
+        starts_low = seq[0] <= 2
+
+        if best >= 4 and starts_low:
+            return 3, True, (
+                f"Contains pinout shape: {len(paired)} numbered pins beside "
+                f"labels (run of {best} from pin {seq[0]})"
+            )
+        if len(paired) >= 6:
+            return 2, True, (
+                f"Contains pinout-like shape: {len(paired)} numbered pins "
+                f"beside labels"
+            )
         return 0, False, ""
 
     def _check_keyword_density(self, text: str) -> Tuple[int, str]:

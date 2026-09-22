@@ -252,6 +252,45 @@ Return ONLY valid JSON (no markdown code blocks, no additional text):
             traceback.print_exc()
             return self._empty_result()
 
+    def describe_raw(
+        self,
+        image_data: bytes,
+        prompt: str = None,
+        part_number: str = None,
+    ) -> str:
+        """Post an image and return the raw model text, unparsed.
+
+        The structured parser (_parse_api_response) is brittle on multi-variant
+        or markdown-wrapped responses. Callers that want to parse the pinout
+        themselves (see llm.vision_pinout) use this to get the raw text and run
+        a robust regex over it. Returns "" on any failure.
+        """
+        user_prompt_text = prompt or self._build_user_prompt(part_number)
+        system_prompt_text = self._build_system_prompt()
+        files = {"file": ("image.png", io.BytesIO(image_data), "image/png")}
+        data = {"text": f"{system_prompt_text}\n\n{user_prompt_text}"}
+        try:
+            response = requests.post(
+                self.api_url,
+                headers={"accept": "application/json"},
+                files=files,
+                data=data,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as e:
+            print(f"[ImageOCRClient] describe_raw failed: {e}")
+            return ""
+
+        # Prefer the description field; fall back to the whole payload as text.
+        desc = payload.get("description") if isinstance(payload, dict) else None
+        if isinstance(desc, str):
+            return desc
+        if desc is not None:
+            return json.dumps(desc)
+        return json.dumps(payload)
+
     def _parse_api_response(self, response: Dict[str, Any]) -> PinoutExtractionResult:
         """
         Parse API response and extract pinout data.
