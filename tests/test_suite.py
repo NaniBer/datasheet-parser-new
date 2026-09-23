@@ -3519,6 +3519,78 @@ def test_ordered_family_unrecognized_string_does_not_refuse():
     _enforce_ordered_package_family(pd, "L293DD", force_best_effort=False)  # no raise
 
 
+# ---------------------------------------------------------------------------
+# Wrong-shape correction: the ordering table grounds a DIFFERENT recognized
+# family than the extraction, but the pin COUNT already agrees (AD712KN: DIP-8
+# ordered, SOIC-8 read). The vendor-authoritative ordering table WINS — correct
+# the package TYPE (no re-extraction needed) so the DIP footprint is built.
+# ---------------------------------------------------------------------------
+def test_correct_package_family_dip_over_soic():
+    from src.main import _correct_ordered_package_family, _enforce_ordered_package_family
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    # Ordering table -> DIP-8; extraction wrongly read SOIC-8 (same 8 pins).
+    pd = PinData(component_name="AD712",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=5.0, height=6.0, pitch=1.27),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+                 ordered_package_type="DIP", ordered_pin_count=8)
+    assert _correct_ordered_package_family(pd, "AD712KN") is True
+    assert pd.package.type == "DIP-8"
+    # SOIC-specific geometry cleared so the DIP grid is derived from the type.
+    assert pd.package.pitch is None
+    assert pd.package.width == 0 and pd.package.height == 0
+    # Enforcement now passes (families agree) — no spurious refusal/warning.
+    _enforce_ordered_package_family(pd, "AD712KN", force_best_effort=False)
+
+
+def test_correct_package_family_multivariant_active_entry():
+    from src.main import _correct_ordered_package_family
+    from src.models.pin_data import PinData
+    pd = PinData(
+        component_name="AD712",
+        packages=[{"type": "SOIC-8", "pin_count": 8, "pitch": 1.27,
+                   "pins": [{"number": i, "name": f"P{i}"} for i in range(1, 9)]}],
+        selected_package_index=0,
+        ordered_package_type="PDIP", ordered_pin_count=8,
+    )
+    assert _correct_ordered_package_family(pd, "AD712KN") is True
+    assert pd.packages[0]["type"] == "DIP-8"
+    assert "pitch" not in pd.packages[0]  # variant geometry dropped
+
+
+def test_correct_package_family_same_family_is_noop():
+    from src.main import _correct_ordered_package_family
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=5.0, height=6.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+                 ordered_package_type="SOIC", ordered_pin_count=8)
+    assert _correct_ordered_package_family(pd, "PART") is False
+    assert pd.package.type == "SOIC-8"  # untouched
+
+
+def test_correct_package_family_unrecognized_grounded_string_noop():
+    from src.main import _correct_ordered_package_family
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=5.0, height=6.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+                 ordered_package_type="SO20", ordered_pin_count=8)
+    assert _correct_ordered_package_family(pd, "PART") is False
+    assert pd.package.type == "SOIC-8"
+
+
+def test_correct_package_family_count_mismatch_noop():
+    # Count disagreement is the re-extraction/enforce path's job, not this one.
+    from src.main import _correct_ordered_package_family
+    from src.models.pin_data import PinData, PackageInfo, Pin
+    pd = PinData(component_name="X",
+                 package=PackageInfo(type="SOIC-8", pin_count=8, width=5.0, height=6.0),
+                 pins=[Pin(number=i, name=f"P{i}") for i in range(1, 9)],
+                 ordered_package_type="DIP", ordered_pin_count=14)
+    assert _correct_ordered_package_family(pd, "PART") is False
+    assert pd.package.type == "SOIC-8"
+
+
 # ===========================================================================
 # Targeted re-extraction: when the ordering table grounds a package (pin
 # count/family) that NO extracted variant matches — and NC-padding can't

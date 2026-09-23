@@ -540,15 +540,20 @@ def _active_pins(pin_data):
 def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=False):
     """When text can't ground the pinout (graphical parts), read it via vision.
 
-    Grounding is imperfect but conservative here: we only reach for vision when
-    the text pinout is poorly grounded (the graphical/analog case), render the
-    pinout page(s), read the pinout with the vision endpoint, and — if it returns
-    a confident pinout — replace the ungrounded text pins with the vision ones.
-    Well-grounded parts are left untouched (text is reliable there, and this
-    keeps the vision call off the common path). Measured identity: this gated
-    merge reached ~56% vs ~44% text; broad text-vs-vision arbitration was slower
-    and no better (vision is noisy run-to-run and loses the parts text gets
-    right), so it is deliberately not used.
+    Grounding is imperfect but conservative here: we reach for vision when the
+    text pinout is poorly grounded (the graphical/analog case), OR when it is
+    well-grounded but the datasheet gave us no pin TABLE — because on a table-less
+    part grounding only proves the names appear somewhere, not that they sit on
+    the right pin number, so a scrambled-but-grounded mapping (e.g. AD712) would
+    otherwise ship. We render the pinout page(s), read the pinout with the vision
+    endpoint, and — if it returns a confident pinout — replace the text pins with
+    the vision ones (for the cross-check case, only when the vision pinout is
+    complete, so we never downgrade a full text pinout to a partial vision read).
+    Well-grounded, table-backed parts are left untouched (text is reliable there,
+    and this keeps the vision call off the common path). Measured identity: the
+    original poorly-grounded-only merge reached ~56% vs ~44% text; broad
+    text-vs-vision arbitration was slower and no better (vision is noisy
+    run-to-run and loses the parts text gets right), so the trigger stays narrow.
     """
     from .pdf_extractor.pin_grounding import assess_pin_grounding
     from .llm.vision_pinout import extract_pinout_best_page
@@ -557,8 +562,17 @@ def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=F
     signal = tally["grounded"] + tally["weak"] + tally["unsupported"]
     if signal == 0:
         return
-    if tally["grounded"] / signal >= _GROUNDING_TRUST:
-        return  # text is well-grounded — trust it, skip the vision call
+
+    # High grounding is only trustworthy when the pinout came from a real pin
+    # TABLE. When it came from a connection diagram / vector art (no table),
+    # grounding merely confirms the names appear somewhere in the datasheet — not
+    # that they sit on the right pin number — so a scrambled-but-grounded mapping
+    # (e.g. AD712) sails through the gate. For that graphical class we cross-check
+    # the number->name mapping against the rendered diagram via the vision path.
+    has_pin_table = bool(getattr(content, "tables", None))
+    well_grounded = tally["grounded"] / signal >= _GROUNDING_TRUST
+    if well_grounded and has_pin_table:
+        return  # well-grounded and table-backed — trust text, skip vision
 
     pages = list(getattr(content, "pages", None) or [])
     if not pages or input_path is None:
@@ -567,7 +581,12 @@ def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=F
     text_pins, _container = _active_pins(pin_data)
     expected = len(text_pins) or None
     if verbose:
-        print("  Low text grounding — trying the vision path on the pinout page(s)...")
+        reason = (
+            "grounded but table-less (graphical pinout) — cross-checking"
+            if well_grounded
+            else "low text grounding"
+        )
+        print(f"  {reason}: trying the vision path on the pinout page(s)...")
     vision_pins = extract_pinout_best_page(
         str(input_path), pages, part_number=part_number,
         expected_pin_count=expected, verbose=verbose,
@@ -581,11 +600,27 @@ def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=F
             print("  Vision fallback: no confident pinout; keeping text extraction.")
         return
 
+    # When we only reached vision to CROSS-CHECK an already well-grounded text
+    # pinout (the graphical / no-table case), don't downgrade a complete text
+    # pinout to a partial vision read: require a full pinout matching the
+    # expected pin count before overwriting. The low-grounding path keeps its
+    # looser guard (it has no trustworthy text pinout to protect).
+    if well_grounded and expected and len(vision_pins) != expected:
+        if verbose:
+            print("  Vision cross-check: incomplete vision pinout; keeping text extraction.")
+        return
+
     _replace_pins_with_vision(pin_data, vision_pins)
+    note_reason = (
+        "text pinout was grounded but came from a connection diagram (no pin "
+        "table); number->name mapping cross-checked and replaced via vision"
+        if well_grounded
+        else "text could not be grounded"
+    )
     _record_degraded(
         pin_data,
         [f"pinout read via vision on the rendered page ({len(vision_pins)} pins); "
-         "text could not be grounded"],
+         f"{note_reason}"],
     )
     if verbose:
         print(f"  Vision fallback: replaced text pins with {len(vision_pins)} vision-read pins.")
@@ -1351,6 +1386,113 @@ def _enforce_ordered_package_family(
     )
 
 
+def _corrected_family_type(
+    detector, ordered_family: str, ordered_type: str, current_type, count: int
+) -> Optional[str]:
+    """The corrected "<family>-<count>" label when ``current_type`` belongs to a
+    DIFFERENT recognized family than the grounded ordering-table family; else None.
+
+    Conservative: only overrides one recognized family with another (never an
+    unclassifiable extracted string), so an odd LLM label can't be clobbered.
+    """
+    cur_family = detector.package_family(str(current_type or ""))
+    if not cur_family or cur_family == ordered_family:
+        return None
+    if cur_family not in _KNOWN_PACKAGE_FAMILIES:
+        return None  # only correct a *recognized* wrong family
+    return _package_label(detector.normalize_package_name(ordered_type), count)
+
+
+def _correct_ordered_package_family(
+    pin_data: PinData,
+    part_number: Optional[str],
+    verbose: bool = False,
+) -> bool:
+    """Correct a wrong-*shape* read when the ordering table grounds a different
+    recognized package family than the one extracted, but the pin COUNT already
+    agrees (e.g. AD712KN: ordering table -> DIP-8, extraction -> SOIC-8).
+
+    The order-code -> package mapping printed in the sheet is vendor-authoritative
+    and outranks the LLM's variant choice (the established "ordering table wins"
+    design). Because the count matches, no re-extraction is needed — DIP-8 and
+    SOIC-8 carry the same 8 signals; only the package TYPE (and therefore the
+    footprint / 3D geometry) is wrong. Rewrite the active package's type to the
+    grounded family + count so the footprint builder derives the correct geometry
+    (through-hole DIP instead of SMD SOIC), and drop any variant-specific
+    dimensions so the corrected type — not stale SOIC pitch — drives the build.
+
+    Runs BEFORE _enforce_ordered_package_family so the enforcement check then
+    passes and no spurious "wrong package shape" warning fires. Conservative:
+    fires only when BOTH families are recognized and DIFFER and the count agrees;
+    never on an unclassifiable grounded string. Returns True if it corrected.
+    """
+    ordered_type = pin_data.ordered_package_type
+    ordered_count = pin_data.ordered_pin_count
+    if not ordered_type or not ordered_count:
+        return False
+    from .utils.package_detector import PackageDetector
+
+    detector = PackageDetector()
+    ordered_family = detector.package_family(ordered_type)
+    # Only act on a RECOGNIZED grounded family (mirrors the enforce gate): an
+    # unclassifiable vendor string must never force a false correction.
+    if ordered_family not in _KNOWN_PACKAGE_FAMILIES:
+        return False
+
+    old_type: Optional[str] = None
+    new_type: Optional[str] = None
+    if pin_data.packages:
+        from .pdf_extractor.variant_selection import select_package_variant
+
+        selection = select_package_variant(pin_data, part_number=part_number)
+        pkg = selection.package
+        count = int(pkg.get("pin_count") or 0) or len(pkg.get("pins") or [])
+        if count == ordered_count:
+            candidate = _corrected_family_type(
+                detector, ordered_family, ordered_type, pkg.get("type"), count
+            )
+            if candidate:
+                old_type = pkg.get("type")
+                pkg["type"] = candidate
+                # Drop variant-specific geometry so the corrected type (and the
+                # type-targeted DimensionExtractor) supplies the DIP grid, not a
+                # stale SOIC 1.27mm pitch.
+                for key in ("width", "height", "pitch", "dimensions"):
+                    pkg.pop(key, None)
+                if pin_data.selected_package_type == old_type:
+                    pin_data.selected_package_type = candidate
+                new_type = candidate
+    elif pin_data.package:
+        count = pin_data.package.pin_count or len(pin_data.pins or [])
+        if count == ordered_count:
+            candidate = _corrected_family_type(
+                detector, ordered_family, ordered_type, pin_data.package.type, count
+            )
+            if candidate:
+                old_type = pin_data.package.type
+                pin_data.package.type = candidate
+                # Clear SOIC-specific geometry; the DIP footprint is derived from
+                # the corrected type (+ type-targeted dimension extraction).
+                pin_data.package.width = 0
+                pin_data.package.height = 0
+                pin_data.package.pitch = None
+                new_type = candidate
+
+    if new_type is None:
+        return False
+
+    pin_data.selection_reason = (
+        f"Corrected the package type from {old_type!r} to {new_type!r} to match "
+        "the ordering-table ground truth (vendor-authoritative package family)"
+    )
+    print(
+        f"Note: corrected {part_number!r} package from {old_type!r} to {new_type!r} "
+        f"to match the ordering-table ground truth ({ordered_family}, "
+        f"{ordered_count} pins)."
+    )
+    return True
+
+
 def _ordered_variant_matches(pin_data: PinData, ordered: int) -> bool:
     """True when some extracted variant already has the grounded pin count."""
     counts = _extracted_pin_counts(pin_data)
@@ -1612,6 +1754,12 @@ def apply_ordering_ground_truth(
         _reextract_ordered_variant(pin_data, source_text, part_number, model, verbose)
 
     _enforce_ordered_pin_count(pin_data, part_number, force_best_effort)
+    # Correct a wrong-shape read (right family recognized, count already agrees)
+    # BEFORE the family enforcement below — the ordering table outranks the LLM,
+    # so DIP-8-ordered/SOIC-8-extracted becomes DIP-8 and the enforce check then
+    # passes with no spurious warning. _enforce_ordered_package_family remains the
+    # final safety net for mismatches this can't correct.
+    _correct_ordered_package_family(pin_data, part_number, verbose)
     _enforce_ordered_package_family(pin_data, part_number, force_best_effort)
 
 

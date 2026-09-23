@@ -108,6 +108,29 @@ def select_variant(
     return max(groups, key=len)
 
 
+def _is_meaningful_name(name, number) -> bool:
+    """True when a pin name looks like a real signal, not a dimension callout.
+
+    Rejects empty names, names that merely echo the pin number, and lone letters
+    (A, B, C ... — how mechanical DIMENSIONS tables label their callouts, which is
+    exactly the junk the vision model returns when it reads the wrong drawing).
+    """
+    s = str(name).strip()
+    if not s or s == str(number):
+        return False
+    if re.fullmatch(r"[A-Za-z]", s):
+        return False
+    return True
+
+
+def _variant_quality(variant: List[Dict]) -> float:
+    """Fraction of a variant's pins whose names look like real signals (0..1)."""
+    if not variant:
+        return 0.0
+    good = sum(1 for p in variant if _is_meaningful_name(p.get("name"), p.get("number")))
+    return good / len(variant)
+
+
 def extract_pinout_via_vision(
     pdf_path: str,
     page_number: int,
@@ -120,6 +143,11 @@ def extract_pinout_via_vision(
 
     Returns a list of ``{"number": int, "name": str}`` for the selected package
     variant, or ``[]`` on any failure (caller falls back to the text result).
+
+    A variant whose names are mostly junk (empty, echoing the pin number, or lone
+    dimension-callout letters — what the model returns when it reads a mechanical
+    DIMENSIONS table instead of the pins) is rejected so we fall back to text
+    rather than ship garbage.
     """
     try:
         png = render_page_png(pdf_path, page_number, dpi=dpi)
@@ -141,6 +169,15 @@ def extract_pinout_via_vision(
     pins = parse_pins_from_text(raw)
     groups = split_variant_groups(pins)
     selected = select_variant(groups, expected_pin_count)
+    quality = _variant_quality(selected)
+    if selected and quality < 0.5:
+        if verbose:
+            print(
+                f"  Vision p{page_number}: read {len(selected)} pins but the names "
+                f"look like junk (quality {quality:.2f}) — likely a dimension table, "
+                "not a pinout; discarding"
+            )
+        return []
     if verbose:
         print(
             f"  Vision p{page_number}: read {len(pins)} pins across {len(groups)} "

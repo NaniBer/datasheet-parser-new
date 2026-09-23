@@ -90,13 +90,16 @@ def test_vision_fallback_replaces_pins_when_text_ungrounded(monkeypatch):
     assert pd.validation_errors and any("vision" in e for e in pd.validation_errors)
 
 
-def test_vision_fallback_skips_when_well_grounded(monkeypatch):
+def test_vision_fallback_skips_when_well_grounded_and_table_backed(monkeypatch):
     import src.main as m
     import src.llm.vision_pinout as vp
     from src.models.pin_data import PinData, Pin
 
-    # Text pins are grounded in the source -> vision is not consulted (gated).
-    content = _Content("--- Page 1 ---\n1 VCC\n2 GND\n3 OUT")
+    # Grounded AND from a real pin table -> text is trusted, vision not consulted.
+    content = _Content(
+        "--- Page 1 ---\n1 VCC\n2 GND\n3 OUT",
+        tables=[(1, [["Pin", "Name"], ["1", "VCC"], ["2", "GND"], ["3", "OUT"]])],
+    )
     pd = PinData(component_name="X", pins=[Pin(1, "VCC"), Pin(2, "GND"), Pin(3, "OUT")])
     calls = {"n": 0}
 
@@ -107,6 +110,30 @@ def test_vision_fallback_skips_when_well_grounded(monkeypatch):
     m._apply_vision_fallback(pd, content, "x.pdf", "X")
     assert calls["n"] == 0                                     # vision never called
     assert [p.name for p in pd.pins] == ["VCC", "GND", "OUT"]  # unchanged
+
+
+def test_vision_crosschecks_grounded_when_no_pin_table(monkeypatch):
+    import src.main as m
+    import src.llm.vision_pinout as vp
+    from src.models.pin_data import PinData, Pin
+
+    # Grounded but NO pin table (graphical connection diagram): grounding only
+    # proves the names appear, not that they sit on the right pin, so vision is
+    # consulted and, if it returns a complete pinout, replaces the text mapping.
+    content = _Content("--- Page 1 ---\nOUTPUT INVERTING NONINVERTING V- V+", tables=[])
+    pd = PinData(component_name="X",
+                 pins=[Pin(1, "OUTPUT"), Pin(2, "INVERTING"), Pin(3, "V-")])
+    calls = {"n": 0}
+
+    def _spy(*a, **k):
+        calls["n"] += 1
+        return [{"number": 1, "name": "A"}, {"number": 2, "name": "B"},
+                {"number": 3, "name": "C"}]
+    monkeypatch.setattr(vp, "extract_pinout_best_page", _spy)
+    m._apply_vision_fallback(pd, content, "x.pdf", "X")
+    assert calls["n"] == 1                                   # vision WAS consulted
+    assert [p.name for p in pd.pins] == ["A", "B", "C"]      # complete -> replaced
+    assert pd.extraction_method == "Vision"
 
 
 def test_vision_fallback_keeps_text_when_vision_empty(monkeypatch):

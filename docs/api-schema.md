@@ -323,6 +323,59 @@ Downloadable set = `{succeeded, unvalidated}`.
 
 ---
 
+## Validation & uncertainty — what `validated` means
+
+`validated` (and the `unvalidated` status / `X-Validated` header) tells you whether
+the pipeline could **verify the extracted pinout against the datasheet itself**, not
+just whether a file was produced. Both `succeeded` (`validated: true`) and
+`unvalidated` (`validated: false`) return the **same set of downloadable artifacts** —
+the difference is confidence.
+
+### What the pipeline does when it's unsure
+
+Before building anything, an **abstention gate** tags every pin with its provenance
+(does its **number** appear in the datasheet? does its **name**?) and classifies the
+pinout into one of three cases:
+
+| Signature | Detection | Default (fail-open) | `--strict` (fail-closed) |
+|-----------|-----------|---------------------|--------------------------|
+| **Invention** — the pinout was made up, not read from the doc | < 50% of extracted pin **numbers** appear anywhere in the datasheet | Emit best-effort, `validated: false`, reason recorded (`unvalidated`) | Refuse — `failed`, no artifacts |
+| **Hallucinated name(s)** — a real pinout with stray invented pins | ≥ 60% of pins grounded, but some pin **name** appears nowhere in the datasheet | Emit best-effort, `validated: false`, reason names the offending pins | Refuse — `failed` |
+| **Unverifiable / graphical** — a connection diagram whose text layer is garbled glyphs | Uniformly low grounding, but the pin numbers *are* present | **Not refused.** Flagged "unverified" and handed to the **vision path** to read the diagram; result still ships | Same — not refused |
+
+The thresholds are deliberate: a *correct* graphical part (e.g. AD712) grounds at only
+~25% because its labels are vector art, so refusing on low grounding would wrongly
+reject every picture-based pinout. Those go to vision instead of being refused.
+
+### Fail-open is the default
+
+By default the API **never refuses on a validation gate** — it produces the best-effort
+result and marks it `unvalidated` (`validated: false`, pipeline exit `3`). Pass
+**`--strict`** (CLI) to fail closed instead: gates raise and the job ends `failed`
+(exit `1`) with no artifacts. Use `validated` to decide how much to trust a result, not
+whether one exists.
+
+### Where the reason lives
+
+- **API:** `JobStatus.reason` (and the `unvalidated` status) carry the human-readable
+  cause, e.g. *"1 pin name(s) appear nowhere in the datasheet ('V-') while the rest are
+  grounded — likely hallucinated"*.
+- **Inside the GLB:** the same verdict is stamped on the file's `scene.extras` as
+  `validated: false` + `validationErrors: [...]`, so a downstream consumer can read it
+  straight off the artifact without the job record. Platforms typically **suppress or
+  flag** `validated: false` parts in their 2D/3D views.
+
+### Caveat — "validated" is a text-grounding check, not proof of correctness
+
+`validated: true` means every pin name **appears** in the datasheet — **not** that each
+name sits on the **correct pin number**. A pinout read from a connection diagram can be
+internally scrambled yet fully grounded (every name exists somewhere), so it can pass as
+`validated: true` while the number→name mapping is wrong. This is why the pipeline
+cross-checks table-less graphical parts against the rendered diagram via the vision path
+rather than trusting grounding alone.
+
+---
+
 ## Generated artifacts
 
 Every successful job yields up to four files (order = display order):

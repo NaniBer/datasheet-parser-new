@@ -73,8 +73,8 @@ class BodyGeometry:
     designator_offset: float = 16.0  # Distance above body
     designator_height: float = 0.5  # Text height
 
-    value_size: float = 2.0  # Font size for package value
-    value_offset: float = 3.0  # Distance above body (below designator)
+    value_size: float = 4.0  # Font size for package value (matches designator_size)
+    value_offset: float = 3.0  # Distance below body
     value_height: float = 0.5  # Text height
 
     # Spacing from body top to first pin
@@ -173,7 +173,7 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
             designator_size=3.0,
             designator_offset=25.0,
             designator_height=0.5,
-            value_size=1.5,
+            value_size=3.0,
             value_offset=2.5,
             value_height=0.5,
             top_margin=5.0
@@ -293,7 +293,7 @@ def get_tssop_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.2,
             designator_size=3.0,
             designator_offset=5.0,
-            value_size=1.5,
+            value_size=3.0,
             value_offset=2.5,
             top_margin=4.5,
         ),
@@ -334,7 +334,7 @@ def get_dfn_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
-            value_size=1.5,
+            value_size=3.0,
             value_offset=2.5,
             top_margin=5.0,
         ),
@@ -372,7 +372,7 @@ def get_wson_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
-            value_size=1.5,
+            value_size=3.0,
             value_offset=2.5,
             top_margin=5.0,
         ),
@@ -410,7 +410,7 @@ def get_son_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
-            value_size=1.5,
+            value_size=3.0,
             value_offset=2.5,
             top_margin=5.0,
         ),
@@ -473,6 +473,8 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.2,  # Reduced from 0.3
             designator_size=3.0,
             designator_offset=5.0,
+            value_size=3.0,  # matches designator_size
+            value_offset=2.5,
             top_margin=6.2  # Increased from 4.0 for more space between body and pins
         ),
         pins_per_side=[pins_per_side, pins_per_side, pins_per_side, pins_per_side],
@@ -524,7 +526,7 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
             designator_size=3.0,
             designator_offset=6.0,
             designator_height=0.5,
-            value_size=1.5,
+            value_size=3.0,
             value_offset=2.5,
             value_height=0.5,
             top_margin=5.0
