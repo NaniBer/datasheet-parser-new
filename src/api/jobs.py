@@ -86,6 +86,8 @@ class Job:
     id: str
     workdir: Path
     part_number: Optional[str] = None
+    package: Optional[str] = None
+    pin_count: Optional[int] = None
     status: str = QUEUED
     validated: Optional[bool] = None
     reason: Optional[str] = None
@@ -213,6 +215,10 @@ def run_pipeline(job: Job, store: JobStore) -> None:
     ]
     if job.part_number:
         cmd += ["--part-number", job.part_number]
+    if job.package:
+        cmd += ["--package", job.package]
+    if job.pin_count:
+        cmd += ["--pin-count", str(job.pin_count)]
 
     try:
         proc = subprocess.run(
