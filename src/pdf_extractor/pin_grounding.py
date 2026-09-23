@@ -73,6 +73,17 @@ def _normalize(text) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", str(text or "")).upper()
 
 
+def _norm_dashes(text) -> str:
+    """Fold every Unicode dash/minus variant to an ASCII hyphen.
+
+    Short symbolic pin names (V-, V+, IN-) are matched by raw substring, which is
+    dash-sensitive: a datasheet prints "V–" (en-dash U+2013) or "V−" (minus sign
+    U+2212) while the LLM emits "V-" (ASCII hyphen), so the literal match misses
+    and the pin is wrongly flagged "hallucinated". Normalizing both sides fixes it.
+    """
+    return re.sub("[‐-―−﹘﹣－]", "-", str(text or ""))
+
+
 def _name_segments(name: str) -> List[str]:
     """Word-segments of a pin name, each normalized, length >= 2."""
     segments = [_normalize(seg) for seg in re.split(r"[^A-Za-z0-9]+", str(name or ""))]
@@ -125,8 +136,9 @@ def _grade_pin(number, name, lines: List[tuple]):
     def name_on_line(raw_line: str, norm_line: str) -> bool:
         if segments:  # multi-char words: match segments in the punctuation-stripped line
             return all(seg in norm_line for seg in segments)
-        # Short symbolic names (V+, V-, IN+): match the token literally on the raw line
-        return raw_name in raw_line
+        # Short symbolic names (V+, V-, IN+): match the token literally on the raw
+        # line, folding dash/minus variants so ASCII "V-" matches printed "V–"/"V−".
+        return _norm_dashes(raw_name) in _norm_dashes(raw_line)
 
     name_appears_anywhere = False
     for page, raw, norm in lines:
