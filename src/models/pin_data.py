@@ -18,6 +18,13 @@ class Pin:
     active_low: bool = False               # [SYM-08]
     nc: bool = False                       # [SYM-11]
     nc_instruction: Optional[str] = None   # verbatim datasheet wording [SYM-11]
+    # Provenance / traceability (Task 1). Populated post-extraction by
+    # pin_grounding.assess_pin_grounding: where the (number, name) pairing was
+    # found in the datasheet, and how strong that evidence is. A pin that grounds
+    # to nothing is a probable hallucination — the signal the abstention gate uses.
+    grounding: Optional[str] = None        # "grounded" | "weak" | "unsupported" | "nc"
+    source_page: Optional[int] = None      # page the evidence was found on
+    source_evidence: Optional[str] = None  # the matched source line/snippet
 
 
 @dataclass

@@ -489,7 +489,9 @@ class PinoutDiagramBuilder:
         height = self.params.body_geometry.value_height
         offset = self.params.body_geometry.value_offset
         name = self.component_name[:30]
-        text_y = self.params.body_height / 2 + offset
+        # Value/name is centered BELOW the body's bottom edge (designator sits
+        # above the top edge). Body spans -body_height/2 .. +body_height/2.
+        text_y = -(self.params.body_height / 2 + offset)
 
         value_assy = cq.Assembly(name="PackageValue")
 

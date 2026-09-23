@@ -280,12 +280,101 @@ def find_ordering_match(text: str, part_number: Optional[str]) -> Optional[Order
 _LLM_REGION_CHARS = 6000
 
 
-def _ordering_region(text: str) -> str:
-    """Best window of text to hand the model: from the ordering-section
-    heading when present, else the document tail where addenda usually live."""
+def _prefix_token(part_number: str) -> str:
+    """Family root of a part number: leading letters + first run of digits,
+    e.g. ``MCP1700T-3002E-MB`` -> ``MCP1700``, ``SN6505A`` -> ``SN6505``.
+
+    This is the token a datasheet uses to name the device family in its
+    diagrams/tables (the trailing package/temperature/tape suffixes vary per
+    orderable). Falls back to the whole normalized number when it has no
+    letters+digits shape."""
+    norm = _normalize(part_number)
+    m = re.match(r"[A-Z]+[0-9]+", norm)
+    return m.group(0) if m else norm
+
+
+def _flex_pn_re(part_number: str) -> Optional[re.Pattern]:
+    """A separator-tolerant matcher for the full order code, so
+    ``MCP1700T-3002E-MB`` also matches the datasheet's ``MCP1700T-3002E/MB``
+    (vendors punctuate suffixes inconsistently: '-', '/', space, none)."""
+    norm = _normalize(part_number)
+    if len(norm) < _MIN_PREFIX_LEN:
+        return None
+    body = r"[^A-Za-z0-9]*".join(re.escape(c) for c in norm)
+    return re.compile(body, re.IGNORECASE)
+
+
+def _anchor_positions(text: str, part_number: str) -> List[int]:
+    """Where to anchor the ordering window, most specific first.
+
+    Prefer occurrences of the *full* order code (its suffix is what pins a
+    variant to a package, e.g. ``.../MB`` -> SOT-89). Only if the full code is
+    absent do we fall back to the family root (``MCP1700``), which locates the
+    device but not the specific variant."""
+    flex = _flex_pn_re(part_number)
+    if flex is not None:
+        full = [m.start() for m in flex.finditer(text)]
+        if full:
+            return full
+    prefix = _prefix_token(part_number)
+    if len(prefix) < _MIN_PREFIX_LEN:  # too short/generic to anchor safely
+        return []
+    return [m.start() for m in re.finditer(re.escape(prefix), text.upper())]
+
+
+def _cooccurrence_region(text: str, part_number: str) -> Optional[str]:
+    """Window where the order code (or its family root) co-occurs with a
+    package-family name (SOT-89, SOIC, TO-92, DIP, QFN, ...), or None if they
+    never appear close together.
+
+    Many datasheets have no recognizable ordering-section heading, so
+    :func:`_section_start` returns 0 and the plain tail/head window can land on
+    trademark/legal boilerplate. Anchoring on the place where the part number
+    and a package name sit together points the model at the real package
+    information instead. Vendor-agnostic: nothing about a specific part, vendor,
+    or package is hardcoded."""
+    anchor_positions = _anchor_positions(text, part_number)
+    if not anchor_positions:
+        return None
+    family_positions = [m.start() for m in _FAMILY_RE.finditer(text)]
+    if not family_positions:
+        return None
+
+    # Closest anchor<->family pair anywhere in the document.
+    best = None  # (distance, anchor_pos, family_pos)
+    for p in anchor_positions:
+        for f in family_positions:
+            d = abs(f - p)
+            if best is None or d < best[0]:
+                best = (d, p, f)
+    # Require them to sit within one window; otherwise this is not a real
+    # co-occurrence and we should fall back rather than guess.
+    if best is None or best[0] > _LLM_REGION_CHARS:
+        return None
+
+    center = (best[1] + best[2]) // 2
+    half = _LLM_REGION_CHARS // 2
+    start = max(0, center - half)
+    return text[start:start + _LLM_REGION_CHARS]
+
+
+def _ordering_region(text: str, part_number: Optional[str] = None) -> str:
+    """Best window of text to hand the model.
+
+    Strategies, in order (each fails safe to the next so already-working parts
+    never regress):
+      1. From an explicit ordering-section heading, when present.
+      2. The window where the part-number family root co-occurs with a
+         package-family name (handles datasheets with no heading, whose tail
+         would otherwise be legal/trademark boilerplate).
+      3. The document tail, where addenda usually live."""
     start = _section_start(text)
     if start:
         return text[start:start + _LLM_REGION_CHARS]
+    if part_number:
+        region = _cooccurrence_region(text, part_number)
+        if region:
+            return region
     return text[-_LLM_REGION_CHARS:] if len(text) > _LLM_REGION_CHARS else text
 
 
@@ -359,7 +448,7 @@ def find_ordering_match_llm(
     if not part_number or not text:
         return None
 
-    region = _ordering_region(text)
+    region = _ordering_region(text, part_number)
     if not region.strip():
         return None
 

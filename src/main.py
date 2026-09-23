@@ -173,6 +173,30 @@ def _body_output_base(output: str) -> str:
 # Pipeline Functions
 # ============================================================================
 
+_PINOUT_HEADING_RE = re.compile(
+    r"pin\s*(?:configuration|out|assignment|description|function|mapping|definition)s?"
+    r"|connection\s*diagram|terminal\s*assignment",
+    re.IGNORECASE,
+)
+_PINTABLE_HEADER_RE = re.compile(
+    r"pin\s*\.?\s*(?:no\.?|number|#)\b.*(?:name|function|description|symbol|signal)",
+    re.IGNORECASE,
+)
+
+
+def _page_pinout_hint(text: str) -> str:
+    """Cheap flag for the locate-index: does this page look like a pin page?
+
+    Returns a short tag ("[PINOUT?]") when the page carries a pinout heading or
+    a pin-table header, else "". Computed from text already extracted, so no
+    extra cost. Deliberately high-recall/low-precision — it only *hints* the
+    LLM, which makes the final call.
+    """
+    if _PINOUT_HEADING_RE.search(text) or _PINTABLE_HEADER_RE.search(text):
+        return "[PINOUT?]"
+    return ""
+
+
 def _build_page_heading_index(input_path: str, max_pages: int = 600) -> list:
     """Build a compact ``(page_number, heading)`` index of a whole document.
 
@@ -190,6 +214,12 @@ def _build_page_heading_index(input_path: str, max_pages: int = 600) -> list:
                 text = page.extract_text() or ""
                 lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
                 heading = " | ".join(lines[:2]) if lines else ""
+                # Prepend a cheap pinout hint (prepended so it survives the
+                # heading truncation in the locate prompt) — gives the LLM real
+                # signal to pick the deep pin page instead of a look-alike.
+                hint = _page_pinout_hint(text)
+                if hint:
+                    heading = f"{hint} {heading}"
                 index.append((page_num, heading))
     except Exception as e:
         print(f"Warning: could not build page heading index: {e}")
@@ -210,8 +240,8 @@ def _verify_pin_page_fallback(input_path: str, model: str, verbose: bool = False
 
     if verbose:
         print(
-            f"  Deterministic detection empty; asking LLM to locate the "
-            f"pin-assignment page across {len(page_index)} pages..."
+            f"  Asking LLM to locate the pin-assignment page across "
+            f"{len(page_index)} pages (deep-document check)..."
         )
 
     try:
@@ -233,6 +263,25 @@ def _verify_pin_page_fallback(input_path: str, model: str, verbose: bool = False
         reasons=["LLM fallback located pin-assignment page"],
     )
     return [candidate]
+
+
+def _has_strong_pinout_signal(candidates) -> bool:
+    """True when at least one detected page carries a real pinout signal.
+
+    A "strong" signal is a pinout table, a captioned diagram, a structural
+    pinout shape (numbered pins beside labels), or a pinout heading — i.e. the
+    deterministic detector actually recognised a pin page, not merely a
+    recall-bias include (cover / first content page). When this is False the
+    detection is low-confidence and we escalate to the LLM page classifier
+    (Task 3: comprehension only when the cheap signals are weak).
+    """
+    for c in candidates:
+        if (getattr(c, "has_table", False) or getattr(c, "has_diagram", False)
+                or getattr(c, "has_shape", False)):
+            return True
+        if any("heading" in r.lower() for r in getattr(c, "reasons", []) or []):
+            return True
+    return False
 
 
 def detect_relevant_pages(
@@ -259,17 +308,42 @@ def detect_relevant_pages(
 
     with PageDetector(input_path) as detector:
         candidates = detector.detect_relevant_pages(min_confidence=min_confidence)
+        total_pages = detector.total_pages
+        long_doc_threshold = detector.LONG_DOCUMENT_PAGE_COUNT
 
     if verbose:
         print(f"Found {len(candidates)} relevant pages:")
         for c in candidates:
             print(f"  - Page {c.page_number} (confidence: {c.confidence_score}): {', '.join(c.reasons)}")
 
+    # Escalate to the LLM page classifier (Task 3) in two low-signal situations,
+    # MERGING its located page in rather than replacing:
+    #   * Long documents — the real pin-assignment page can sit deep in the
+    #     manual (p385/400) with wording the keyword detector misses, and the
+    #     PageDetector recall-bias is scoped to short/medium sheets. Even when
+    #     threshold detection surfaced pages, on a long doc they are often the
+    #     wrong ones (spec tables, etc.), so we always ask.
+    #   * Weak detection on any length — nothing the detector returned carries a
+    #     real pinout signal (table / captioned diagram / pinout heading); the
+    #     candidates are only recall-bias includes. Comprehension is exactly
+    #     what is needed here, so escalate. Well-detected parts (a clear pinout
+    #     table or diagram) skip the LLM, keeping the common path cheap.
+    located_attempted = False
+    weak_detection = not _has_strong_pinout_signal(candidates)
+    if model is not None and (total_pages > long_doc_threshold or weak_detection):
+        if verbose and weak_detection and total_pages <= long_doc_threshold:
+            print("  Detection signal weak (no pinout table/diagram/heading) — "
+                  "escalating to the LLM page classifier...")
+        located = _verify_pin_page_fallback(input_path, model, verbose)
+        located_attempted = True
+        if located:
+            have = {c.page_number for c in candidates}
+            candidates += [c for c in located if c.page_number not in have]
+
     if not candidates:
-        # No page cleared the confidence threshold. Before giving up, ask the
-        # LLM to locate the pin-assignment page over a compact heading index
-        # (handles deep pages in long documents). Fail closed if it can't.
-        if model is not None:
+        # No page cleared the threshold. Before giving up, ask the LLM to locate
+        # the pin-assignment page (unless we already tried above). Fail closed.
+        if model is not None and not located_attempted:
             candidates = _verify_pin_page_fallback(input_path, model, verbose)
 
         if not candidates:
@@ -320,6 +394,254 @@ def _grounding_source_text(content) -> str:
                 if cell:
                     parts.append(str(cell))
     return "\n".join(parts)
+
+
+# Above this fraction of grounded (non-NC) pins we trust the grounding signal
+# enough to treat a leftover *unsupported* pin as a real hallucination and
+# refuse. Below it, grounding itself is unreliable — the classic case is a
+# graphical/connection-diagram pinout whose text layer is garbled glyphs
+# (measured: MCP3208 100% grounded, TL072 83%, but a correct AD712 only 25%),
+# so we must NOT refuse on low grounding or we'd reject every picture-based
+# pinout. Those are flagged "unverified" (watermark) instead, for the vision
+# path to confirm later.
+_GROUNDING_TRUST = 0.6
+
+# Below this fraction of pins whose NUMBER appears anywhere in the source, the
+# pinout is unanchored from the datasheet — the signature of a pinout invented
+# from prose/priors (measured: a fabricated part scored 7% here, while real
+# discrete/graphical parts whose package drawings carry the numbers scored
+# 67–100%). This is what separates invention from a garbled-but-real graphical
+# pinout, which name-grounding alone cannot.
+_COVERAGE_MIN = 0.5
+
+
+def _apply_grounding_gate(
+    pin_data, content, force_best_effort: bool, verbose: bool = False
+) -> None:
+    """Task 1 abstention gate: refuse pinouts that are provably hallucinated.
+
+    Tags every pin with provenance (grounding/source_page/source_evidence), then:
+      * almost no pin NUMBER appears in the source -> invented from prose -> REFUSE;
+      * unsupported pin(s) amid an otherwise-grounded pinout -> REFUSE
+        (fail-closed by default; --force-best-effort downgrades to a watermark);
+      * uniformly low grounding but numbers present -> cannot verify from text
+        (likely a graphical/discrete pinout) -> flag "unverified", do NOT refuse;
+      * well-grounded -> pass untouched.
+    """
+    from .pdf_extractor.pin_grounding import assess_pin_grounding, pin_number_coverage
+
+    tally = assess_pin_grounding(pin_data, content)
+    signal = tally["grounded"] + tally["weak"] + tally["unsupported"]
+    if signal == 0:
+        return  # no judgeable pins (all NC, or none) — nothing to gate
+
+    coverage = pin_number_coverage(pin_data, content)
+
+    # Invention signature: the pins' numbers are essentially absent from the
+    # datasheet, so the pinout was not read from it. Refuse. (A real graphical
+    # part keeps its numbers in the package drawing and clears this easily.)
+    if coverage < _COVERAGE_MIN:
+        reason = (
+            f"only {coverage:.0%} of the extracted pin numbers appear anywhere in "
+            f"the datasheet — the pinout is not grounded in the document (likely "
+            f"invented from prior knowledge)"
+        )
+        if force_best_effort:
+            _record_degraded(pin_data, [f"cannot determine pinout: {reason}"])
+            print(f"Warning: {reason}. Proceeding UNVALIDATED (--force-best-effort).")
+            return
+        raise ValidationError(
+            f"Cannot determine pinout: {reason}. "
+            "Re-run with --force-best-effort to emit unvalidated output.",
+            error_code=ErrorCodes.EXTRACTION_VALIDATION_FAILED,
+            details={"pin_number_coverage": coverage},
+        )
+
+    grounded_frac = tally["grounded"] / signal
+    unsupported = [
+        _pin_name(pin)
+        for pin in _iter_all_pins(pin_data)
+        if _pin_field(pin, "grounding") == "unsupported"
+    ]
+
+    if verbose:
+        print(
+            f"  Grounding: {tally['grounded']} grounded, {tally['weak']} weak, "
+            f"{tally['unsupported']} unsupported, {tally['nc']} nc "
+            f"({grounded_frac:.0%} grounded)"
+        )
+
+    # Trustworthy context: most pins grounded, but some name is found nowhere in
+    # the datasheet -> those are hallucinated. Refuse.
+    if unsupported and grounded_frac >= _GROUNDING_TRUST:
+        reason = (
+            f"{len(unsupported)} pin name(s) appear nowhere in the datasheet "
+            f"({', '.join(repr(n) for n in unsupported[:6])}"
+            f"{', …' if len(unsupported) > 6 else ''}) while the rest are grounded — "
+            f"likely hallucinated"
+        )
+        if force_best_effort:
+            _record_degraded(pin_data, [f"cannot determine pinout: {reason}"])
+            print(f"Warning: {reason}. Proceeding UNVALIDATED (--force-best-effort).")
+            return
+        raise ValidationError(
+            f"Cannot determine pinout: {reason}. "
+            "Re-run with --force-best-effort to emit unvalidated output.",
+            error_code=ErrorCodes.EXTRACTION_VALIDATION_FAILED,
+            details={"unsupported_pins": unsupported},
+        )
+
+    # Low grounding overall: text can't verify this pinout (likely a graphical
+    # connection diagram). Don't refuse — flag it unverified for the vision path.
+    if grounded_frac < _GROUNDING_TRUST:
+        _record_degraded(
+            pin_data,
+            [
+                f"pinout unverified: only {tally['grounded']}/{signal} pins grounded "
+                f"in the datasheet text (likely a graphical pinout; needs vision)"
+            ],
+        )
+
+
+def _iter_all_pins(pin_data):
+    packages = getattr(pin_data, "packages", None)
+    if packages:
+        for package in packages:
+            if isinstance(package, dict):
+                for pin in package.get("pins") or []:
+                    yield pin
+    pins = getattr(pin_data, "pins", None)
+    if pins:
+        for pin in pins:
+            yield pin
+
+
+def _pin_field(pin, key):
+    return pin.get(key) if isinstance(pin, dict) else getattr(pin, key, None)
+
+
+def _pin_name(pin):
+    return _pin_field(pin, "name")
+
+
+def _active_pins(pin_data):
+    """Return (pins_list, container) for the selected package or legacy pins."""
+    packages = getattr(pin_data, "packages", None)
+    if packages:
+        idx = getattr(pin_data, "selected_package_index", None) or 0
+        if idx < len(packages) and isinstance(packages[idx], dict):
+            pkg = packages[idx]
+            return pkg.get("pins") or [], pkg
+    if getattr(pin_data, "pins", None):
+        return pin_data.pins, pin_data
+    return [], None
+
+
+def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=False):
+    """When text can't ground the pinout (graphical parts), read it via vision.
+
+    Grounding is imperfect but conservative here: we reach for vision when the
+    text pinout is poorly grounded (the graphical/analog case), OR when it is
+    well-grounded but the datasheet gave us no pin TABLE — because on a table-less
+    part grounding only proves the names appear somewhere, not that they sit on
+    the right pin number, so a scrambled-but-grounded mapping (e.g. AD712) would
+    otherwise ship. We render the pinout page(s), read the pinout with the vision
+    endpoint, and — if it returns a confident pinout — replace the text pins with
+    the vision ones (for the cross-check case, only when the vision pinout is
+    complete, so we never downgrade a full text pinout to a partial vision read).
+    Well-grounded, table-backed parts are left untouched (text is reliable there,
+    and this keeps the vision call off the common path). Measured identity: the
+    original poorly-grounded-only merge reached ~56% vs ~44% text; broad
+    text-vs-vision arbitration was slower and no better (vision is noisy
+    run-to-run and loses the parts text gets right), so the trigger stays narrow.
+    """
+    from .pdf_extractor.pin_grounding import assess_pin_grounding
+    from .llm.vision_pinout import extract_pinout_best_page
+
+    tally = assess_pin_grounding(pin_data, content)
+    signal = tally["grounded"] + tally["weak"] + tally["unsupported"]
+    if signal == 0:
+        return
+
+    # High grounding is only trustworthy when the pinout came from a real pin
+    # TABLE. When it came from a connection diagram / vector art (no table),
+    # grounding merely confirms the names appear somewhere in the datasheet — not
+    # that they sit on the right pin number — so a scrambled-but-grounded mapping
+    # (e.g. AD712) sails through the gate. For that graphical class we cross-check
+    # the number->name mapping against the rendered diagram via the vision path.
+    has_pin_table = bool(getattr(content, "tables", None))
+    well_grounded = tally["grounded"] / signal >= _GROUNDING_TRUST
+    if well_grounded and has_pin_table:
+        return  # well-grounded and table-backed — trust text, skip vision
+
+    pages = list(getattr(content, "pages", None) or [])
+    if not pages or input_path is None:
+        return
+
+    text_pins, _container = _active_pins(pin_data)
+    expected = len(text_pins) or None
+    if verbose:
+        reason = (
+            "grounded but table-less (graphical pinout) — cross-checking"
+            if well_grounded
+            else "low text grounding"
+        )
+        print(f"  {reason}: trying the vision path on the pinout page(s)...")
+    vision_pins = extract_pinout_best_page(
+        str(input_path), pages, part_number=part_number,
+        expected_pin_count=expected, verbose=verbose,
+    )
+    named = [
+        p for p in vision_pins
+        if str(p.get("name")).strip() not in ("", str(p.get("number")))
+    ]
+    if len(named) < max(2, (expected or 0) // 2):
+        if verbose:
+            print("  Vision fallback: no confident pinout; keeping text extraction.")
+        return
+
+    # When we only reached vision to CROSS-CHECK an already well-grounded text
+    # pinout (the graphical / no-table case), don't downgrade a complete text
+    # pinout to a partial vision read: require a full pinout matching the
+    # expected pin count before overwriting. The low-grounding path keeps its
+    # looser guard (it has no trustworthy text pinout to protect).
+    if well_grounded and expected and len(vision_pins) != expected:
+        if verbose:
+            print("  Vision cross-check: incomplete vision pinout; keeping text extraction.")
+        return
+
+    _replace_pins_with_vision(pin_data, vision_pins)
+    note_reason = (
+        "text pinout was grounded but came from a connection diagram (no pin "
+        "table); number->name mapping cross-checked and replaced via vision"
+        if well_grounded
+        else "text could not be grounded"
+    )
+    _record_degraded(
+        pin_data,
+        [f"pinout read via vision on the rendered page ({len(vision_pins)} pins); "
+         f"{note_reason}"],
+    )
+    if verbose:
+        print(f"  Vision fallback: replaced text pins with {len(vision_pins)} vision-read pins.")
+
+
+
+def _replace_pins_with_vision(pin_data, vision_pins):
+    """Swap the active package's pins for the vision-read pinout (both shapes)."""
+    pins_list, container = _active_pins(pin_data)
+    if container is None:
+        return
+    if isinstance(container, dict):
+        container["pins"] = [
+            {"number": p["number"], "name": p["name"]} for p in vision_pins
+        ]
+        container["pin_count"] = len(vision_pins)
+    else:  # legacy PinData: rebuild Pin objects
+        pin_data.pins = [Pin(number=p["number"], name=p["name"]) for p in vision_pins]
+        if getattr(pin_data, "package", None) is not None:
+            pin_data.package.pin_count = len(vision_pins)
+    pin_data.extraction_method = "Vision"
 
 
 def extract_pin_data(
@@ -385,6 +707,11 @@ def extract_pin_data(
         )
 
         if deterministic_validation.is_valid:
+            # Deterministic pins come straight from table rows, so they ground by
+            # construction; run the gate anyway for provenance tags + consistency.
+            _apply_grounding_gate(
+                deterministic_pin_data, content, force_best_effort, verbose
+            )
             if verbose:
                 print("Using deterministic table parser")
                 _print_pin_data_summary(deterministic_pin_data, deterministic_validation)
@@ -462,6 +789,8 @@ def extract_pin_data(
         last_validation = validation
 
         if validation.is_valid:
+            # Abstention gate: refuse provably-hallucinated pinouts before they ship.
+            _apply_grounding_gate(pin_data, content, force_best_effort, verbose)
             if verbose:
                 _print_pin_data_summary(pin_data, validation)
 
@@ -1057,6 +1386,301 @@ def _enforce_ordered_package_family(
     )
 
 
+def _corrected_family_type(
+    detector, ordered_family: str, ordered_type: str, current_type, count: int
+) -> Optional[str]:
+    """The corrected "<family>-<count>" label when ``current_type`` belongs to a
+    DIFFERENT recognized family than the grounded ordering-table family; else None.
+
+    Conservative: only overrides one recognized family with another (never an
+    unclassifiable extracted string), so an odd LLM label can't be clobbered.
+    """
+    cur_family = detector.package_family(str(current_type or ""))
+    if not cur_family or cur_family == ordered_family:
+        return None
+    if cur_family not in _KNOWN_PACKAGE_FAMILIES:
+        return None  # only correct a *recognized* wrong family
+    return _package_label(detector.normalize_package_name(ordered_type), count)
+
+
+def _correct_ordered_package_family(
+    pin_data: PinData,
+    part_number: Optional[str],
+    verbose: bool = False,
+) -> bool:
+    """Correct a wrong-*shape* read when the ordering table grounds a different
+    recognized package family than the one extracted, but the pin COUNT already
+    agrees (e.g. AD712KN: ordering table -> DIP-8, extraction -> SOIC-8).
+
+    The order-code -> package mapping printed in the sheet is vendor-authoritative
+    and outranks the LLM's variant choice (the established "ordering table wins"
+    design). Because the count matches, no re-extraction is needed — DIP-8 and
+    SOIC-8 carry the same 8 signals; only the package TYPE (and therefore the
+    footprint / 3D geometry) is wrong. Rewrite the active package's type to the
+    grounded family + count so the footprint builder derives the correct geometry
+    (through-hole DIP instead of SMD SOIC), and drop any variant-specific
+    dimensions so the corrected type — not stale SOIC pitch — drives the build.
+
+    Runs BEFORE _enforce_ordered_package_family so the enforcement check then
+    passes and no spurious "wrong package shape" warning fires. Conservative:
+    fires only when BOTH families are recognized and DIFFER and the count agrees;
+    never on an unclassifiable grounded string. Returns True if it corrected.
+    """
+    ordered_type = pin_data.ordered_package_type
+    ordered_count = pin_data.ordered_pin_count
+    if not ordered_type or not ordered_count:
+        return False
+    from .utils.package_detector import PackageDetector
+
+    detector = PackageDetector()
+    ordered_family = detector.package_family(ordered_type)
+    # Only act on a RECOGNIZED grounded family (mirrors the enforce gate): an
+    # unclassifiable vendor string must never force a false correction.
+    if ordered_family not in _KNOWN_PACKAGE_FAMILIES:
+        return False
+
+    old_type: Optional[str] = None
+    new_type: Optional[str] = None
+    if pin_data.packages:
+        from .pdf_extractor.variant_selection import select_package_variant
+
+        selection = select_package_variant(pin_data, part_number=part_number)
+        pkg = selection.package
+        count = int(pkg.get("pin_count") or 0) or len(pkg.get("pins") or [])
+        if count == ordered_count:
+            candidate = _corrected_family_type(
+                detector, ordered_family, ordered_type, pkg.get("type"), count
+            )
+            if candidate:
+                old_type = pkg.get("type")
+                pkg["type"] = candidate
+                # Drop variant-specific geometry so the corrected type (and the
+                # type-targeted DimensionExtractor) supplies the DIP grid, not a
+                # stale SOIC 1.27mm pitch.
+                for key in ("width", "height", "pitch", "dimensions"):
+                    pkg.pop(key, None)
+                if pin_data.selected_package_type == old_type:
+                    pin_data.selected_package_type = candidate
+                new_type = candidate
+    elif pin_data.package:
+        count = pin_data.package.pin_count or len(pin_data.pins or [])
+        if count == ordered_count:
+            candidate = _corrected_family_type(
+                detector, ordered_family, ordered_type, pin_data.package.type, count
+            )
+            if candidate:
+                old_type = pin_data.package.type
+                pin_data.package.type = candidate
+                # Clear SOIC-specific geometry; the DIP footprint is derived from
+                # the corrected type (+ type-targeted dimension extraction).
+                pin_data.package.width = 0
+                pin_data.package.height = 0
+                pin_data.package.pitch = None
+                new_type = candidate
+
+    if new_type is None:
+        return False
+
+    pin_data.selection_reason = (
+        f"Corrected the package type from {old_type!r} to {new_type!r} to match "
+        "the ordering-table ground truth (vendor-authoritative package family)"
+    )
+    print(
+        f"Note: corrected {part_number!r} package from {old_type!r} to {new_type!r} "
+        f"to match the ordering-table ground truth ({ordered_family}, "
+        f"{ordered_count} pins)."
+    )
+    return True
+
+
+def _ordered_variant_matches(pin_data: PinData, ordered: int) -> bool:
+    """True when some extracted variant already has the grounded pin count."""
+    counts = _extracted_pin_counts(pin_data)
+    return bool(counts) and any(count == ordered for count in counts)
+
+
+def _nc_padding_can_reconcile(pin_data: PinData, ordered: int) -> bool:
+    """True when trimming fabricated NC padding alone would make a variant match
+    the grounded count (the TPS51100 case).
+
+    Used to skip the (LLM) re-extraction when the cheap NC trim inside
+    _enforce_ordered_pin_count will already reconcile the mismatch — so the
+    well-tested NC-padding path is preserved unchanged and re-extraction only
+    fires when the correct variant is genuinely missing from the extraction.
+    """
+    if pin_data.packages:
+        for pkg in pin_data.packages:
+            pins = pkg.get("pins") or []
+            try:
+                count = int(pkg.get("pin_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            count = count or len(pins)
+            if count > ordered and _trim_nc_padding(pins, ordered)[1]:
+                return True
+    elif pin_data.package and pin_data.pins:
+        count = pin_data.package.pin_count or len(pin_data.pins)
+        if count > ordered and _trim_nc_padding(pin_data.pins, ordered)[1]:
+            return True
+    return False
+
+
+def _pinout_region_text(doc_text: str, max_chars: int = 12000) -> str:
+    """A bounded slice of full document text around the first pinout heading.
+
+    Fallback source for the targeted re-extraction when the caller did not pass
+    the already-extracted (bounded) page content: the full sheet can be 150k+
+    chars, so we window from the first pinout/connection heading, which is where
+    the package drawings live.
+    """
+    if not doc_text:
+        return ""
+    match = _PINOUT_HEADING_RE.search(doc_text)
+    start = match.start() if match else 0
+    return doc_text[start:start + max_chars]
+
+
+def _package_label(base: Optional[str], count: int) -> Optional[str]:
+    """Build a "<FAMILY>-<count>" label, stripping any trailing count on base."""
+    base = re.sub(r"[-\s]*\d+\s*$", "", str(base or "")).strip()
+    return f"{base}-{count}" if base else None
+
+
+def _pin_to_dict(pin) -> dict:
+    """Normalize a pin (dict or Pin) to a dict for a packages-format container."""
+    out = {"number": _pin_field(pin, "number"), "name": _pin_field(pin, "name")}
+    for key in ("electrical_type", "role", "active_low", "nc", "nc_instruction", "function"):
+        value = _pin_field(pin, key)
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _as_pin_obj(pin) -> Pin:
+    """Normalize a pin (dict or Pin) to a Pin object for a legacy container."""
+    if isinstance(pin, Pin):
+        return pin
+    return Pin(
+        number=_pin_field(pin, "number") or 0,
+        name=_pin_field(pin, "name") or "",
+        function=_pin_field(pin, "function"),
+        electrical_type=_pin_field(pin, "electrical_type"),
+        role=_pin_field(pin, "role"),
+        active_low=bool(_pin_field(pin, "active_low")),
+        nc=bool(_pin_field(pin, "nc")),
+        nc_instruction=_pin_field(pin, "nc_instruction"),
+    )
+
+
+def _install_reextracted_pins(
+    pin_data: PinData, new_pins: list, label: Optional[str], count: int
+) -> None:
+    """Swap the active package's pins for a re-extracted variant (both shapes)."""
+    _pins_list, container = _active_pins(pin_data)
+    if isinstance(container, dict):
+        container["pins"] = [_pin_to_dict(p) for p in new_pins]
+        container["pin_count"] = count
+        if label:
+            container["type"] = label
+    elif container is not None:  # legacy PinData
+        pin_data.pins = [_as_pin_obj(p) for p in new_pins]
+        if getattr(pin_data, "package", None) is not None:
+            pin_data.package.pin_count = count
+            if label:
+                pin_data.package.type = label
+    else:  # no existing container — build a legacy one
+        pin_data.pins = [_as_pin_obj(p) for p in new_pins]
+        pin_data.package = PackageInfo(
+            type=label or f"PKG-{count}", pin_count=count, width=0, height=0
+        )
+    pin_data.extraction_method = "Re-extraction"
+    pin_data.selection_reason = (
+        f"Re-extracted the {label or f'{count}-pin'} package to match the "
+        "ordering-table ground truth"
+    )
+
+
+def _reextract_ordered_variant(
+    pin_data: PinData,
+    source_text: str,
+    part_number: Optional[str],
+    model: str,
+    verbose: bool = False,
+) -> bool:
+    """Targeted re-extraction of the grounded package when no variant matches it.
+
+    The ordering table grounded a package (pin count / family) that the first
+    extraction never produced and NC-padding can't explain — the LLM read the
+    wrong variant and there is nothing for selection to switch to. Ask the LLM
+    to re-extract ONLY that specific package's pinout and, if it returns a clean
+    result with exactly the grounded pin count, install it.
+
+    Fallback-safe: returns False and leaves ``pin_data`` untouched on any
+    failure or degenerate/short/duplicate result, so the caller keeps its
+    fail-closed/warn behaviour. Never makes a well-extracted part worse.
+    """
+    ordered = pin_data.ordered_pin_count
+    if not ordered or not source_text:
+        return False
+    ordered_type = pin_data.ordered_package_type
+
+    if verbose:
+        print(
+            f"  No extracted variant matches the grounded {ordered}-pin "
+            f"{ordered_type or ''} package; attempting a targeted re-extraction..."
+        )
+
+    try:
+        client = LLMClient(model=model)
+        new_pin_data = client.reextract_package_pinout(
+            content=source_text,
+            part_number=part_number,
+            pin_count=ordered,
+            package_type=ordered_type,
+        )
+    except Exception as exc:  # never let re-extraction break the pipeline
+        if verbose:
+            print(f"  Targeted re-extraction skipped: {exc}")
+        return False
+
+    new_pins, _container = _active_pins(new_pin_data)
+
+    # Degenerate-result guard: install only a clean, complete pinout.
+    if len(new_pins) != ordered:
+        if verbose:
+            print(
+                f"  Re-extraction returned {len(new_pins)} pins (need {ordered}); "
+                "keeping the original extraction."
+            )
+        return False
+    names = [str(_pin_field(p, "name") or "").strip() for p in new_pins]
+    if any(not n for n in names):
+        if verbose:
+            print("  Re-extraction returned unnamed pins; keeping original.")
+        return False
+    numbers = [_pin_field(p, "number") for p in new_pins]
+    if len(set(numbers)) != len(numbers):
+        if verbose:
+            print("  Re-extraction returned duplicate pin numbers; keeping original.")
+        return False
+
+    new_type, _t = None, None
+    _np, ncontainer = _active_pins(new_pin_data)
+    if isinstance(ncontainer, dict):
+        new_type = ncontainer.get("type")
+    elif getattr(new_pin_data, "package", None) is not None:
+        new_type = new_pin_data.package.type
+    label = _package_label(ordered_type or new_type, ordered)
+
+    _install_reextracted_pins(pin_data, new_pins, label, ordered)
+    print(
+        f"Note: re-extracted the {label or f'{ordered}-pin'} pinout for "
+        f"{part_number!r} to match the ordering-table ground truth "
+        f"({ordered} pins)."
+    )
+    return True
+
+
 def apply_ordering_ground_truth(
     pin_data: PinData,
     input_path: Path,
@@ -1064,6 +1688,7 @@ def apply_ordering_ground_truth(
     model: str,
     verbose: bool = False,
     force_best_effort: bool = False,
+    content=None,
 ) -> None:
     """Ground the ordered variant in the datasheet's own ordering table.
 
@@ -1105,7 +1730,36 @@ def apply_ordering_ground_truth(
     if verbose:
         print(f"  Ordering table: {match.reason}")
 
+    # Targeted re-extraction: the grounded package matches no extracted variant
+    # and NC-padding can't explain it -> the wrong variant was read and there is
+    # nothing to switch to. Re-extract THAT specific package's pinout from the
+    # datasheet (the correct variant is present, just not the one first read).
+    # Fully fallback-safe: a failed/degenerate re-extraction leaves pin_data
+    # untouched and the enforcement below keeps its fail-closed/warn behaviour.
+    ordered = pin_data.ordered_pin_count
+    if (
+        ordered
+        and not _ordered_variant_matches(pin_data, ordered)
+        and not _nc_padding_can_reconcile(pin_data, ordered)
+    ):
+        source_text = None
+        if content is not None:
+            try:
+                from .pdf_extractor.content_extractor import ContentExtractor
+                source_text = ContentExtractor.format_for_llm(content)
+            except Exception:
+                source_text = None
+        if not source_text:
+            source_text = _pinout_region_text(doc_text)
+        _reextract_ordered_variant(pin_data, source_text, part_number, model, verbose)
+
     _enforce_ordered_pin_count(pin_data, part_number, force_best_effort)
+    # Correct a wrong-shape read (right family recognized, count already agrees)
+    # BEFORE the family enforcement below — the ordering table outranks the LLM,
+    # so DIP-8-ordered/SOIC-8-extracted becomes DIP-8 and the enforce check then
+    # passes with no spurious warning. _enforce_ordered_package_family remains the
+    # final safety net for mismatches this can't correct.
+    _correct_ordered_package_family(pin_data, part_number, verbose)
     _enforce_ordered_package_family(pin_data, part_number, force_best_effort)
 
 
@@ -1237,6 +1891,12 @@ def process_datasheet(
             force_best_effort=force_best_effort,
         )
 
+        # When the text extraction couldn't be grounded in the datasheet (the
+        # graphical/analog case), read the pinout from a rendered image instead.
+        _apply_vision_fallback(
+            pin_data, content, input_path, resolved_part_number, verbose
+        )
+
         # Phase 2: build the canonical ComponentRecord at the extraction seam.
         # It is refreshed at the builder boundary; the legacy pin_data continues
         # to drive the existing enrichment/control flow unchanged.
@@ -1253,6 +1913,7 @@ def process_datasheet(
             model,
             verbose=verbose,
             force_best_effort=force_best_effort,
+            content=content,
         )
 
         # Modules/SiPs/grid-array parts: emit schematic only (no chip footprint).
