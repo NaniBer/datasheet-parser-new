@@ -81,6 +81,37 @@ def _record_degraded(pin_data, reasons) -> None:
     pin_data.validation_errors = existing
 
 
+# Validation-error signatures that are about the TEXT pinout (grounding /
+# extraction). Once vision has replaced the pins with a datasheet-grounded read,
+# these are stale and must not keep the corrected output watermarked.
+_STALE_TEXT_GROUNDING_MARKERS = (
+    "cannot determine pinout",
+    "pinout unverified",
+    "appear nowhere",
+    "likely hallucinated",
+    "pin names not found",
+    "could not be grounded",
+    "validation failed",
+)
+
+
+def _clear_stale_grounding_errors(pin_data) -> None:
+    """Drop validation errors that referred to the now-replaced text pinout.
+
+    Geometry/approximation warnings (e.g. substituted package geometry) are kept —
+    only the text-grounding/extraction complaints are cleared, and only the caller
+    invokes this after confirming the vision pinout itself grounds cleanly.
+    """
+    if pin_data is None:
+        return
+    errs = list(getattr(pin_data, "validation_errors", None) or [])
+    kept = [
+        e for e in errs
+        if not any(m in str(e).lower() for m in _STALE_TEXT_GROUNDING_MARKERS)
+    ]
+    pin_data.validation_errors = kept
+
+
 def _resolve_best_effort(force_best_effort: bool, strict: bool) -> bool:
     """Fail-open policy: best-effort is on unless --strict is passed.
 
@@ -611,19 +642,48 @@ def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=F
         return
 
     _replace_pins_with_vision(pin_data, vision_pins)
-    note_reason = (
-        "text pinout was grounded but came from a connection diagram (no pin "
-        "table); number->name mapping cross-checked and replaced via vision"
-        if well_grounded
-        else "text could not be grounded"
-    )
-    _record_degraded(
-        pin_data,
-        [f"pinout read via vision on the rendered page ({len(vision_pins)} pins); "
-         f"{note_reason}"],
-    )
-    if verbose:
-        print(f"  Vision fallback: replaced text pins with {len(vision_pins)} vision-read pins.")
+
+    # Re-assess grounding on the VISION-read pins. When they are well-grounded in
+    # the datasheet (the op-amp / labeled-IC case), the earlier flags recorded
+    # against the discarded text pins are stale — clear them so the CORRECTED
+    # pinout can be marked validated. When the vision read is itself junk
+    # (bridges/discretes with placeholder or symbol names that don't ground), keep
+    # the best-effort watermark. Self-limiting: only a clean vision read validates.
+    from .pdf_extractor.pin_grounding import assess_pin_grounding
+
+    new_tally = assess_pin_grounding(pin_data, content)
+    new_signal = new_tally["grounded"] + new_tally["weak"] + new_tally["unsupported"]
+    # Bar: NO hallucinated names (every name appears in the datasheet). "weak"
+    # (name present but not on the same text line as its number) is expected for a
+    # scattered connection diagram and is fine — the vision read is what fixed the
+    # spatial mapping. A single unsupported name (e.g. a bridge's "~" symbol that
+    # isn't in the text layer) keeps the best-effort watermark.
+    vision_grounded = new_signal > 0 and new_tally["unsupported"] == 0
+    if vision_grounded:
+        _clear_stale_grounding_errors(pin_data)
+        if verbose:
+            print(
+                f"  Vision fallback: replaced text pins with {len(vision_pins)} "
+                f"vision-read pins; vision pinout is grounded in the datasheet "
+                f"({new_tally['grounded']}/{new_signal}) — validated."
+            )
+    else:
+        note_reason = (
+            "text pinout was grounded but came from a connection diagram (no pin "
+            "table); number->name mapping cross-checked and replaced via vision"
+            if well_grounded
+            else "text could not be grounded"
+        )
+        _record_degraded(
+            pin_data,
+            [f"pinout read via vision on the rendered page ({len(vision_pins)} pins); "
+             f"{note_reason}"],
+        )
+        if verbose:
+            print(
+                f"  Vision fallback: replaced text pins with {len(vision_pins)} "
+                "vision-read pins (best-effort / unvalidated)."
+            )
 
 
 
