@@ -1783,9 +1783,12 @@ def apply_ordering_ground_truth(
 
     if not match:
         return
-    if match.pin_count:
+    # Don't overwrite a caller-supplied package/count (set from --package /
+    # --pin-count before this runs): the caller knows the exact ordered package,
+    # so it outranks the datasheet-table read.
+    if match.pin_count and not pin_data.ordered_pin_count:
         pin_data.ordered_pin_count = match.pin_count
-    if match.package:
+    if match.package and not pin_data.ordered_package_type:
         pin_data.ordered_package_type = match.package
     if verbose:
         print(f"  Ordering table: {match.reason}")
@@ -1884,6 +1887,31 @@ def _builder_inputs_from_record(
     return record.to_pin_data(), dims
 
 
+def _apply_caller_variant(pin_data, package, pin_count, verbose=False) -> None:
+    """Seed ordered_pin_count / ordered_package_type from a caller-supplied
+    package or pin count (--package / --pin-count).
+
+    The platform ordering a part knows its exact package, so this is treated as
+    ground truth that drives variant selection, ordering enforcement, and
+    re-extraction — vendor-agnostic, no order-code decoding. A no-op when neither
+    is given.
+    """
+    if pin_data is None:
+        return
+    if pin_count:
+        try:
+            pin_data.ordered_pin_count = int(pin_count)
+        except (TypeError, ValueError):
+            pass
+    if package:
+        pin_data.ordered_package_type = str(package)
+    if verbose and (pin_count or package):
+        spec = " ".join(
+            x for x in (package, f"{pin_count} pins" if pin_count else "") if x
+        )
+        print(f"  Caller-specified variant: {spec} (ground truth)")
+
+
 def process_datasheet(
     input_path: Path,
     output_path: Path,
@@ -1895,6 +1923,8 @@ def process_datasheet(
     verbose: bool = False,
     package_index: Optional[int] = None,
     force_best_effort: bool = False,
+    package: Optional[str] = None,
+    pin_count: Optional[int] = None,
 ) -> bool:
     """
     Main processing pipeline.
@@ -1950,6 +1980,12 @@ def process_datasheet(
             part_number=resolved_part_number,
             force_best_effort=force_best_effort,
         )
+
+        # Caller-specified package / pin count is ground truth (the platform
+        # knows the ordered package). Seed the ordered_* fields so the whole
+        # downstream chain — variant selection, ordering enforcement,
+        # re-extraction — honors it instead of guessing.
+        _apply_caller_variant(pin_data, package, pin_count, verbose)
 
         # When the text extraction couldn't be grounded in the datasheet (the
         # graphical/analog case), read the pinout from a rendered image instead.
@@ -2370,6 +2406,25 @@ Exit codes:
     )
 
     parser.add_argument(
+        "--package",
+        type=str,
+        default=None,
+        help="Caller-specified package for the ordered part (e.g. 'SOT-89', "
+             "'WLCSP-25', 'SOIC-8'). Treated as ground truth and used to pick "
+             "the matching extracted variant — vendor-agnostic, no order-code "
+             "guessing. Pass this when the platform already knows the package."
+    )
+
+    parser.add_argument(
+        "--pin-count",
+        type=int,
+        default=None,
+        help="Caller-specified pin count for the ordered part. Ground truth for "
+             "variant selection (selects the extracted variant with this many "
+             "pins). Combine with or use instead of --package."
+    )
+
+    parser.add_argument(
         "--body-3d",
         action="store_true",
         help="Also generate a 3D component-body model (STEP + GLB) after the "
@@ -2471,6 +2526,9 @@ def _run_cli():
                 part_number=resolved_part_number,
                 force_best_effort=effective_best_effort,
             )
+            # Caller-specified package / pin count is ground truth (seed before
+            # ordering + selection so it drives variant choice, not a guess).
+            _apply_caller_variant(pin_data, args.package, args.pin_count, args.verbose)
             # Phase 2: canonical ComponentRecord built at the extraction seam.
             component_record = ComponentRecord.from_pin_data(
                 pin_data, part_number=resolved_part_number
@@ -2575,6 +2633,8 @@ def _run_cli():
             verbose=args.verbose,
             package_index=args.package_index,
             force_best_effort=effective_best_effort,
+            package=args.package,
+            pin_count=args.pin_count,
         )
 
 

@@ -213,6 +213,12 @@ def find_ordering_match(text: str, part_number: Optional[str]) -> Optional[Order
 
     best: Optional[OrderingMatch] = None
     best_key = ()
+    # Pin counts seen on NON-exact (prefix) candidate rows. A loose >=6-char
+    # prefix can borrow a sibling variant's row (e.g. "LM2673S" matching
+    # "LM2673SDX" = 14-pin when the real LM2673S is 7-pin). If prefix candidates
+    # disagree on pin count and there is no exact match, the grounding is
+    # ambiguous — fail closed rather than cap the count with the wrong sibling.
+    prefix_pin_counts: set = set()
     for k, line in enumerate(lines):
         if not line:
             continue
@@ -249,6 +255,8 @@ def find_ordering_match(text: str, part_number: Optional[str]) -> Optional[Order
             continue
 
         package, pins = found
+        if not relation and pins:  # a prefix (non-exact) candidate with a count
+            prefix_pin_counts.add(pins)
         reason = (
             f"Ordering table row {token!r} "
             f"({'exact' if relation else 'prefix'} match) -> "
@@ -266,6 +274,11 @@ def find_ordering_match(text: str, part_number: Optional[str]) -> Optional[Order
                 reason=reason,
             )
 
+    # Ambiguous sibling-prefix collision: the winner is only a prefix match and
+    # the prefix candidates disagree on pin count. Trust nothing rather than the
+    # wrong sibling's count.
+    if best is not None and not best.exact and len(prefix_pin_counts) >= 2:
+        return None
     return best
 
 

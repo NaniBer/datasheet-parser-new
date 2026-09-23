@@ -24,7 +24,7 @@ def _normalize_label(value: str) -> str:
 # documented meaning are mapped; anything else (including the lowercase
 # 'x' wildcard used in datasheet filenames) decodes to None — fail closed.
 _STM32_PIN_COUNT_LETTERS = {
-    "F": 20, "G": 28, "K": 32, "T": 36, "C": 48,
+    "F": 20, "E": 25, "G": 28, "K": 32, "T": 36, "C": 48,
     "R": 64, "V": 100, "Z": 144, "I": 176,
 }
 _STM32_ORDER_CODE = re.compile(r"STM32[A-Z]\d{3}([A-Z])")
@@ -101,16 +101,20 @@ def select_package_variant(
     pin_data: PinData,
     part_number: Optional[str] = None,
     package_index: Optional[int] = None,
+    desired_pin_count: Optional[int] = None,
+    desired_package: Optional[str] = None,
 ) -> PackageVariantSelection:
     """
     Choose one package variant from the extracted PinData.
 
     Selection priority:
     1. Explicit package_index override
-    2. LLM-provided selected_package_index
-    3. LLM-provided selected_package_type
-    4. Single available package
-    5. Otherwise raise an error instead of guessing
+    2. Caller-specified package / pin count (the platform knows the ordered
+       package) — highest ground truth, vendor-agnostic (no order-code decoding)
+    3. Pin count / package family read from the datasheet's ordering table
+    4. LLM-provided selected_package_index / selected_package_type
+    5. Single available package
+    6. Otherwise raise an error instead of guessing
     """
     packages = _package_records(pin_data)
     if not packages:
@@ -135,6 +139,33 @@ def select_package_variant(
         raise IndexError(
             f"Requested package_index {package_index} is out of range for {len(packages)} package variants"
         )
+
+    # Caller-specified package / pin count. The platform ordering the part knows
+    # its exact package, so this is the highest-priority signal — above the
+    # datasheet read and the LLM guess, and vendor-agnostic (we match the
+    # extracted variants directly, with no per-vendor order-code decoding). If
+    # nothing (or more than one variant) matches, we fall through rather than
+    # override with a guess: the variant may not have been extracted, and the
+    # downstream re-extraction / enforcement handles that case.
+    if desired_pin_count or desired_package:
+        cand = list(range(len(packages)))
+        if desired_pin_count:
+            cand = [i for i in cand
+                    if _coerce_count(packages[i].get("pin_count")) == desired_pin_count]
+        if desired_package and cand:
+            fam = [i for i in cand
+                   if _matches_package_type(str(packages[i].get("type", "") or ""),
+                                            desired_package, detector)]
+            if fam:
+                cand = fam
+        if len(cand) == 1:
+            spec = " ".join(x for x in (desired_package,
+                            f"{desired_pin_count} pins" if desired_pin_count else "") if x)
+            return _result(
+                cand[0],
+                f"caller-specified variant ({spec}) -> "
+                f"{packages[cand[0]].get('type')!r}",
+            )
 
     # A pin count / package family read from the datasheet's own ordering
     # table is ground truth: it outranks the LLM's own selection. The value
