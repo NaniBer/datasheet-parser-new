@@ -99,7 +99,12 @@ def create_app(
             reason=job.reason,
         )
 
-    def _accept_upload(file: Optional[UploadFile], part_number: Optional[str]) -> Job:
+    def _accept_upload(
+        file: Optional[UploadFile],
+        part_number: Optional[str],
+        package: Optional[str] = None,
+        pin_count: Optional[int] = None,
+    ) -> Job:
         """Validate the upload, persist it to a fresh work dir, register the job."""
         if file is None or not file.filename:
             raise HTTPException(status_code=400, detail="A PDF file upload is required.")
@@ -114,7 +119,10 @@ def create_app(
         workdir = jobs_dir / job_id
         workdir.mkdir(parents=True, exist_ok=True)
 
-        job = Job(id=job_id, workdir=workdir, part_number=part_number or None)
+        job = Job(
+            id=job_id, workdir=workdir, part_number=part_number or None,
+            package=package or None, pin_count=pin_count,
+        )
         # Stream to disk with a hard size cap so a huge/bomb upload can't OOM us.
         size = 0
         try:
@@ -145,9 +153,11 @@ def create_app(
     def create_job(
         file: Optional[UploadFile] = File(None),
         part_number: Optional[str] = Form(None),
+        package: Optional[str] = Form(None),
+        pin_count: Optional[int] = Form(None),
     ) -> JobCreated:
         sweep_expired(store, jobs_dir)  # opportunistic TTL reap on each submit
-        job = _accept_upload(file, part_number)
+        job = _accept_upload(file, part_number, package, pin_count)
         executor.submit(runner, job, store)
         return JobCreated(job_id=job.id, status=job.status)
 
@@ -161,6 +171,8 @@ def create_app(
     def parse_sync(
         file: Optional[UploadFile] = File(None),
         part_number: Optional[str] = Form(None),
+        package: Optional[str] = Form(None),
+        pin_count: Optional[int] = Form(None),
     ) -> Response:
         """Blocking parse: upload a PDF, get all artifacts back as one ZIP.
 
@@ -175,7 +187,7 @@ def create_app(
                        "or use the async POST /jobs endpoint.",
             )
         try:
-            job = _accept_upload(file, part_number)
+            job = _accept_upload(file, part_number, package, pin_count)
             runner(job, store)  # blocks until the pipeline finishes
         finally:
             parse_sem.release()

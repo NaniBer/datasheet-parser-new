@@ -59,7 +59,16 @@ curl "$DP_URL/health"
 ### 2. `POST /jobs` — async submit
 Accepts the upload, registers a job, returns immediately with a `job_id`.
 
-- **Request** (`multipart/form-data`): `file` (binary PDF, **required**) + `part_number` (string, optional — disambiguates a multi-part datasheet).
+- **Request** (`multipart/form-data`):
+
+  | Field | Type | Req | Notes |
+  |-------|------|-----|-------|
+  | `file` | binary (PDF) | **yes** | the datasheet |
+  | `part_number` | string | no | disambiguates a multi-part datasheet |
+  | `package` | string | no | caller-specified package the ordered part uses (e.g. `SOT-89`, `WLCSP-25`, `SOIC-8`). Ground truth for **variant selection** — picks the matching extracted variant instead of guessing; vendor-agnostic, no order-code decoding. |
+  | `pin_count` | int | no | caller-specified pin count. Ground truth for variant selection (selects the extracted variant with this many pins). Use with or instead of `package`. |
+
+  Send `package`/`pin_count` when the platform already knows the ordered package — it removes variant-guessing errors.
 - **Output** — `202` `JobCreated`: `{ "job_id": string, "status": string }`
 - **Errors:** `400` (no file / non-PDF), `413` (> 25 MB), `422` (malformed multipart / missing field).
 
@@ -119,7 +128,7 @@ curl -s -OJ -H "apikey: $DP_KEY" \
 ### 5. `POST /parse` — synchronous parse
 Blocks for the whole pipeline (~1–2 min) and streams back **all** artifacts as one ZIP.
 
-- **Request:** identical to `POST /jobs` (`file` + optional `part_number`).
+- **Request:** identical to `POST /jobs` (`file` + optional `part_number` / `package` / `pin_count`).
 - **Output:** `200` `application/zip`, with headers `Content-Disposition: attachment; filename="<pdf-stem>_artifacts.zip"`, `X-Job-Status`, `X-Validated`.
 - **Errors:** `400` (no file / non-PDF), `413` (> 25 MB), `422` (unparseable datasheet), `500` (internal error), `503` (too many concurrent parses), `504` (timeout).
 
