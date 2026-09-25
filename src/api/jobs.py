@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 # --- Job status values --------------------------------------------------------
 QUEUED = "queued"
@@ -254,3 +254,51 @@ def run_pipeline(job: Job, store: JobStore) -> None:
     else:
         tail = (proc.stderr or proc.stdout or "").strip()
         store.set_status(job.id, status, reason=tail[-_REASON_TAIL:] or None)
+
+
+def run_extract(job: Job, timeout: int = JOB_TIMEOUT) -> Tuple[str, Optional[dict], Optional[str]]:
+    """Extraction-only runner for POST /pins: run the CLI with --emit-pins and
+    return ``(status, pins_dict, reason)``. No GLB/geometry is built, so this is
+    fast + cheap. ``pins_dict`` is the parsed JSON on success, else ``None`` with
+    a ``reason``. Mirrors ``run_pipeline``'s subprocess-isolation pattern.
+    """
+    import json
+
+    out = job.workdir / "pins.json"
+    cmd = [
+        sys.executable, "-m", "src.main",
+        str(job.input_pdf), str(out), "--emit-pins",
+    ]
+    if job.part_number:
+        cmd += ["--part-number", job.part_number]
+    if job.package:
+        cmd += ["--package", job.package]
+    if job.pin_count:
+        cmd += ["--pin-count", str(job.pin_count)]
+    if job.model:
+        cmd += ["--model", job.model]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=Path(__file__).resolve().parents[2],  # repo root
+        )
+    except subprocess.TimeoutExpired as exc:
+        tail = (exc.stderr or exc.stdout or "")
+        if isinstance(tail, bytes):
+            tail = tail.decode(errors="replace")
+        return TIMEOUT, None, f"Extraction exceeded {timeout}s.\n{tail[-_REASON_TAIL:]}".strip()
+
+    if proc.returncode not in (EXIT_OK, EXIT_DEGRADED) or not out.is_file():
+        tail = (proc.stderr or proc.stdout or "").strip()
+        status = _STATUS_FOR_EXIT.get(proc.returncode, ERROR)
+        return status, None, (tail[-_REASON_TAIL:] or None)
+
+    try:
+        data = json.loads(out.read_text())
+    except Exception as exc:  # malformed output = internal error
+        return ERROR, None, f"Could not parse pins JSON: {exc}"
+    return SUCCEEDED, data, None

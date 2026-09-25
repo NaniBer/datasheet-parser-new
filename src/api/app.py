@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 
 from .jobs import (
@@ -31,6 +31,7 @@ from .jobs import (
     Job,
     JobStore,
     cleanup_job,
+    run_extract,
     run_pipeline,
     sweep_expired,
 )
@@ -223,6 +224,48 @@ def create_app(
                 "X-Validated": "true" if job.validated else "false",
             },
         )
+
+    @app.post(
+        "/pins",
+        responses={
+            200: {"description": "Extracted pins as JSON"},
+            422: {"description": "Datasheet could not be parsed"},
+        },
+    )
+    def extract_pins(
+        file: Optional[UploadFile] = File(None),
+        part_number: Optional[str] = Form(None),
+        package: Optional[str] = Form(None),
+        pin_count: Optional[int] = Form(None),
+        model: Optional[str] = Form(None),
+    ) -> JSONResponse:
+        """Extraction only: upload a PDF, get the pins back as JSON.
+
+        Runs the pipeline through pin extraction and returns the pins directly —
+        no GLB/geometry is built, so it's fast and cheap. Ideal for testing
+        extraction or comparing models. Honors the same optional hints as
+        ``/parse`` (``part_number`` / ``package`` / ``pin_count`` / ``model``).
+        """
+        sweep_expired(store, jobs_dir)  # opportunistic TTL reap on each submit
+        if not parse_sem.acquire(blocking=False):
+            raise HTTPException(
+                status_code=503,
+                detail="Server busy: too many concurrent runs. Retry shortly.",
+            )
+        try:
+            job = _accept_upload(file, part_number, package, pin_count, model)
+            status, data, reason = run_extract(job)
+        finally:
+            parse_sem.release()
+
+        # The JSON is the whole response — nothing on disk is needed afterwards.
+        cleanup_job(job, store)
+        if data is None:
+            raise HTTPException(
+                status_code=_HTTP_FOR_STATUS.get(status, 500),
+                detail=reason or f"Extraction ended with status {status!r}.",
+            )
+        return JSONResponse(content=data)
 
     @app.get("/jobs/{job_id}", response_model=JobStatus)
     def get_job(job_id: str) -> JobStatus:

@@ -2452,6 +2452,15 @@ Exit codes:
     )
 
     parser.add_argument(
+        "--emit-pins",
+        action="store_true",
+        help="Extraction only: run through pin extraction and write the pins as "
+             "JSON to the output path, then exit. Skips all geometry (footprint, "
+             "3D body, GLB). Fast + cheap — for testing extraction and comparing "
+             "models without building artifacts."
+    )
+
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose output"
@@ -2479,6 +2488,73 @@ def main():
               "problem with your datasheet. Please report it with the "
               "traceback above.")
         sys.exit(EXIT_INTERNAL_ERROR)
+
+
+def _emit_pins_only(input_path, output_path, args, effective_best_effort):
+    """Run the pipeline through extraction only and write the pins as JSON.
+
+    Skips all geometry (footprint / 3D body / GLB). Used by the CLI --emit-pins
+    flag and the API's POST /pins endpoint to test extraction cheaply and to
+    compare models without building artifacts. Always writes the JSON and exits
+    0 on a successful extraction; the per-run validity is in the "validated"
+    field, not the exit code.
+    """
+    import json
+
+    adjusted = get_dynamic_min_confidence(input_path, args.min_confidence, args.verbose)
+    candidates = detect_relevant_pages(str(input_path), adjusted, args.verbose, model=args.model)
+    content = extract_content(str(input_path), candidates, args.verbose)
+    resolved_part_number = args.part_number or infer_part_number_hint(
+        content.text_content, source_name=input_path.name
+    )
+    try:
+        pin_data = extract_pin_data(
+            content, args.model, args.verbose,
+            part_number=resolved_part_number,
+            force_best_effort=effective_best_effort,
+        )
+        _apply_caller_variant(pin_data, args.package, args.pin_count, args.verbose)
+        _apply_vision_fallback(pin_data, content, input_path, resolved_part_number, args.verbose)
+        apply_ordering_ground_truth(
+            pin_data, input_path, resolved_part_number, args.model,
+            verbose=args.verbose, force_best_effort=effective_best_effort,
+        )
+    except DatasheetParserError as e:
+        print(f"Error: {e}")
+        sys.exit(EXIT_DOMAIN_FAILURE)
+
+    pins_list, container = _active_pins(pin_data)
+
+    def _f(p, *keys, default=None):
+        for k in keys:
+            v = p.get(k) if isinstance(p, dict) else getattr(p, k, None)
+            if v is not None:
+                return v
+        return default
+
+    pkg_type = container.get("type") if isinstance(container, dict) else None
+    if not pkg_type and getattr(pin_data, "package", None) is not None:
+        pkg_type = getattr(pin_data.package, "type", None)
+
+    result = {
+        "component": getattr(pin_data, "component_name", None),
+        "part_number": resolved_part_number,
+        "package": pkg_type,
+        "pin_count": len(pins_list),
+        "model": args.model,
+        "validated": not bool(getattr(pin_data, "validation_errors", None)),
+        "pins": [
+            {
+                "number": _f(p, "number"),
+                "name": _f(p, "name"),
+                "type": _f(p, "electrical_type", "type"),
+                "nc": bool(_f(p, "nc", default=False)),
+            }
+            for p in pins_list
+        ],
+    }
+    output_path.write_text(json.dumps(result, indent=2))
+    print(f"Wrote {len(pins_list)} pins (validated={result['validated']}) to {output_path}")
 
 
 def _run_cli():
@@ -2509,6 +2585,11 @@ def _run_cli():
     # Setup output path
     output_path = Path(args.output)
     setup_output_path(output_path)
+
+    # Extraction-only: write pins JSON and exit before any geometry is built.
+    if args.emit_pins:
+        _emit_pins_only(input_path, output_path, args, effective_best_effort)
+        return
 
     if args.both:
         # Run pipeline once, then call both builders
