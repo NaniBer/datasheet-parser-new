@@ -385,3 +385,44 @@ def test_sweep_ttl_zero_disables(tmp_path):
     os.utime(keep, (0, 0))
     assert sweep_expired(JobStore(), jobs_dir, ttl_seconds=0) == 0
     assert keep.exists()
+
+
+# --- POST /pins (extraction only) --------------------------------------------
+
+def test_pins_endpoint_returns_json(tmp_path, monkeypatch):
+    """/pins returns the extracted pins as JSON, no artifacts."""
+    import src.api.app as appmod
+
+    fake = {
+        "component": "LM358", "part_number": "LM358", "package": "DIP-8",
+        "pin_count": 8, "model": "openai/gpt-6-luna", "validated": True,
+        "pins": [{"number": 1, "name": "OUT1", "type": "output", "nc": False}],
+    }
+    monkeypatch.setattr(appmod, "run_extract", lambda job, **kw: (SUCCEEDED, fake, None))
+
+    client = client_for(make_fake_runner(SUCCEEDED), tmp_path)
+    resp = client.post(
+        "/pins",
+        files={"file": ("lm358.pdf", PDF_BYTES, "application/pdf")},
+        data={"model": "openai/gpt-6-luna"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["pin_count"] == 8
+    assert body["pins"][0]["name"] == "OUT1"
+    assert body["model"] == "openai/gpt-6-luna"
+
+
+def test_pins_endpoint_maps_domain_failure(tmp_path, monkeypatch):
+    """A failed extraction surfaces as 422, not a 200 with empty pins."""
+    import src.api.app as appmod
+    monkeypatch.setattr(appmod, "run_extract", lambda job, **kw: (FAILED, None, "unparseable"))
+
+    client = client_for(make_fake_runner(SUCCEEDED), tmp_path)
+    resp = client.post("/pins", files={"file": ("x.pdf", PDF_BYTES, "application/pdf")})
+    assert resp.status_code == 422
+
+
+def test_pins_endpoint_requires_pdf(tmp_path):
+    client = client_for(make_fake_runner(SUCCEEDED), tmp_path)
+    assert client.post("/pins").status_code == 400

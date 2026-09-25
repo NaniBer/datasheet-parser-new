@@ -147,6 +147,35 @@ x-validated: true
 
 ---
 
+### 6. `POST /pins` — extraction only (JSON, no GLB)
+Runs the pipeline **through pin extraction only** and returns the pins as JSON — **no geometry/GLB is built**, so it returns in seconds. Ideal for testing extraction or comparing models cheaply.
+
+- **Request:** identical to `POST /parse` (`file` + optional `part_number` / `package` / `pin_count` / `model`).
+- **Output:** `200` `application/json`:
+  ```json
+  {
+    "component": "ADV7180",
+    "part_number": "ADV7180KST48Z",
+    "package": "LQFP-48",
+    "pin_count": 48,
+    "model": "openai/gpt-6-luna",
+    "validated": false,
+    "pins": [
+      { "number": 1, "name": "DGND", "type": "ground", "nc": false }
+    ]
+  }
+  ```
+- **Errors:** `400` (no file / non-PDF), `413` (> 25 MB), `422` (unparseable), `500` (internal), `503` (busy), `504` (timeout).
+
+```bash
+curl -s -X POST "$DP_URL/pins" \
+  -H "apikey: $DP_KEY" \
+  -F "file=@ADV7180KST48Z.pdf" -F "part_number=ADV7180KST48Z" \
+  -F "model=openai/gpt-6-luna"
+```
+
+---
+
 ## Response objects
 
 **`JobStatus`** (`GET /jobs/{job_id}`):
