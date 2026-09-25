@@ -857,6 +857,44 @@ def test_parse_pin_count_outline_code_version_suffix():
     assert ppc("SOT-223") == 4
 
 
+def test_chat_bot_default_model_env(monkeypatch):
+    # LLM_MODEL selects the default model; unset falls back to llama-3.
+    import src.chat_bot as cb
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    assert cb.default_model() == "llama-3"
+    monkeypatch.setenv("LLM_MODEL", "openai/gpt-6-luna")
+    assert cb.default_model() == "openai/gpt-6-luna"
+
+
+def test_chat_bot_client_honors_llm_env(monkeypatch):
+    # LLM_BASE_URL / LLM_API_KEY point the client at any OpenAI-compatible host.
+    import src.chat_bot as cb
+    monkeypatch.setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("LLM_API_KEY", "test-key-123")
+    cb._client = None
+    try:
+        client = cb._get_client()
+        assert "openrouter.ai" in str(client.base_url)
+        assert client.api_key == "test-key-123"
+    finally:
+        cb._client = None
+
+
+def test_chat_bot_client_falls_back_to_fastchat_key(monkeypatch):
+    # Backward compat: FASTCHAT_API_KEY is still honored when LLM_API_KEY is unset.
+    import src.chat_bot as cb
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.setenv("FASTCHAT_API_KEY", "legacy-key")
+    cb._client = None
+    try:
+        client = cb._get_client()
+        assert client.api_key == "legacy-key"
+        assert "fastchat.ideeza.com" in str(client.base_url)
+    finally:
+        cb._client = None
+
+
 def test_validate_pin_data_no_pins():
     client = LLMClient()
     pd = PinData(component_name="X", pins=[], extraction_method="Table")
