@@ -162,9 +162,18 @@ Runs the pipeline **through pin extraction only** and returns the pins as JSON â
     "validated": false,
     "pins": [
       { "number": 1, "name": "DGND", "type": "ground", "nc": false }
-    ]
+    ],
+    "usage": {
+      "model": "openai/gpt-6-luna",
+      "calls": 2,
+      "prompt_tokens": 17797,
+      "completion_tokens": 4217,
+      "total_tokens": 22014,
+      "cost_usd": 0.0065
+    }
   }
   ```
+  `usage` sums this run's LLM calls (page detection + extraction + any retries). `cost_usd` is the provider-reported cost when available (OpenRouter), else estimated from a per-token price table; it is `null` for models with no known price.
 - **Errors:** `400` (no file / non-PDF), `413` (> 25 MB), `422` (unparseable), `500` (internal), `503` (busy), `504` (timeout).
 
 ```bash

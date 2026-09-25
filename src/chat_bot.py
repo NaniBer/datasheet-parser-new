@@ -33,6 +33,59 @@ def default_model() -> str:
     return os.getenv("LLM_MODEL", DEFAULT_MODEL)
 
 
+# --- token / cost accounting -------------------------------------------------
+# Per-token USD prices (prompt, completion) for models we run, used to estimate
+# cost when the provider doesn't return one. Extend as needed; an unknown model
+# yields token counts with cost_known=False (cost omitted, not guessed).
+_MODEL_PRICING = {
+    "openai/gpt-6-luna": (0.10e-6, 0.50e-6),
+    "openai/gpt-6-luna-pro": (0.10e-6, 0.50e-6),
+    "deepseek/deepseek-v3.2": (0.269e-6, 0.40e-6),
+    "google/gemini-2.5-pro": (1.25e-6, 10.0e-6),
+    "anthropic/claude-opus-4.8": (5.0e-6, 25.0e-6),
+    "llama-3": (0.0, 0.0),  # self-hosted: no per-token charge
+}
+
+# Process-wide accumulator. Each `python -m src.main` subprocess handles one PDF,
+# so summing here gives that request's total LLM usage across all its calls
+# (retries, corrective passes, page detection).
+_usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0, "cost_known": False}
+
+
+def reset_usage() -> None:
+    """Zero the LLM usage accumulator (call at the start of a run)."""
+    _usage.update(calls=0, prompt_tokens=0, completion_tokens=0, cost=0.0, cost_known=False)
+
+
+def get_usage() -> dict:
+    """Accumulated LLM usage: calls, prompt/completion tokens, and cost."""
+    return dict(_usage)
+
+
+def _accumulate_usage(response, model) -> None:
+    """Add one response's token usage (and cost, if determinable) to the total."""
+    u = getattr(response, "usage", None)
+    if u is None:
+        return
+    pt = getattr(u, "prompt_tokens", 0) or 0
+    ct = getattr(u, "completion_tokens", 0) or 0
+    _usage["calls"] += 1
+    _usage["prompt_tokens"] += pt
+    _usage["completion_tokens"] += ct
+    # Prefer a provider-reported cost (OpenRouter returns one when asked via
+    # usage.include); otherwise estimate from the price table.
+    cost = getattr(u, "cost", None)
+    if cost is None:
+        cost = (getattr(u, "model_extra", None) or {}).get("cost")
+    if cost is None:
+        price = _MODEL_PRICING.get(model)
+        if price is not None:
+            cost = pt * price[0] + ct * price[1]
+    if cost is not None:
+        _usage["cost"] += float(cost)
+        _usage["cost_known"] = True
+
+
 _client = None
 
 
@@ -110,13 +163,20 @@ def get_completion_from_messages(messages, model=None, temperature=0, max_retrie
 
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
+            create_kwargs = dict(
                 model=model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=8192,
-                timeout=120  # 2 minute timeout
+                timeout=120,  # 2 minute timeout
             )
+            # Ask OpenRouter to return the actual billed cost in usage. Only added
+            # for OpenRouter endpoints so other providers (FastChat) never see an
+            # unexpected param.
+            if "openrouter" in os.getenv("LLM_BASE_URL", BASE_URL).lower():
+                create_kwargs["extra_body"] = {"usage": {"include": True}}
+            response = client.chat.completions.create(**create_kwargs)
+            _accumulate_usage(response, model)
             return response.choices[0].message.content
 
         except Exception as e:

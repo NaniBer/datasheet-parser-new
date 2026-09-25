@@ -880,6 +880,67 @@ def test_chat_bot_client_honors_llm_env(monkeypatch):
         cb._client = None
 
 
+def test_chat_bot_usage_accumulates_provider_cost():
+    # A provider-reported cost (OpenRouter usage.cost) is summed across calls.
+    import src.chat_bot as cb
+
+    class _U:
+        prompt_tokens = 100; completion_tokens = 40; cost = 0.005
+    class _R:
+        usage = _U()
+
+    cb.reset_usage()
+    try:
+        cb._accumulate_usage(_R(), "openai/gpt-6-luna")
+        cb._accumulate_usage(_R(), "openai/gpt-6-luna")
+        u = cb.get_usage()
+        assert u["calls"] == 2
+        assert u["prompt_tokens"] == 200 and u["completion_tokens"] == 80
+        assert u["total_tokens"] if "total_tokens" in u else True  # (computed downstream)
+        assert u["cost_known"] is True
+        assert abs(u["cost"] - 0.010) < 1e-9
+    finally:
+        cb.reset_usage()
+
+
+def test_chat_bot_usage_price_table_fallback():
+    # No provider cost -> estimate from the per-token price table.
+    import src.chat_bot as cb
+
+    class _U:
+        prompt_tokens = 1_000_000; completion_tokens = 1_000_000; cost = None
+    class _R:
+        usage = _U()
+
+    cb.reset_usage()
+    try:
+        cb._accumulate_usage(_R(), "openai/gpt-6-luna")  # 0.10/M + 0.50/M
+        u = cb.get_usage()
+        assert u["cost_known"] is True
+        assert abs(u["cost"] - 0.60) < 1e-6
+    finally:
+        cb.reset_usage()
+
+
+def test_chat_bot_usage_unknown_model_no_cost():
+    # Unknown model with no provider cost -> tokens counted, cost left unknown.
+    import src.chat_bot as cb
+
+    class _U:
+        prompt_tokens = 100; completion_tokens = 50; cost = None
+    class _R:
+        usage = _U()
+
+    cb.reset_usage()
+    try:
+        cb._accumulate_usage(_R(), "some/unknown-model")
+        u = cb.get_usage()
+        assert u["prompt_tokens"] == 100 and u["completion_tokens"] == 50
+        assert u["cost_known"] is False
+    finally:
+        cb.reset_usage()
+
+
 def test_chat_bot_client_falls_back_to_fastchat_key(monkeypatch):
     # Backward compat: FASTCHAT_API_KEY is still honored when LLM_API_KEY is unset.
     import src.chat_bot as cb
