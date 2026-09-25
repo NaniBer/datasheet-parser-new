@@ -2500,7 +2500,12 @@ def _emit_pins_only(input_path, output_path, args, effective_best_effort):
     field, not the exit code.
     """
     import json
+    try:
+        from . import chat_bot
+    except ImportError:  # pragma: no cover - legacy top-level import
+        import src.chat_bot as chat_bot
 
+    chat_bot.reset_usage()  # count only this run's LLM calls
     adjusted = get_dynamic_min_confidence(input_path, args.min_confidence, args.verbose)
     candidates = detect_relevant_pages(str(input_path), adjusted, args.verbose, model=args.model)
     content = extract_content(str(input_path), candidates, args.verbose)
@@ -2553,6 +2558,18 @@ def _emit_pins_only(input_path, output_path, args, effective_best_effort):
             for p in pins_list
         ],
     }
+
+    # Token + cost accounting for this run's LLM calls.
+    u = chat_bot.get_usage()
+    result["usage"] = {
+        "model": args.model,
+        "calls": u["calls"],
+        "prompt_tokens": u["prompt_tokens"],
+        "completion_tokens": u["completion_tokens"],
+        "total_tokens": u["prompt_tokens"] + u["completion_tokens"],
+        "cost_usd": round(u["cost"], 6) if u["cost_known"] else None,
+    }
+
     output_path.write_text(json.dumps(result, indent=2))
     print(f"Wrote {len(pins_list)} pins (validated={result['validated']}) to {output_path}")
 
