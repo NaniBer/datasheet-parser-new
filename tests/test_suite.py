@@ -142,6 +142,26 @@ def test_page_detector_pinout_heading_scores(detector):
     assert "heading" in reason.lower()
 
 
+def test_check_pinout_shape_ignores_superscript_digits(detector):
+    # Regression: '²' (as in mm², I²C) is str.isdigit()==True but int('²')
+    # raises ValueError. A unit symbol on the page must NOT crash pinout-shape
+    # detection (FT813Q datasheet aborted extraction entirely on this).
+    words = []
+    for i, label in enumerate(["SCK", "SDA", "VCC", "GND"], start=1):
+        y = i * 20
+        words.append({"text": str(i), "x0": 10, "x1": 18, "top": y, "bottom": y + 10})
+        words.append({"text": label, "x0": 22, "x1": 50, "top": y, "bottom": y + 10})
+    words.append({"text": "²", "x0": 200, "x1": 208, "top": 5, "bottom": 15})  # mm² artifact
+
+    page = MagicMock()
+    page.extract_words.return_value = words
+
+    # Must not raise, and the four real pin/label pairs are still detected.
+    score, has_shape, reason = detector._check_pinout_shape(page)
+    assert has_shape is True
+    assert score >= 2
+
+
 def test_page_detector_no_heading_scores_zero(detector):
     score, reason = detector._check_pinout_heading("Electrical Characteristics\nVcc max 5V")
     assert score == 0
@@ -813,6 +833,28 @@ def test_parse_pin_count_unknown_returns_none():
     assert _parse_pin_count_from_package_type("CUSTOM-999") is None
     assert _parse_pin_count_from_package_type("") is None
     assert _parse_pin_count_from_package_type(None) is None
+
+
+def test_parse_pin_count_outline_code_version_suffix():
+    # ADI outline codes put the lead count FIRST and a version suffix last.
+    # "CP-32-12" (AD9106 LFCSP) is 32 leads; the trailing "12" is a package
+    # version and must NOT be read as the pin count (regression: it was, which
+    # made the self-consistency validator reject correct 32-pin extractions).
+    ppc = _parse_pin_count_from_package_type
+    assert ppc("32-Lead LFCSP (CP-32-12)") == 32
+    assert ppc("CP-32-12") == 32
+    assert ppc("LFCSP (CP-32-12)") == 32
+    # An explicit "<N>-Lead"/"<N>-Pin" token is authoritative.
+    assert ppc("48-Lead LQFP") == 48
+    assert ppc("8-Pin SOIC") == 8
+    # And the common single-number forms are unchanged.
+    assert ppc("CP-48-1") == 48
+    assert ppc("SOIC-8") == 8
+    assert ppc("LQFP-64") == 64
+    # SOT/TO explicit-suffix behaviour must be untouched by the new rules.
+    assert ppc("SOT-23-5") == 5
+    assert ppc("SOT23-8") == 8
+    assert ppc("SOT-223") == 4
 
 
 def test_validate_pin_data_no_pins():

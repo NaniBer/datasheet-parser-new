@@ -381,7 +381,10 @@ class PageDetector:
             top, bottom = w["top"], w["bottom"]
             cy = (top + bottom) / 2.0
             height = max(1.0, bottom - top)
-            if text.isdigit():
+            # NOTE: str.isdigit() is True for superscripts like '²' (mm², I²C)
+            # but int() rejects them — guard with isascii() so a unit symbol on
+            # the page can't crash detection. Pin numbers are always ASCII.
+            if text.isascii() and text.isdigit():
                 n = int(text)
                 if 1 <= n <= 256:
                     numbers.append((n, w["x0"], w["x1"], cy, height))
