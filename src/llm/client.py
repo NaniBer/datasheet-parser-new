@@ -53,6 +53,15 @@ def _parse_pin_count_from_package_type(pkg_type: str) -> Optional[int]:
         144, 160, 176, 208, 256,
     }
 
+    # Highest-priority signal: an explicit "<N>-LEAD" / "<N> PIN" token states
+    # the count outright. ADI/TI descriptions carry it ("32-Lead LFCSP
+    # (CP-32-12)"), and trusting it avoids mis-reading a trailing *revision*
+    # number in an outline code — e.g. CP-32-12 is a 32-lead part, the "12" is
+    # a package version, not the pin count.
+    lead_match = re.search(r'(\d+)\s*-?\s*(?:LEAD|LEADS|PIN|PINS)\b', pkg_upper)
+    if lead_match and int(lead_match.group(1)) in valid_counts:
+        return int(lead_match.group(1))
+
     for key, count in special.items():
         if key in pkg_upper:
             # An extra number beyond the family name is an explicit pin
@@ -63,11 +72,22 @@ def _parse_pin_count_from_package_type(pkg_type: str) -> Optional[int]:
                     return int(num_str)
             return count
 
-    # Try numbers in the string from right to left (last number is usually pin count)
-    for num_str in reversed(re.findall(r'\d+', pkg_upper)):
-        num = int(num_str)
-        if num in valid_counts:
-            return num
+    # Industrial outline codes put the lead count FIRST and a version suffix
+    # last: "CP-32-12" (ADI LFCSP) is 32 leads, not 12. When the string is such
+    # a "<letters>-<n>-<n>" code, prefer the leading number. (SOT/TO codes are
+    # already handled above, so this won't fire on "SOT-23-5".)
+    outline = re.search(r'\b[A-Z]{1,3}-(\d+)-\d+\b', pkg_upper)
+    if outline and int(outline.group(1)) in valid_counts:
+        return int(outline.group(1))
+
+    # Fallback: scan numbers right to left (last number is usually the pin
+    # count), but ignore anything inside a parenthetical outline code first so a
+    # version suffix there can't win over the real count.
+    outside_parens = re.sub(r'\([^)]*\)', ' ', pkg_upper)
+    for source in (outside_parens, pkg_upper):
+        for num_str in reversed(re.findall(r'\d+', source)):
+            if int(num_str) in valid_counts:
+                return int(num_str)
 
     return None
 

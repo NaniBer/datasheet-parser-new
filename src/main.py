@@ -2361,8 +2361,8 @@ Exit codes:
 
     parser.add_argument(
         "--model",
-        default="llama-3",
-        help="LLM model to use (default: %(default)s)"
+        default=os.getenv("LLM_MODEL", "llama-3"),
+        help="LLM model to use (default: %(default)s; env: LLM_MODEL)"
     )
 
     parser.add_argument(

@@ -67,6 +67,7 @@ Accepts the upload, registers a job, returns immediately with a `job_id`.
   | `part_number` | string | no | disambiguates a multi-part datasheet |
   | `package` | string | no | caller-specified package the ordered part uses (e.g. `SOT-89`, `WLCSP-25`, `SOIC-8`). Ground truth for **variant selection** — picks the matching extracted variant instead of guessing; vendor-agnostic, no order-code decoding. |
   | `pin_count` | int | no | caller-specified pin count. Ground truth for variant selection (selects the extracted variant with this many pins). Use with or instead of `package`. |
+  | `model` | string | no | override the extraction LLM for this request (e.g. `openai/gpt-6-luna`). Defaults to the server's `LLM_MODEL`. The model must be reachable via the server's configured `LLM_BASE_URL`/`LLM_API_KEY`. |
 
   Send `package`/`pin_count` when the platform already knows the ordered package — it removes variant-guessing errors.
 - **Output** — `202` `JobCreated`: `{ "job_id": string, "status": string }`
@@ -128,7 +129,7 @@ curl -s -OJ -H "apikey: $DP_KEY" \
 ### 5. `POST /parse` — synchronous parse
 Blocks for the whole pipeline (~1–2 min) and streams back **all** artifacts as one ZIP.
 
-- **Request:** identical to `POST /jobs` (`file` + optional `part_number` / `package` / `pin_count`).
+- **Request:** identical to `POST /jobs` (`file` + optional `part_number` / `package` / `pin_count` / `model`).
 - **Output:** `200` `application/zip`, with headers `Content-Disposition: attachment; filename="<pdf-stem>_artifacts.zip"`, `X-Job-Status`, `X-Validated`.
 - **Errors:** `400` (no file / non-PDF), `413` (> 25 MB), `422` (unparseable datasheet), `500` (internal error), `503` (too many concurrent parses), `504` (timeout).
 

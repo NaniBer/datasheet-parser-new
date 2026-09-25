@@ -88,6 +88,7 @@ class Job:
     part_number: Optional[str] = None
     package: Optional[str] = None
     pin_count: Optional[int] = None
+    model: Optional[str] = None
     status: str = QUEUED
     validated: Optional[bool] = None
     reason: Optional[str] = None
@@ -219,6 +220,8 @@ def run_pipeline(job: Job, store: JobStore) -> None:
         cmd += ["--package", job.package]
     if job.pin_count:
         cmd += ["--pin-count", str(job.pin_count)]
+    if job.model:
+        cmd += ["--model", job.model]
 
     try:
         proc = subprocess.run(

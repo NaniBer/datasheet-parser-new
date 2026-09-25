@@ -14,8 +14,24 @@ import nest_asyncio
 nest_asyncio.apply()
 
 
-BASE_URL = "https://fastchat.ideeza.com/v1"
-#BASE_URL = "https://fastchattest.ideeza.com/v1"
+# The text-LLM endpoint, credentials, and default model are all configurable so
+# the parser can run against the self-hosted FastChat box (the default) or any
+# OpenAI-compatible endpoint — e.g. OpenRouter — without a code change. Set
+# LLM_BASE_URL / LLM_API_KEY / LLM_MODEL. With none set, behaviour is identical
+# to before. LLM_API_KEY falls back to FASTCHAT_API_KEY for backward compat.
+DEFAULT_BASE_URL = "https://fastchat.ideeza.com/v1"
+DEFAULT_MODEL = "llama-3"
+
+# Resolved at import for callers that read chat_bot.BASE_URL directly;
+# _get_client() re-reads LLM_BASE_URL at call time so a deployment (or test) can
+# override it without reimporting.
+BASE_URL = os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL)
+
+
+def default_model() -> str:
+    """Model name to use when a caller doesn't pass one (env: LLM_MODEL)."""
+    return os.getenv("LLM_MODEL", DEFAULT_MODEL)
+
 
 _client = None
 
@@ -50,21 +66,24 @@ def _get_client() -> OpenAI:
     """
     global _client
     if _client is None:
-        api_key = os.getenv("FASTCHAT_API_KEY")
+        # Prefer the generic LLM_API_KEY; fall back to the legacy FastChat name.
+        api_key = os.getenv("LLM_API_KEY") or os.getenv("FASTCHAT_API_KEY")
         if not api_key:
             raise APICredentialsError(
                 message=(
-                    "FASTCHAT_API_KEY is not set. Add it to your .env file "
-                    "or export it in the environment before running."
+                    "No LLM API key set. Add LLM_API_KEY (or the legacy "
+                    "FASTCHAT_API_KEY) to your .env file or export it before "
+                    "running."
                 ),
                 error_code=ErrorCodes.MISSING_API_KEY,
-                details={"env_var": "FASTCHAT_API_KEY"},
+                details={"env_var": "LLM_API_KEY"},
             )
-        _client = OpenAI(api_key=api_key, base_url=BASE_URL)
+        base_url = os.getenv("LLM_BASE_URL", BASE_URL)
+        _client = OpenAI(api_key=api_key, base_url=base_url)
     return _client
 
 
-def get_completion_from_messages(messages, model="llama-3", temperature=0, max_retries=3, retry_delay=1):
+def get_completion_from_messages(messages, model=None, temperature=0, max_retries=3, retry_delay=1):
     """
     Get completion from LLM with retry logic.
 
@@ -82,6 +101,8 @@ def get_completion_from_messages(messages, model="llama-3", temperature=0, max_r
         LLMExtractionError: If all retries fail
     """
     last_exception = None
+    if model is None:
+        model = default_model()
 
     # Resolve the client before the retry loop so a missing API key raises
     # APICredentialsError directly instead of being wrapped as an LLM error.
