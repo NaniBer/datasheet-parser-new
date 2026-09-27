@@ -36,6 +36,7 @@ from .jobs import (
     sweep_expired,
 )
 from .models import Artifact, JobCreated, JobStatus
+from ..agentic import repair_pins
 
 # Non-downloadable terminal states -> HTTP status for the synchronous endpoint.
 _HTTP_FOR_STATUS = {
@@ -265,6 +266,92 @@ def create_app(
                 status_code=_HTTP_FOR_STATUS.get(status, 500),
                 detail=reason or f"Extraction ended with status {status!r}.",
             )
+        return JSONResponse(content=data)
+
+    @app.post(
+        "/agentic",
+        responses={
+            200: {"description": "Extracted + repaired pins as JSON"},
+            422: {"description": "Datasheet could not be parsed"},
+        },
+    )
+    def extract_pins_agentic(
+        file: Optional[UploadFile] = File(None),
+        part_number: Optional[str] = Form(None),
+        package: Optional[str] = Form(None),
+        pin_count: Optional[int] = Form(None),
+        model: Optional[str] = Form(None),
+        repair_model: Optional[str] = Form(None),
+        escalation_model: Optional[str] = Form(None),
+    ) -> JSONResponse:
+        """Extraction + agentic repair, one synchronous call, JSON back.
+
+        Same as ``POST /pins`` (same hints, same extraction run, no GLB, no job
+        id, no polling) followed by the repair layer in :mod:`src.agentic`:
+        package-column check, deterministic range expansion, targeted text and
+        vision repairs of grouped or garbled pin names, and an escalation to a
+        stronger vision model only for groups the pinout drawing alone resolves.
+
+        ``model`` is the extraction model (default LLM_MODEL). ``repair_model``
+        (default: same as ``model``) does the cheap repairs. ``escalation_model``
+        (default: AGENTIC_ESCALATION_MODEL, else anthropic/claude-opus-4.8) is
+        used only when the cheap step cannot resolve a group.
+
+        Response = the ``/pins`` body with repaired ``pins`` plus ``agentic``
+        (``changed``, ``repairs`` log, ``flags``, ``usage`` of the repair calls)
+        and ``usage_total`` (extraction + repair).
+        """
+        sweep_expired(store, jobs_dir)
+        if not parse_sem.acquire(blocking=False):
+            raise HTTPException(
+                status_code=503,
+                detail="Server busy: too many concurrent runs. Retry shortly.",
+            )
+        rep = None
+        try:
+            job = _accept_upload(file, part_number, package, pin_count, model)
+            status, data, reason = run_extract(job)
+            if data is not None:
+                # Repair while the uploaded PDF is still on disk (the repair
+                # reads page text and renders pages for the vision steps).
+                try:
+                    rep = repair_pins(
+                        data.get("pins") or [],
+                        job.input_pdf,
+                        part_number or data.get("part_number"),
+                        repair_model=repair_model or model or None,
+                        escalation_model=escalation_model or None,
+                    )
+                except Exception as exc:  # noqa: BLE001 - never lose the extraction
+                    rep = {
+                        "pins": data.get("pins") or [], "changed": 0,
+                        "repairs": [f"repair layer failed: {type(exc).__name__}: {exc}"],
+                        "flags": {"duplicates": [], "unresolved": [], "pin_count": len(data.get("pins") or [])},
+                        "usage": {"repair_model": repair_model or model, "escalation_model": escalation_model,
+                                  "calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                                  "cost_usd": 0.0},
+                    }
+        finally:
+            parse_sem.release()
+
+        cleanup_job(job, store)
+        if data is None:
+            raise HTTPException(
+                status_code=_HTTP_FOR_STATUS.get(status, 500),
+                detail=reason or f"Extraction ended with status {status!r}.",
+            )
+        data["pins"] = rep["pins"]
+        data["pin_count"] = len(rep["pins"])
+        data["agentic"] = {k: rep[k] for k in ("changed", "repairs", "flags", "usage")}
+        ex, ru = data.get("usage") or {}, rep["usage"]
+        ex_cost, ru_cost = ex.get("cost_usd"), ru.get("cost_usd")
+        data["usage_total"] = {
+            "calls": (ex.get("calls") or 0) + (ru.get("calls") or 0),
+            "prompt_tokens": (ex.get("prompt_tokens") or 0) + (ru.get("prompt_tokens") or 0),
+            "completion_tokens": (ex.get("completion_tokens") or 0) + (ru.get("completion_tokens") or 0),
+            "cost_usd": (None if ex_cost is None and ru_cost is None
+                         else round((ex_cost or 0.0) + (ru_cost or 0.0), 6)),
+        }
         return JSONResponse(content=data)
 
     @app.get("/jobs/{job_id}", response_model=JobStatus)

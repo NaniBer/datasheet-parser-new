@@ -36,6 +36,8 @@ export DP_URL='https://datasheet-parser.ideeza.com'
 | `GET`  | `/jobs/{job_id}` | Poll job status + artifact list | `200` `JobStatus` |
 | `GET`  | `/jobs/{job_id}/artifacts/{name}` | Download one artifact file | `200` binary |
 | `POST` | `/parse` | **Sync** — blocks, returns a ZIP of all artifacts | `200` `application/zip` |
+| `POST` | `/pins` | **Sync** — extraction only, pins as JSON, no GLB | `200` `application/json` |
+| `POST` | `/agentic` | **Sync** — `/pins` + agentic repair of grouped / garbled pin names, JSON, no job id | `200` `application/json` |
 
 Two modes:
 - **Async (`/jobs` → poll `/jobs/{id}` → download `/artifacts/{name}`)** — recommended; a parse takes ~1–2 min.
@@ -183,6 +185,51 @@ curl -s -X POST "$DP_URL/pins" \
   -F "model=openai/gpt-6-luna"
 ```
 
+### 7. `POST /agentic` — extraction + agentic repair (JSON, no GLB, one shot)
+`/pins` followed by a repair layer that fixes the failure modes a cheap extraction model has on grouped pin tables. **One synchronous call**: the connection is held for the whole run and the JSON is the whole response — no `job_id`, nothing to poll, nothing on disk afterwards.
+
+What the repair layer does, cheapest step first (`src/agentic/repair.py`):
+1. **Package-column check** — if the pin page lists several packages (e.g. `QSOP-24` and `TQFN-24` columns), the repair model checks that the extracted numbering is the ordered package's column and re-maps if not.
+2. **Range expansion** — `D0-D4` on pins 44–48, `P7 to P2`, `DIG0:DIG7` become one name per pin. Deterministic, no LLM.
+3. **Grouped rows** (`CSA, CSB` on `10, 11`) — repair model, text, given the pin-table page.
+4. **Garbled names** (`V + D` for `VD+`, a header row like `DIP/ LAP/ SOIC` taken as a name) — repair model, vision, on the rendered page.
+5. **Letter-range groups** (`SEGA:SEGG, SEGDP` on `15-18, 20-23`, order only visible in the drawing) — escalation model, vision.
+6. **Verify** — duplicate names, leftover group-looking names, pin count → `agentic.flags`.
+
+Measured on 9 datasheets / 288 pins against hand-built truth: raw `openai/gpt-6-luna` 85.4 %, raw `anthropic/claude-opus-4.8` 94.4 %, luna + this layer **99.3 %** at ≈ $0.003 extra per part (one Opus vision call in 9 parts).
+
+- **Request:** `/pins` fields (`file` + optional `part_number` / `package` / `pin_count` / `model`) plus:
+  | Field | Type | Default | Notes |
+  |-------|------|---------|-------|
+  | `repair_model` | string | `model` (else `LLM_MODEL`) | cheap model for steps 1, 3, 4; needs vision for step 4 |
+  | `escalation_model` | string | `AGENTIC_ESCALATION_MODEL`, else `anthropic/claude-opus-4.8` | vision model for step 5 only |
+- **Output:** `200` `application/json` — the `/pins` body with repaired `pins`, plus:
+  ```json
+  {
+    "...": "the /pins fields (component, part_number, package, pin_count, model, validated, pins, usage)",
+    "agentic": {
+      "changed": 8,
+      "repairs": [
+        "column-check: package=QSOP-24 column_ok=True",
+        "expand 'D0-D4' -> {44: 'D0', 45: 'D1', 46: 'D2', 47: 'D3', 48: 'D4'}",
+        "text(openai/gpt-6-luna) 'CSA, CSB' pins=[10, 11] -> {'10': 'CSA', '11': 'CSB'}"
+      ],
+      "flags": { "duplicates": [], "unresolved": [], "pin_count": 48 },
+      "usage": { "repair_model": "openai/gpt-6-luna", "escalation_model": "anthropic/claude-opus-4.8",
+                 "calls": 1, "prompt_tokens": 2100, "completion_tokens": 40, "total_tokens": 2140, "cost_usd": 0.0003 }
+    },
+    "usage_total": { "calls": 3, "prompt_tokens": 19897, "completion_tokens": 4257, "cost_usd": 0.0068 }
+  }
+  ```
+  `validated` is still the extraction run's text-grounding flag (see below); it is **not** recomputed after repair. `agentic.flags` is the repair layer's own verification. If the repair layer itself fails (e.g. vision unsupported by the provider) the extraction result is returned unchanged with the error in `agentic.repairs`.
+- **Errors:** same as `/pins`.
+
+```bash
+curl -s -X POST "$DP_URL/agentic" \
+  -H "apikey: $DP_KEY" \
+  -F "file=@TL16C2550PFBR.pdf" -F "part_number=TL16C2550PFBR"
+```
+
 ---
 
 ## Response objects
@@ -298,3 +345,4 @@ Every downloadable job yields up to four files (order = display order):
 | `API_JOB_TIMEOUT` | `360` | Per-job wall-clock timeout in s (`504` over). |
 | `API_WORKERS` | `4` | Async worker threads. |
 | `FASTCHAT_API_KEY` | — | **Required** for the LLM extraction step of a real parse. |
+| `AGENTIC_ESCALATION_MODEL` | `anthropic/claude-opus-4.8` | Vision model `/agentic` escalates to for groups only the pinout drawing resolves. |

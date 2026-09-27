@@ -113,6 +113,9 @@ Endpoints:
 | `POST` | `/jobs` | Upload a PDF (multipart `file`, optional `part_number`) → `202 {job_id, status}` |
 | `GET` | `/jobs/{id}` | Poll status → `{status, validated, artifacts[], reason?}` |
 | `GET` | `/jobs/{id}/artifacts/{name}` | Download a produced GLB/STEP |
+| `POST` | `/parse` | Sync: same upload, ZIP of all artifacts back |
+| `POST` | `/pins` | Sync: extraction only, pins as JSON, no GLB |
+| `POST` | `/agentic` | Sync, one shot: `/pins` + agentic repair of grouped / garbled pin names (`src/agentic/`), JSON back, no job id |
 | `GET` | `/health` | Liveness check |
 
 Job status maps to the CLI exit-code contract: `succeeded` (validated),
