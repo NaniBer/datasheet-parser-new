@@ -74,6 +74,35 @@ def test_expand_groups_leaves_mismatched_counts_alone():
     assert out == pins and log == []
 
 
+# --- comma-list groups: row-order resolution + permutation constraint ------------------------
+def test_comma_tokens():
+    from src.agentic.repair import comma_tokens
+
+    assert comma_tokens("CDA, CDB") == ["CDA", "CDB"]
+    assert comma_tokens("P7 to P2, P1, P0") == []  # a range list, not a plain comma list
+    assert comma_tokens("SEGA:SEGG, SEGDP") == []
+    assert comma_tokens("SCLK") == []
+
+
+def test_resolve_from_row_uses_the_number_list_matching_the_pins():
+    from src.agentic.repair import resolve_from_row
+
+    texts = [(4, "PIN FUNCTIONS\nCDA,CDB 40,16 42,21 – I indicates that a carrier\nTXRDYA,TXRDYB 43,6 1,12 – O ready\n"
+                 "INTA,INTB 30,29 33.32 21.22 O\n")]
+    assert resolve_from_row(texts, ["CDA", "CDB"], [16, 40]) == {40: "CDA", 16: "CDB"}
+    assert resolve_from_row(texts, ["TXRDYA", "TXRDYB"], [6, 43]) == {43: "TXRDYA", 6: "TXRDYB"}
+    assert resolve_from_row(texts, ["INTA", "INTB"], [29, 30]) == {30: "INTA", 29: "INTB"}
+    assert resolve_from_row(texts, ["CDA", "CDB"], [1, 2]) == {}  # no list with those numbers
+
+
+def test_llm_fix_must_be_a_permutation_of_the_group_tokens():
+    from src.agentic.repair import _fix_matches_tokens
+
+    assert _fix_matches_tokens({9: "OPB", 32: "OPA"}, ["OPA", "OPB"])
+    assert not _fix_matches_tokens({9: "D7", 32: "INTB"}, ["OPA", "OPB"])
+    assert not _fix_matches_tokens({22: "INTA", 33: "INTA"}, ["RTSA", "RTSB"])
+
+
 # --- POST /agentic ---------------------------------------------------------------------------
 def _client(tmp_path, monkeypatch, extract_status=SUCCEEDED, repair=None):
     import src.api.app as appmod
