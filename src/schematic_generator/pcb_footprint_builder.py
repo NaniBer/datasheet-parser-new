@@ -562,8 +562,21 @@ class PcbFootprintBuilder:
         silk_hw = fab_hw
         silk_hh = fab_hh + self.SILK_MARGIN_Y
         pad_x, pad_y = self._pad_extents()
+        # Quad leadless packages (QFN-16 .. VQFN-56; FT813, TLE9278): the fab
+        # outline is clamped inside the pad ring, so the silk lines at
+        # fab_hh + margin run straight through the top/bottom pad rows and the
+        # FP-07 clipping leaves no printable segment. The footprint then fails
+        # hierarchy validation ("silk_layer has no BodyLine segments"). In that
+        # case the outline moves to just outside the pad tips (the usual QFN
+        # silk) and spans the pad row; the courtyard is kept outside it.
+        t = self.LINE_THICKNESS
         crtyd_hw = max(fab_hw, pad_x) + self.CRTYD_MARGIN_Y
         crtyd_hh = max(fab_hh, pad_y) + self.CRTYD_MARGIN_Y
+        if self.pin_positions and not any(
+                self._silk_line_segments(y, -silk_hw, silk_hw, t) for y in (silk_hh, -silk_hh)):
+            silk_hh = pad_y + self.SILK_PAD_CLEARANCE + 0.03 + t / 2.0
+            silk_hw = max(silk_hw, pad_x)
+            crtyd_hh = max(crtyd_hh, silk_hh + t / 2.0 + self.CRTYD_MARGIN_Y)
         return fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh
 
     def calculate_pin_positions_footprint(self) -> List[PinPosition]:
