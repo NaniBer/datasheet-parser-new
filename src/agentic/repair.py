@@ -184,6 +184,50 @@ def _ask_vision(model: str, prompt: str, pdf: Path, pages: List[int]) -> dict:
     return _parse_json(chat_bot.get_completion_from_messages([{"role": "user", "content": content}], model=model))
 
 
+# --------------------------------------------------------------------------- comma-list groups
+def comma_tokens(label: str) -> List[str]:
+    """``"CDA, CDB"`` -> ``["CDA", "CDB"]``; empty list when the label is not a comma list."""
+    n = (label or "").strip()
+    if "," not in n or re.search(r"\bto\b|:", n, re.I):
+        return []
+    toks = [t.strip() for t in n.split(",")]
+    return toks if all(toks) and len(toks) >= 2 else []
+
+
+def resolve_from_row(texts, tokens: List[str], members: List[int]) -> Dict[int, str]:
+    """Map a comma-list group onto its pins from the datasheet row text, no LLM.
+
+    TI-style rows print the names and then one number list per package column::
+
+        CDA,CDB 40,16 42,21 – I
+        TXRDYA,TXRDYB 43,6 1,12 – O
+
+    The number list whose set equals ``members`` gives the order: ``CDA`` -> 40,
+    ``CDB`` -> 16. Returns ``{}`` when no row matches unambiguously.
+    """
+    if not tokens or len(members) != len(tokens):
+        return {}
+    key = ",".join(tokens).upper()
+    want = set(members)
+    for _, t in texts:
+        for ln in t.splitlines():
+            compact = re.sub(r"\s*,\s*", ",", ln.upper())
+            if key not in compact:
+                continue
+            tail = compact.split(key, 1)[1]
+            for grp in re.findall(r"(?<![\w.])(\d+(?:[.,]\d+)+)(?![\w.])", tail):
+                nums = [int(x) for x in re.split(r"[.,]", grp)]
+                if len(nums) == len(tokens) and set(nums) == want:
+                    return dict(zip(nums, tokens))
+    return {}
+
+
+def _fix_matches_tokens(fix: Dict[int, str], tokens: List[str]) -> bool:
+    """A comma-list group may only be resolved into a permutation of its own tokens."""
+    got = sorted(_tidy(str(v)).upper() for v in fix.values())
+    return got == sorted(t.upper() for t in tokens)
+
+
 # --------------------------------------------------------------------------- deterministic step
 def expand_groups_deterministic(pins: Dict[int, str]) -> Tuple[Dict[int, str], List[str]]:
     """Expand numeric range labels shared by a run of pins. Pure, no LLM.
@@ -287,14 +331,23 @@ def repair_pins(
     for n, name in names.items():
         if is_group(name) or is_suspicious(name):
             groups.setdefault(name, []).append(n)
+    def _taken(exclude: List[int]) -> set:
+        """Names already used by pins outside the group (shared power/ground names excluded)."""
+        return {v.upper() for n, v in names.items() if n not in exclude
+                and v.upper() not in SHARED_NAMES and not is_group(v) and not is_suspicious(v)}
+
     for label, members in groups.items():
         members.sort()
         fix: dict = {}
         letter_range = _is_letter_range(label)
+        tokens = comma_tokens(label)
         pages_txt = _page_context(texts, members) if texts else []
         try:
             if letter_range:
                 log.append(f"letter-range {label!r} pins={members}: needs the drawing, escalating")
+            elif tokens and (row := resolve_from_row(texts, tokens, members)):
+                fix = {str(n): v for n, v in row.items()}
+                log.append(f"row-order {label!r} -> {row}")
             elif is_suspicious(label) and not is_group(label):
                 vpages = [pg for pg, _ in pages_txt][:2] or _pinout_pages(texts, members)
                 if vpages:
@@ -321,6 +374,18 @@ def repair_pins(
         except Exception as exc:  # noqa: BLE001
             log.append(f"repair of {label!r} failed: {type(exc).__name__}: {exc}")
 
+        # Constraint checks: a comma-list group resolves only into its own tokens, and no
+        # repair may reuse a name that another pin already has. Anything else escalates.
+        if fix and tokens and not _fix_matches_tokens({n: fix.get(str(n), "") for n in members}, tokens):
+            log.append(f"rejected {label!r} -> {fix}: not a permutation of {tokens}")
+            fix = {}
+        taken = _taken(members)
+        for n in list(members):
+            v = _tidy(str(fix.get(str(n), "")))
+            if v and v.upper() in taken:
+                log.append(f"rejected pin {n} -> {v!r}: name already used elsewhere")
+                fix.pop(str(n), None)
+
         unresolved = []
         for n in members:
             v = _tidy(str(fix.get(str(n), "")))
@@ -332,16 +397,23 @@ def repair_pins(
             pages = _pinout_pages(texts, unresolved)
             if pages:
                 try:
+                    hint = f" The names must be exactly these, one each: {tokens}." if tokens else ""
                     fix2 = _ask_vision(
                         escalation_model,
                         f"Part {part_number}. From the pin configuration drawing / table on these datasheet page(s), give the pin NAME "
                         f"for each of these pin numbers: {unresolved}. They belong to the group \"{label}\"; the drawing shows which "
-                        'name sits on which number. Respond with JSON only: {"<pin number>": "<name>"}. Use the names exactly as printed; "?" if unreadable.',
+                        f'name sits on which number.{hint} Respond with JSON only: {{"<pin number>": "<name>"}}. '
+                        'Use the names exactly as printed; "?" if unreadable.',
                         pdf_path, pages,
                     )
+                    if tokens and len(unresolved) == len(tokens) and not _fix_matches_tokens(
+                            {n: fix2.get(str(n), "") for n in unresolved}, tokens):
+                        log.append(f"rejected escalation {label!r} -> {fix2}: not a permutation of {tokens}")
+                        fix2 = {}
+                    taken = _taken(members)
                     for n in unresolved:
                         v = _tidy(str(fix2.get(str(n), "")))
-                        if v and v != "?":
+                        if v and v != "?" and not is_group(v) and v.upper() not in taken:
                             names[n] = v
                     log.append(f"vision({escalation_model}) {label!r} pins={unresolved} pages={pages} -> {fix2}")
                 except Exception as exc:  # noqa: BLE001
