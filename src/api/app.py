@@ -321,6 +321,8 @@ def create_app(
                         part_number or data.get("part_number"),
                         repair_model=repair_model or model or None,
                         escalation_model=escalation_model or None,
+                        package=package or data.get("package") or None,
+                        pin_count=pin_count or data.get("pin_count") or None,
                     )
                 except Exception as exc:  # noqa: BLE001 - never lose the extraction
                     rep = {

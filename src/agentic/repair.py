@@ -104,6 +104,36 @@ def _is_letter_range(label: str) -> bool:
     return bool(_LETTER_RANGE.match((label or "").strip()))
 
 
+def _squash(label: str) -> str:
+    """``A 1 to A 6`` -> ``A1 to A6`` (spaces the text extractor left where a subscript was)."""
+    return re.sub(r"(?<=[A-Za-z])\s+(?=\d)", "", (label or "").strip())
+
+
+def _lost_subscript(label: str) -> bool:
+    """A numeric range whose letters are separated from their digits by spaces
+    (``A 1 to A 6``) usually lost a subscript (``AIN1``): only the drawing has the full name."""
+    return label != _squash(label) and expand_numeric(_squash(label)) is not None
+
+
+def range_numbers(label: str) -> Optional[List[int]]:
+    """The pin-name numbers a numeric range covers: ``A 1 to A 6`` -> ``[1..6]``."""
+    exp = expand_numeric(_squash(label))
+    if not exp:
+        return None
+    return [int(re.search(r"(\d+)$", e).group(1)) for e in exp]
+
+
+def _series_ok(fix: Dict[int, str], numbers: List[int]) -> bool:
+    """Names must share one prefix and end in exactly the range's numbers (``AIN1..AIN6``)."""
+    vals = [_tidy(str(v)) for v in fix.values()]
+    if len(vals) != len(numbers) or not all(vals):
+        return False
+    parts = [re.fullmatch(r"([A-Za-z_/]+?)(\d+)", v) for v in vals]
+    if not all(parts):
+        return False
+    return len({m.group(1).upper() for m in parts}) == 1 and sorted(int(m.group(2)) for m in parts) == sorted(numbers)
+
+
 # --------------------------------------------------------------------------- datasheet helpers
 def _page_texts(pdf: Path) -> List[Tuple[int, str]]:
     import pdfplumber
@@ -127,13 +157,58 @@ def _best_pin_page(texts, pins: List[int]) -> Optional[int]:
     return best[1]
 
 
-def _page_context(texts, pins: List[int], maxc: int = 7000) -> List[Tuple[int, str]]:
-    pno = _best_pin_page(texts, pins)
-    if pno is None:
+_PIN_HEADINGS = ("PIN CONFIGURATION", "PIN ASSIGNMENT", "PINOUT", "PIN FUNCTION", "PIN DESCRIPTION",
+                 "TERMINAL FUNCTION", "PIN DEFINITION", "PINNING", "TOP VIEW")
+
+
+def _variant_tokens(package: Optional[str], pin_count: Optional[int]) -> List[str]:
+    """Strings that mark the ordered variant's own table/drawing: ``48-LEAD``, ``LQFP-48``, ``48-PIN``..."""
+    toks: List[str] = []
+    if pin_count:
+        toks += [f"{pin_count}-LEAD", f"{pin_count} LEAD", f"{pin_count}-PIN", f"{pin_count} PIN", f"{pin_count}-TERMINAL"]
+    fam = None
+    if package:
+        m = re.search(r"[A-Za-z]{2,}", package)
+        fam = m.group(0).upper() if m else None
+        if fam and pin_count:
+            toks += [f"{fam}-{pin_count}", f"{fam}{pin_count}", f"{fam}({pin_count})", f"{pin_count}-{fam}", f"{pin_count} {fam}"]
+    return toks
+
+
+def _score_pages(texts, pins: List[int], package: Optional[str] = None, pin_count: Optional[int] = None) -> List[int]:
+    """Pages ranked as the ordered variant's pin table / drawing.
+
+    Score = pin-table heading present (+3) + variant token present (+5, e.g. ``48-LEAD``)
+    + share of the wanted pin numbers mentioned (0..2) - register-map penalty. A page with
+    no heading, no variant token and few pin hits scores <= 0 and is never returned.
+    """
+    vt = _variant_tokens(package, pin_count)
+    scored = []
+    for pno, t in texts:
+        u = t.upper()
+        s = 3.0 if any(h in u for h in _PIN_HEADINGS) else 0.0
+        if vt and any(v in u for v in vt):
+            s += 5.0
+        s += 2.0 * sum(1 for p in pins if _mentions(t, p)) / max(len(pins), 1)
+        if "REGISTER" in u and "PIN" not in u:
+            s -= 3.0
+        if s > 0.5:
+            scored.append((s, -pno))
+    scored.sort(reverse=True)
+    return [-p for _, p in scored]
+
+
+def _page_context(texts, pins: List[int], maxc: int = 7000, package: Optional[str] = None,
+                  pin_count: Optional[int] = None) -> List[Tuple[int, str]]:
+    ranked = _score_pages(texts, pins, package, pin_count)
+    if not ranked:
         return []
+    pno = ranked[0]
     out = [(pno, texts[pno - 1][1][:maxc])]
     if pno < len(texts) and any(_mentions(texts[pno][1], p) for p in pins):  # continuation page
         out.append((pno + 1, texts[pno][1][:maxc]))
+    elif len(ranked) > 1:
+        out.append((ranked[1], texts[ranked[1] - 1][1][:maxc]))
     return out
 
 
@@ -148,21 +223,54 @@ def _pinout_pages(texts, pins: List[int]) -> List[int]:
     return [p for s, p in scored[:2] if s > 0]
 
 
-def _render_page_b64(pdf: Path, pno: int, zoom: float = 2.0) -> str:
+def _render_page_b64(pdf: Path, pno: int, zoom: float = 2.0, rotate: int = 0) -> str:
     import fitz  # PyMuPDF
 
     doc = fitz.open(str(pdf))
-    pix = doc[pno - 1].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+    pix = doc[pno - 1].get_pixmap(matrix=fitz.Matrix(zoom, zoom).prerotate(rotate))
     return base64.b64encode(pix.tobytes("png")).decode()
 
 
 # --------------------------------------------------------------------------- LLM helpers
+_last_raw = {"text": ""}
+
+
 def _parse_json(txt: str) -> dict:
-    m = re.search(r"\{.*\}", txt or "", re.S)
-    try:
-        return json.loads(m.group(0)) if m else {}
-    except json.JSONDecodeError:
+    """First JSON object in the reply (tolerates code fences and prose around it)."""
+    _last_raw["text"] = (txt or "")[:300].replace("\n", " ")
+    txt = re.sub(r"```(?:json)?", "", txt or "")
+    m = re.search(r"\{.*\}", txt, re.S)
+    if not m:
         return {}
+    try:
+        return json.loads(m.group(0))
+    except json.JSONDecodeError:
+        # trailing commas / single quotes from a chatty model
+        fixed = re.sub(r",\s*}", "}", m.group(0)).replace("'", '"')
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            return {}
+
+
+def _rebuild_subscript_name(name: str) -> Optional[str]:
+    """Rebuild a supply/signal name whose subscript the text extractor split apart.
+
+    ``V R IN`` -> ``VINR`` (V, subscript IN, channel R), ``V L OUT`` -> ``VOUTL``,
+    ``V + D`` -> ``VD+``, ``V – A`` -> ``VA-``, ``V CC`` -> ``VCC``. Returns ``None``
+    when the name does not match one of these shapes.
+    """
+    n = (name or "").strip().replace("\u2013", "-").replace("\u2212", "-")
+    m = re.fullmatch(r"V\s+([A-Z])\s+(IN|OUT)", n)
+    if m:
+        return f"V{m.group(2)}{m.group(1)}"
+    m = re.fullmatch(r"V\s*([+\-])\s*([A-Z]{1,2})", n)
+    if m:
+        return f"V{m.group(2)}{m.group(1)}"
+    m = re.fullmatch(r"V\s+([A-Z]{2,3})", n)
+    if m:
+        return f"V{m.group(1)}"
+    return None
 
 
 def _tidy(name: str) -> str:
@@ -177,10 +285,13 @@ def _ask_text(model: str, prompt: str) -> dict:
     return _parse_json(chat_bot.get_completion_from_messages([{"role": "user", "content": prompt}], model=model))
 
 
-def _ask_vision(model: str, prompt: str, pdf: Path, pages: List[int]) -> dict:
+def _ask_vision(model: str, prompt: str, pdf: Path, pages: List[int], rotations: Tuple[int, ...] = (0,)) -> dict:
+    """Send the rendered page(s) with the prompt. ``rotations`` adds turned copies of
+    each page (pinout drawings are often printed sideways)."""
     content = [{"type": "text", "text": prompt}]
     for p in pages:
-        content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + _render_page_b64(pdf, p)}})
+        for r in rotations:
+            content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + _render_page_b64(pdf, p, rotate=r)}})
     return _parse_json(chat_bot.get_completion_from_messages([{"role": "user", "content": content}], model=model))
 
 
@@ -192,6 +303,20 @@ def comma_tokens(label: str) -> List[str]:
         return []
     toks = [t.strip() for t in n.split(",")]
     return toks if all(toks) and len(toks) >= 2 else []
+
+
+def letter_range_tokens(label: str) -> List[str]:
+    """``SEGA:SEGG, SEGDP`` -> ``[SEGA, SEGB, ..., SEGG, SEGDP]``; ``[]`` if not a letter range."""
+    n = (label or "").strip()
+    parts = [p.strip() for p in n.split(",")]
+    m = _LETTER_RANGE.match(parts[0])
+    if not m:
+        return []
+    prefix, a, b = m.group(1), m.group(2), m.group(3)
+    if ord(b) < ord(a):
+        return []
+    toks = [f"{prefix}{chr(c)}" for c in range(ord(a), ord(b) + 1)]
+    return toks + [p for p in parts[1:] if p]
 
 
 def resolve_from_row(texts, tokens: List[str], members: List[int]) -> Dict[int, str]:
@@ -222,10 +347,17 @@ def resolve_from_row(texts, tokens: List[str], members: List[int]) -> Dict[int, 
     return {}
 
 
-def _fix_matches_tokens(fix: Dict[int, str], tokens: List[str]) -> bool:
-    """A comma-list group may only be resolved into a permutation of its own tokens."""
-    got = sorted(_tidy(str(v)).upper() for v in fix.values())
-    return got == sorted(t.upper() for t in tokens)
+def _fix_matches_tokens(fix: Dict[int, str], tokens: List[str], prefix: Optional[str] = None) -> bool:
+    """A comma-list group may only be resolved into a permutation of its own tokens.
+
+    For a letter range (``SEGA:SEGG``) the printed group may carry extra members the
+    label omitted (``SEGDP``), so there the rule is: all names distinct, all starting
+    with the range prefix.
+    """
+    got = [_tidy(str(v)).upper() for v in fix.values()]
+    if prefix:
+        return len(set(got)) == len(got) and all(g.startswith(prefix.upper()) and len(g) > len(prefix) for g in got)
+    return sorted(got) == sorted(t.upper() for t in tokens)
 
 
 # --------------------------------------------------------------------------- deterministic step
@@ -243,10 +375,21 @@ def expand_groups_deterministic(pins: Dict[int, str]) -> Tuple[Dict[int, str], L
     for label, members in groups.items():
         members.sort()
         exp = expand_numeric(label)
-        if exp and len(exp) == len(members):
+        if not exp or _lost_subscript(label):
+            continue
+        if len(exp) == len(members):
             for n, nm in zip(members, exp):
                 out[n] = nm
             log.append(f"expand {label!r} -> {dict(zip(members, exp))}")
+            continue
+        # Partial: some pins of the range already carry their expanded name
+        # (44=D0, 45=D1, 48=D4 named, 46-47 still "D0-D4"). Fill the gaps in order.
+        used = {v.upper() for n, v in out.items() if n not in members}
+        remaining = [e for e in exp if e.upper() not in used]
+        if len(remaining) == len(members):
+            for n, nm in zip(members, remaining):
+                out[n] = nm
+            log.append(f"expand-partial {label!r} -> {dict(zip(members, remaining))}")
     return out, log
 
 
@@ -257,6 +400,8 @@ def repair_pins(
     part_number: Optional[str],
     repair_model: Optional[str] = None,
     escalation_model: Optional[str] = None,
+    package: Optional[str] = None,
+    pin_count: Optional[int] = None,
 ) -> dict:
     """Repair an extracted pin list in place of the caller's judgement.
 
@@ -268,6 +413,9 @@ def repair_pins(
         repair_model: cheap text+vision model for steps 1, 3, 4 (default: LLM_MODEL).
         escalation_model: vision model for step 5 (default: AGENTIC_ESCALATION_MODEL
             env, else ``anthropic/claude-opus-4.8``).
+        package: ordered package as known to the caller or the extraction
+            (``LQFP``, ``QSOP-24``); steers page choice on multi-variant datasheets.
+        pin_count: ordered pin count; defaults to the number of extracted pins.
 
     Returns a dict with ``pins`` (same shape, names repaired), ``changed`` (count),
     ``repairs`` (human-readable log), ``flags`` (verification findings) and
@@ -284,10 +432,18 @@ def repair_pins(
             by_num[int(p.get("number"))] = p
         except (TypeError, ValueError):
             continue
-    names: Dict[int, str] = {n: str(p.get("name") or "") for n, p in by_num.items()}
-    original = dict(names)
-    log: List[str] = []
+    names: Dict[int, str] = {}
+    for n, p in by_num.items():
+        raw = str(p.get("name") or "")
+        rebuilt = _rebuild_subscript_name(raw)
+        names[n] = rebuilt or _tidy(raw)
+    original = {n: str(p.get("name") or "") for n, p in by_num.items()}
+    log: List[str] = [f"rebuild {original[n]!r} -> {names[n]!r}" for n in names if names[n] != _tidy(original[n])]
     chat_bot.reset_usage()
+    pin_count = pin_count or len(names) or None
+    variant = f"{pin_count}-pin {package}" if package and pin_count else (package or (f"{pin_count}-pin" if pin_count else ""))
+    variant_note = (f" The ordered part is {part_number} in the {variant} package: use ONLY that variant's pin "
+                    f"table / drawing and ignore other package variants on the page(s).") if variant else ""
 
     try:
         texts = _page_texts(pdf_path) if pdf_path.is_file() else []
@@ -296,7 +452,7 @@ def repair_pins(
         log.append(f"page text unavailable ({type(exc).__name__}); only deterministic repairs applied")
 
     # 1) package-column check ---------------------------------------------------------------
-    ctx = _page_context(texts, list(names)) if texts else []
+    ctx = _page_context(texts, list(names), package=package, pin_count=pin_count) if texts else []
     pkg_cols = {m.group(1).upper() for _, t in ctx for m in _PKG_TOKENS.finditer(t)}
     if len(pkg_cols) >= 2 and ctx:
         order_txt = "\n".join(t[:3000] for _, t in texts if "ORDERING" in t.upper())[:4000]
@@ -316,9 +472,24 @@ def repair_pins(
         except Exception as exc:  # noqa: BLE001 - soft-fail, keep extraction
             ans = {}
             log.append(f"column-check failed: {type(exc).__name__}: {exc}")
-        if ans.get("column_ok") is False and isinstance(ans.get("pins"), dict) and len(ans["pins"]) >= 0.8 * len(names):
-            names = {int(k): str(v) for k, v in ans["pins"].items() if str(k).strip().isdigit()}
-            log.append(f"column-check: package={ans.get('package')} column_ok=False -> re-mapped {len(names)} pins")
+        if ans.get("package"):
+            package = str(ans["package"])          # the ordering table beats the extraction's guess
+            variant = f"{pin_count}-pin {package}" if pin_count else package
+            variant_note = (f" The ordered part is {part_number} in the {variant} package: use ONLY that variant's pin "
+                            f"table / drawing and ignore other package variants on the page(s).")
+        remap = ({int(k): _tidy(str(v)) for k, v in ans["pins"].items() if str(k).strip().isdigit()}
+                 if isinstance(ans.get("pins"), dict) else {})
+        if ans.get("column_ok") is False and len(remap) >= 0.8 * len(names):
+            # A real column fix re-numbers: many pins move, but the set of names stays the same.
+            old_set = {v.upper() for v in names.values()}
+            moved = sum(1 for n, v in remap.items() if names.get(n, "").upper() != v.upper())
+            kept = sum(1 for v in remap.values() if v.upper() in old_set) / max(len(remap), 1)
+            if moved >= 0.3 * len(names) and kept >= 0.7:
+                names = remap
+                log.append(f"column-check: package={ans.get('package')} column_ok=False -> re-mapped {len(names)} pins ({moved} moved)")
+            else:
+                log.append(f"column-check: package={ans.get('package')} column_ok=False but re-map rejected "
+                           f"(moved={moved}, names kept={kept:.0%}); keeping extraction")
         else:
             log.append(f"column-check: package={ans.get('package')} column_ok={ans.get('column_ok')}")
 
@@ -327,39 +498,63 @@ def repair_pins(
     log += exp_log
 
     # 3-5) remaining groups / suspicious names -------------------------------------------------
+    # Garbled single names (subscript damage, header rows): one vision read of the pin
+    # table for all of them together, by the escalation model, so the spellings are
+    # consistent (VINR vs VRIN) and the page is only rendered once.
+    garbled_fix: Dict[int, str] = {}
+    garbled = sorted(n for n, v in names.items() if is_suspicious(v) and not is_group(v))
+    if garbled and texts:
+        gpages = _score_pages(texts, garbled, package, pin_count)[:2]
+        if gpages:
+            try:
+                shown = {n: names[n] for n in garbled}
+                ans_g = _ask_vision(
+                    escalation_model,
+                    f"Part {part_number}.{variant_note} The text extractor produced garbled pin names for pins {garbled} "
+                    f"({shown}): subscripts or table headers got scrambled. Read the pin-function table / pin diagram on the "
+                    f"attached page image(s) and give the correct printed name for each of these pin numbers: {garbled}. "
+                    "Write subscripts inline in reading order (V IN R -> VINR, V D+ -> VD+). "
+                    'Respond with JSON only: {"<pin number>": "<name>"}; "?" if unreadable.',
+                    pdf_path, gpages[:1],
+                )
+                garbled_fix = {n: _tidy(str(ans_g.get(str(n), ""))) for n in garbled}
+                log.append(f"vision({escalation_model}) garbled pins={garbled} pages={gpages[:1]} -> {ans_g}")
+            except Exception as exc:  # noqa: BLE001
+                log.append(f"garbled-name read failed: {type(exc).__name__}: {exc}")
+
     groups: Dict[str, List[int]] = {}
     for n, name in names.items():
         if is_group(name) or is_suspicious(name):
             groups.setdefault(name, []).append(n)
+
     def _taken(exclude: List[int]) -> set:
         """Names already used by pins outside the group (shared power/ground names excluded)."""
         return {v.upper() for n, v in names.items() if n not in exclude
                 and v.upper() not in SHARED_NAMES and not is_group(v) and not is_suspicious(v)}
 
     for label, members in groups.items():
-        members.sort()
+        members = sorted(n for n in members if names.get(n) == label)
+        if not members:
+            continue
         fix: dict = {}
         letter_range = _is_letter_range(label)
-        tokens = comma_tokens(label)
-        pages_txt = _page_context(texts, members) if texts else []
+        tokens = comma_tokens(label) or (letter_range_tokens(label) if letter_range else [])
+        prefix = _LETTER_RANGE.match(label.strip()).group(1) if letter_range else None
+        if tokens and not letter_range and len(tokens) != len(members):
+            tokens = []  # a partial group (some members already named): no permutation constraint
+        numbers = range_numbers(label) if not tokens else None   # numbered series constraint
+        pages_txt = _page_context(texts, members, package=package, pin_count=pin_count) if texts else []
         try:
             if letter_range:
                 log.append(f"letter-range {label!r} pins={members}: needs the drawing, escalating")
+            elif _lost_subscript(label):
+                log.append(f"lost-subscript range {label!r} pins={members}: full names only in the drawing, escalating")
             elif tokens and (row := resolve_from_row(texts, tokens, members)):
                 fix = {str(n): v for n, v in row.items()}
                 log.append(f"row-order {label!r} -> {row}")
             elif is_suspicious(label) and not is_group(label):
-                vpages = [pg for pg, _ in pages_txt][:2] or _pinout_pages(texts, members)
-                if vpages:
-                    fix = _ask_vision(
-                        repair_model,
-                        f"Part {part_number}. The text extractor produced the garbled pin name \"{label}\" for pin(s) {members} "
-                        "(subscripts or table headers got scrambled). Read the pin-function table / pin diagram on the attached "
-                        f"page image(s) and give the correct printed name for each of these pin numbers: {members}. Write subscripts "
-                        'inline (VIN R -> VINR, VD+ -> VD+). Respond with JSON only: {"<pin number>": "<name>"}.',
-                        pdf_path, vpages,
-                    )
-                    log.append(f"vision({repair_model}) {label!r} pins={members} pages={vpages} -> {fix}")
+                fix = {str(n): garbled_fix.get(n, "") for n in members}
+                log.append(f"garbled {label!r} pins={members} -> {fix}")
             elif pages_txt:
                 fix = _ask_text(
                     repair_model,
@@ -376,8 +571,11 @@ def repair_pins(
 
         # Constraint checks: a comma-list group resolves only into its own tokens, and no
         # repair may reuse a name that another pin already has. Anything else escalates.
-        if fix and tokens and not _fix_matches_tokens({n: fix.get(str(n), "") for n in members}, tokens):
+        if fix and tokens and not _fix_matches_tokens({n: fix.get(str(n), "") for n in members}, tokens, prefix):
             log.append(f"rejected {label!r} -> {fix}: not a permutation of {tokens}")
+            fix = {}
+        if fix and numbers and len(members) == len(numbers) and not _series_ok({n: fix.get(str(n), "") for n in members}, numbers):
+            log.append(f"rejected {label!r} -> {fix}: not a numbered series over {numbers}")
             fix = {}
         taken = _taken(members)
         for n in list(members):
@@ -394,30 +592,123 @@ def repair_pins(
             else:
                 unresolved.append(n)
         if unresolved and texts:
-            pages = _pinout_pages(texts, unresolved)
+            # Prefer the pages whose text carries these pin numbers (the ordered
+            # variant's own pin table / drawing), then the generic pinout pages.
+            pages = [pg for pg, _ in pages_txt][:2] or _score_pages(texts, unresolved, package, pin_count)[:2]
             if pages:
                 try:
-                    hint = f" The names must be exactly these, one each: {tokens}." if tokens else ""
-                    fix2 = _ask_vision(
-                        escalation_model,
-                        f"Part {part_number}. From the pin configuration drawing / table on these datasheet page(s), give the pin NAME "
+                    if prefix:
+                        hint = (f" All of these names start with \"{prefix}\" (a lettered series like {tokens[:3]}...); "
+                                f"the drawing may also show members the label omitted (e.g. {prefix}DP). One distinct name per pin.")
+                    elif tokens:
+                        hint = f" The names must be exactly these, one each: {tokens}."
+                    elif numbers:
+                        hint = (f" The names form a numbered series ending in {numbers} (the printed prefix may include a "
+                                f"subscript the text lost, e.g. AIN1 rather than A1); give the full printed name.")
+                    else:
+                        hint = ""
+                    prompt2 = (
+                        f"Part {part_number}.{variant_note} From the pin configuration drawing / table on these datasheet page(s), give the pin NAME "
                         f"for each of these pin numbers: {unresolved}. They belong to the group \"{label}\"; the drawing shows which "
                         f'name sits on which number.{hint} Respond with JSON only: {{"<pin number>": "<name>"}}. '
-                        'Use the names exactly as printed; "?" if unreadable.',
-                        pdf_path, pages,
+                        'Use the names exactly as printed; "?" if unreadable.'
                     )
-                    if tokens and len(unresolved) == len(tokens) and not _fix_matches_tokens(
-                            {n: fix2.get(str(n), "") for n in unresolved}, tokens):
+                    # First read: the top-ranked page alone (one drawing, no competing variant);
+                    # second read with the continuation page only if the first is unusable.
+                    fix2 = _ask_vision(escalation_model, prompt2, pdf_path, pages[:1])
+                    log.append(f"vision({escalation_model}) {label!r} pins={unresolved} pages={pages[:1]} -> {fix2}"
+                               + ("" if fix2 else f" raw={_last_raw['text']!r}"))
+
+                    def _usable(f2):
+                        vals = {n: f2.get(str(n), "") for n in unresolved}
+                        if any(not str(v).strip() or str(v).strip() == "?" for v in vals.values()):
+                            return False
+                        if tokens and len(unresolved) == len(tokens) and not _fix_matches_tokens(vals, tokens, prefix):
+                            return False
+                        return True
+
+                    if not _usable(fix2):
+                        # Retry with the page turned (sideways pinout drawings) plus the continuation page.
+                        fix2 = _ask_vision(escalation_model, prompt2, pdf_path, pages[:2], rotations=(0, 90, 270))
+                        log.append(f"vision({escalation_model}) retry {label!r} pages={pages[:2]} rotated -> {fix2}")
+                    if tokens and (prefix or len(unresolved) == len(tokens)) and not _fix_matches_tokens(
+                            {n: fix2.get(str(n), "") for n in unresolved}, tokens, prefix):
                         log.append(f"rejected escalation {label!r} -> {fix2}: not a permutation of {tokens}")
                         fix2 = {}
-                    taken = _taken(members)
+                    # Otherwise the escalation model's reading of the drawing is taken as-is
+                    # (the series/permutation constraints police the guessers). When a
+                    # group's pins were mis-assigned by the extraction, the drawing may
+                    # legitimately say pin 29 = VREFP although 29 "belonged" to the A_IN
+                    # group; when it names a pin another pin already holds, both are
+                    # re-read together so the older, wrong one can move.
                     for n in unresolved:
                         v = _tidy(str(fix2.get(str(n), "")))
-                        if v and v != "?" and not is_group(v) and v.upper() not in taken:
+                        if not v or v == "?" or is_group(v):
+                            continue
+                        clash = [m for m, w in names.items() if m != n and w.upper() == v.upper()
+                                 and v.upper() not in SHARED_NAMES and not is_group(w)]
+                        if not clash:
                             names[n] = v
-                    log.append(f"vision({escalation_model}) {label!r} pins={unresolved} pages={pages} -> {fix2}")
+                            continue
+                        pair = sorted([n] + clash)
+                        fix3 = _ask_vision(
+                            escalation_model,
+                            f"Part {part_number}.{variant_note} Two pins were both read as \"{v}\": pins {pair}. From the pin configuration "
+                            f"drawing / table on these page(s), give the printed NAME of each of these pins: {pair}. "
+                            'Respond with JSON only: {"<pin number>": "<name>"}; "?" if unreadable.',
+                            pdf_path, pages,
+                        )
+                        got = {m: _tidy(str(fix3.get(str(m), ""))) for m in pair}
+                        log.append(f"collision {v!r} pins={pair} -> {fix3}")
+                        others = _taken(pair)
+                        if (all(got.values()) and "?" not in got.values()
+                                and len({x.upper() for x in got.values()}) == len(pair)
+                                and not any(x.upper() in others for x in got.values())):
+                            for m, w in got.items():
+                                names[m] = w
                 except Exception as exc:  # noqa: BLE001
                     log.append(f"escalation of {label!r} failed: {type(exc).__name__}: {exc}")
+
+    # 5b) duplicate names that no group step touched (the extraction itself doubled a
+    # name, e.g. two pins read as IRQ): re-read all pins holding a duplicated name from
+    # the drawing in one go; accept only a fully distinct, non-conflicting answer.
+    if texts:
+        vals0 = [v.upper() for v in names.values()]
+        dup_names = {v for v in vals0 if vals0.count(v) > 1 and v not in SHARED_NAMES
+                     and not v.startswith(("GND", "VCC", "VDD", "VS", "NC", "N.C"))}
+        dup_pins = sorted(n for n, v in names.items() if v.upper() in dup_names and not is_group(v))
+        if dup_pins and len(dup_pins) <= 16:
+            pages = _score_pages(texts, dup_pins, package, pin_count)[:2]
+            if pages:
+                try:
+                    todo = list(dup_pins)
+                    for _round in range(3):   # widen the read when the answer clashes with other pins
+                        fixd = _ask_vision(
+                            escalation_model,
+                            f"Part {part_number}.{variant_note} The extractor gave the same name to several pins "
+                            f"({sorted(dup_names)}). From the pin configuration drawing / table on these page(s), give the printed "
+                            f'NAME of each of these pins: {todo}. Respond with JSON only: {{"<pin number>": "<name>"}}; "?" if unreadable.',
+                            pdf_path, pages[:1],
+                        )
+                        got = {m: _tidy(str(fixd.get(str(m), ""))) for m in todo}
+                        log.append(f"duplicates {sorted(dup_names)} pins={todo} pages={pages[:1]} -> {fixd}")
+                        if not (all(got.values()) and "?" not in got.values() and not any(is_group(x) for x in got.values())
+                                and len({x.upper() for x in got.values()}) == len(todo)):
+                            log.append("duplicates: answer rejected (incomplete / not distinct), left flagged")
+                            break
+                        clash = sorted(m for m, w in names.items() if m not in todo and w.upper() in {x.upper() for x in got.values()}
+                                       and w.upper() not in SHARED_NAMES)
+                        if not clash:
+                            for m, w in got.items():
+                                names[m] = w
+                            break
+                        log.append(f"duplicates: answer clashes with pins {clash}; re-reading them too")
+                        todo = sorted(set(todo) | set(clash))
+                        if len(todo) > 16:
+                            log.append("duplicates: too many pins to re-read, left flagged")
+                            break
+                except Exception as exc:  # noqa: BLE001
+                    log.append(f"duplicate re-read failed: {type(exc).__name__}: {exc}")
 
     # 6) verify -----------------------------------------------------------------------------
     vals = list(names.values())
