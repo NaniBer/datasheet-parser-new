@@ -49,6 +49,25 @@ def test_tidy_collapses_ocr_spacing_only_in_short_caps_tokens():
     assert _tidy("Line In/Out") == "Line In/Out"
 
 
+def test_rebuild_subscript_names_deterministically():
+    from src.agentic.repair import _rebuild_subscript_name
+
+    assert _rebuild_subscript_name("V R IN") == "VINR"
+    assert _rebuild_subscript_name("V L OUT") == "VOUTL"
+    assert _rebuild_subscript_name("V + D") == "VD+"
+    assert _rebuild_subscript_name("V – A") == "VA-"
+    assert _rebuild_subscript_name("V CC") == "VCC"
+    assert _rebuild_subscript_name("SCLK") is None
+    assert _rebuild_subscript_name("DIP/ LAP/ SOIC") is None
+
+
+def test_parse_json_tolerates_fences_and_prose():
+    from src.agentic.repair import _parse_json
+
+    assert _parse_json('Sure. ```json\n{"15": "SEGA", "17": "SEGB"}\n```') == {"15": "SEGA", "17": "SEGB"}
+    assert _parse_json("no json here") == {}
+
+
 def test_expand_numeric_forward_backward_and_colon():
     assert expand_numeric("D0-D4") == ["D0", "D1", "D2", "D3", "D4"]
     assert expand_numeric("P7 to P2") == ["P7", "P6", "P5", "P4", "P3", "P2"]
@@ -72,6 +91,47 @@ def test_expand_groups_leaves_mismatched_counts_alone():
     pins = {10: "D0-D4", 11: "D0-D4", 12: "D0-D4"}
     out, log = expand_groups_deterministic(pins)
     assert out == pins and log == []
+
+
+def test_expand_groups_partial_fills_only_the_missing_names():
+    pins = {44: "D0", 45: "D1", 46: "D0-D4", 47: "D0-D4", 48: "D4"}
+    out, log = expand_groups_deterministic(pins)
+    assert (out[46], out[47]) == ("D2", "D3") and log and "expand-partial" in log[0]
+
+
+def test_lost_subscript_range_is_not_expanded_blindly():
+    from src.agentic.repair import _lost_subscript, range_numbers, _series_ok
+
+    assert _lost_subscript("A 1 to A 6") and not _lost_subscript("D0-D4")
+    out, log = expand_groups_deterministic({26: "A 1 to A 6", 27: "A 1 to A 6"})
+    assert out[26] == "A 1 to A 6" and log == []
+    assert range_numbers("A 1 to A 6") == [1, 2, 3, 4, 5, 6]
+    assert _series_ok({26: "AIN1", 27: "AIN2"}, [1, 2])
+    assert not _series_ok({26: "NC", 27: "TEST_0"}, [1, 2])
+    assert not _series_ok({26: "AIN1", 27: "GPO2"}, [1, 2])
+
+
+def test_letter_range_tokens():
+    from src.agentic.repair import letter_range_tokens
+
+    assert letter_range_tokens("SEGA:SEGG, SEGDP") == ["SEGA", "SEGB", "SEGC", "SEGD", "SEGE", "SEGF", "SEGG", "SEGDP"]
+    assert letter_range_tokens("SEGA:SEGG") == ["SEGA", "SEGB", "SEGC", "SEGD", "SEGE", "SEGF", "SEGG"]
+    assert letter_range_tokens("D0-D4") == []
+    assert letter_range_tokens("CSA, CSB") == []
+
+
+def test_page_scoring_prefers_the_ordered_variants_table():
+    from src.agentic.repair import _score_pages
+
+    texts = [
+        (12, "PIN CONFIGURATIONS AND FUNCTION DESCRIPTIONS\n32-LEAD LFCSP\n1 HS O\n27 SDATA\n34 x\n"),
+        (14, "PIN CONFIGURATIONS AND FUNCTION DESCRIPTIONS\n64-LEAD LQFP\n27, 28, 33 NC\n34 TEST_0\n"),
+        (15, "PIN CONFIGURATIONS AND FUNCTION DESCRIPTIONS\n48-LEAD LQFP\n26, 27, 33 to 36 AIN1 to AIN6\n34 AIN4\n"),
+        (81, "REGISTER MAP\nAddress 0x27 0x34 ...\n"),
+    ]
+    ranked = _score_pages(texts, [27, 34], package="LQFP", pin_count=48)
+    assert ranked[0] == 15
+    assert 81 not in ranked[:3]
 
 
 # --- comma-list groups: row-order resolution + permutation constraint ------------------------
@@ -103,6 +163,16 @@ def test_llm_fix_must_be_a_permutation_of_the_group_tokens():
     assert not _fix_matches_tokens({22: "INTA", 33: "INTA"}, ["RTSA", "RTSB"])
 
 
+def test_letter_range_answers_only_need_the_prefix_and_distinctness():
+    from src.agentic.repair import _fix_matches_tokens
+
+    toks = ["SEGA", "SEGB", "SEGC", "SEGD", "SEGE", "SEGF", "SEGG"]
+    # the drawing may include SEGDP even though the label "SEGA:SEGG" omitted it
+    assert _fix_matches_tokens({15: "SEGA", 17: "SEGB", 22: "SEGDP"}, toks, prefix="SEG")
+    assert not _fix_matches_tokens({15: "SEGA", 17: "VDD"}, toks, prefix="SEG")
+    assert not _fix_matches_tokens({15: "SEGA", 17: "SEGA"}, toks, prefix="SEG")
+
+
 # --- POST /agentic ---------------------------------------------------------------------------
 def _client(tmp_path, monkeypatch, extract_status=SUCCEEDED, repair=None):
     import src.api.app as appmod
@@ -128,8 +198,8 @@ def _client(tmp_path, monkeypatch, extract_status=SUCCEEDED, repair=None):
 def test_agentic_returns_repaired_pins_and_usage(tmp_path, monkeypatch):
     seen = {}
 
-    def fake_repair(pins, pdf_path, part_number, repair_model=None, escalation_model=None):
-        seen.update(part_number=part_number, repair_model=repair_model, escalation_model=escalation_model)
+    def fake_repair(pins, pdf_path, part_number, repair_model=None, escalation_model=None, **kw):
+        seen.update(part_number=part_number, repair_model=repair_model, escalation_model=escalation_model, **kw)
         fixed = [dict(p, name=n) for p, n in zip(pins, ["D5", "D6", "D7"])]
         return {"pins": fixed, "changed": 3, "repairs": ["expand 'D5-D7'"], "flags": {"duplicates": [], "unresolved": [], "pin_count": 3},
                 "usage": {"repair_model": "openai/gpt-6-luna", "escalation_model": "anthropic/claude-opus-4.8", "calls": 0,
@@ -146,6 +216,7 @@ def test_agentic_returns_repaired_pins_and_usage(tmp_path, monkeypatch):
     assert body["usage"]["calls"] == 2  # extraction usage untouched
     assert body["usage_total"]["cost_usd"] == pytest.approx(0.001)
     assert seen["part_number"] == "TL16C2550PFBR" and seen["escalation_model"] == "anthropic/claude-opus-4.8"
+    assert seen["package"] == "LQFP" and seen["pin_count"] == 3  # taken from the extraction when the caller sends none
 
 
 def test_agentic_without_llm_still_expands_ranges(tmp_path, monkeypatch):
