@@ -45,8 +45,8 @@ _SECTION_HEADINGS = (
 _FAMILY_TOKENS = (
     "HVSSOP", "VSSOP", "HTSSOP", "TSSOP", "QSOP", "SSOP", "MSOP",
     "SOIC", "SOP",
-    "WSON", "VSON", "USON", "SON",
-    "WQFN", "VQFN", "UQFN", "TQFN", "QFN", "TQFP", "LQFP", "MQFP", "QFP",
+    "WSON", "VSON", "USON", "XSON", "SON",
+    "WQFN", "VQFN", "UQFN", "TQFN", "XQFN", "QFN", "TQFP", "LQFP", "MQFP", "QFP",
     "TDFN", "UDFN", "WDFN", "DFN",
     "PDIP", "CDIP", "SDIP", "DIP",
     "PLCC", "LCCC", "LCC",
@@ -75,6 +75,11 @@ class OrderingMatch:
     pin_count: Optional[int]
     exact: bool
     reason: str
+    # Outline/"Version" drawing code printed on the row (e.g. "SOT833-1"). On a
+    # multi-variant pin table this is what heads the ordered variant's pin-number
+    # column, so it is the key that disambiguates which column to read. Optional
+    # and additive -- None when the datasheet prints no such code.
+    version: Optional[str] = None
 
 
 def _normalize(value: str) -> str:
@@ -104,11 +109,18 @@ def _section_start(text: str) -> int:
 
 
 # A standalone "package cell" as extracted from a real ordering table, where
-# PyMuPDF puts each column on its own line. The parens hold either a drawing
-# code ("SOIC (DW) | 16") or the pin count ("PDIP (16)"); pins may also follow
-# a pipe. Anchored to the whole line so it can't fire on prose.
+# PyMuPDF puts each column on its own line. The pin count may be:
+#   - glued/dashed onto the name, with an optional variant letter, as Nexperia/
+#     NXP print it ("XSON8", "XQFN8U", "TSSOP-8")   -> group 2
+#   - inside parens as a drawing code or count ("SOIC (DW)", "PDIP (16)") -> group 3
+#   - after a pipe ("SOIC (DW) | 16")               -> group 4
+# Anchored to the whole line so it can't fire on prose.
 _PACKAGE_CELL_RE = re.compile(
-    r"^(" + _FAMILY_ALT + r")\b\s*(?:\(([^)]*)\))?\s*(?:[|｜]\s*(\d{1,3}))?\s*$",
+    r"^(" + _FAMILY_ALT + r")"          # 1: family token
+    r"(?:[-\s]?(\d{1,3})[A-Z]?)?"       # 2: glued/dashed pin count + optional variant letter
+    r"\s*(?:\(([^)]*)\))?"              # 3: "(DW)" drawing code or "(8)" pins
+    r"\s*(?:[|｜]\s*(\d{1,3}))?"         # 4: "| 16" pins after a pipe
+    r"\s*$",
     re.IGNORECASE,
 )
 
@@ -120,10 +132,12 @@ def _package_cell(line: str) -> Optional[tuple]:
         return None
     family = m.group(1).upper()
     pins = None
-    if m.group(3):  # after a pipe: "SOIC (DW) | 16"
-        pins = _in_range(m.group(3))
-    elif m.group(2) and m.group(2).strip().isdigit():  # in parens: "PDIP (16)"
-        pins = _in_range(m.group(2).strip())
+    if m.group(4):  # after a pipe: "SOIC (DW) | 16"
+        pins = _in_range(m.group(4))
+    elif m.group(2):  # glued/dashed: "XSON8", "XQFN8U", "TSSOP-8"
+        pins = _in_range(m.group(2))
+    elif m.group(3) and m.group(3).strip().isdigit():  # in parens: "PDIP (16)"
+        pins = _in_range(m.group(3).strip())
     return family, pins
 
 
@@ -183,6 +197,12 @@ def _pn_relation(token_norm: str, target_norm: str) -> Optional[bool]:
     if len(shorter) >= _MIN_PREFIX_LEN and longer.startswith(shorter):
         return False
     return None
+
+
+# A standalone package "Version" / outline drawing code that heads a pin-number
+# column in a multi-variant pin table. Nexperia/NXP/Infineon print SOT codes
+# ("SOT833-1"); extend as other vendors' outline-code forms are encountered.
+_VERSION_RE = re.compile(r"^(SOT\d{2,4}-\d+)$", re.IGNORECASE)
 
 
 def find_ordering_match(text: str, part_number: Optional[str]) -> Optional[OrderingMatch]:
@@ -254,6 +274,14 @@ def find_ordering_match(text: str, part_number: Optional[str]) -> Optional[Order
         if not found:
             continue
 
+        # The outline/Version code, if the row prints one within the same window.
+        version = None
+        for j in range(k + 1, min(k + 7, len(lines))):
+            vm = _VERSION_RE.match(lines[j].strip())
+            if vm:
+                version = vm.group(1).upper()
+                break
+
         package, pins = found
         if not relation and pins:  # a prefix (non-exact) candidate with a count
             prefix_pin_counts.add(pins)
@@ -261,6 +289,7 @@ def find_ordering_match(text: str, part_number: Optional[str]) -> Optional[Order
             f"Ordering table row {token!r} "
             f"({'exact' if relation else 'prefix'} match) -> "
             f"{package}" + (f", {pins} pins" if pins else "")
+            + (f" [{version}]" if version else "")
         )
         # Rank: exact > prefix, then longer token, then has-pin-count.
         key = (1 if relation else 0, len(_normalize(token)), 1 if pins else 0)
@@ -272,6 +301,7 @@ def find_ordering_match(text: str, part_number: Optional[str]) -> Optional[Order
                 pin_count=pins,
                 exact=relation,
                 reason=reason,
+                version=version,
             )
 
     # Ambiguous sibling-prefix collision: the winner is only a prefix match and

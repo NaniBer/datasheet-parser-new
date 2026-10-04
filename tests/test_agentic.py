@@ -238,3 +238,44 @@ def test_agentic_maps_domain_failure(tmp_path, monkeypatch):
 def test_agentic_requires_pdf(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     assert client.post("/agentic").status_code == 400
+
+
+# --- deterministic variant-column read (Option A) ---------------------------------------------
+from src.agentic.repair import read_variant_column
+
+_PIN_DESC = "\n".join([
+    "Table 3.", "Pin description", "Symbol", "Pin", "Description",
+    "SOT505-2 and", "SOT833-1", "SOT902-1",
+    "OE", "1", "7", "output enable input OE (active LOW)",
+    "A", "2", "6", "data input",
+    "B", "3", "5", "data input",
+    "GND", "4", "4", "ground (0 V)",
+    "C", "5", "3", "data input",
+    "D", "6", "2", "data input",
+    "Y", "7", "1", "data output",
+    "VCC", "8", "8", "supply voltage",
+])
+# What extraction actually produced for 74LVC1G99GT: correct names, WRONG (SOT902-1) numbers.
+_EXTRACTED = {1: "Y", 2: "D", 3: "C", 4: "GND", 5: "B", 6: "A", 7: "OE", 8: "VCC"}
+
+
+def test_read_variant_column_picks_ordered_version():
+    got = read_variant_column([(3, _PIN_DESC)], _EXTRACTED, "SOT833-1", pin_count=8)
+    assert got == {1: "OE", 2: "A", 3: "B", 4: "GND", 5: "C", 6: "D", 7: "Y", 8: "VCC"}
+
+
+def test_read_variant_column_other_version_is_the_other_column():
+    got = read_variant_column([(3, _PIN_DESC)], _EXTRACTED, "SOT902-1", pin_count=8)
+    assert got == {1: "Y", 2: "D", 3: "C", 4: "GND", 5: "B", 6: "A", 7: "OE", 8: "VCC"}
+
+
+def test_read_variant_column_fails_closed():
+    # version absent from the table
+    assert read_variant_column([(3, _PIN_DESC)], _EXTRACTED, "SOT999-9", pin_count=8) is None
+    # name-set mismatch (extraction carries a name the table lacks)
+    bad = dict(_EXTRACTED); bad[1] = "ZZZ"
+    assert read_variant_column([(3, _PIN_DESC)], bad, "SOT833-1", pin_count=8) is None
+    # no parseable table
+    assert read_variant_column([(1, "just prose mentioning SOIC pins")], _EXTRACTED, "SOT833-1") is None
+    # pin-count guard
+    assert read_variant_column([(3, _PIN_DESC)], _EXTRACTED, "SOT833-1", pin_count=16) is None
