@@ -393,6 +393,104 @@ def expand_groups_deterministic(pins: Dict[int, str]) -> Tuple[Dict[int, str], L
     return out, log
 
 
+# A package "Version"/outline code as it appears in a pin-table column header
+# ("SOT833-1"). Used to identify which number column belongs to the ordered
+# variant on a multi-variant pin-description table.
+_VER_TOKEN = re.compile(r"SOT\d{2,4}-\d+", re.IGNORECASE)
+
+
+def read_variant_column(
+    texts: List[Tuple[int, str]],
+    names: Dict[int, str],
+    version: str,
+    pin_count: Optional[int] = None,
+) -> Optional[Dict[int, str]]:
+    """Read the ordered variant's pin-number column straight from a multi-variant
+    pin-description table. Pure text, NO LLM. Returns ``{number: name}`` for the
+    column headed by ``version``, or ``None`` when the table cannot be parsed
+    unambiguously (fail closed -> the caller keeps its existing pins).
+
+    Table layout handled (as PyMuPDF extracts it, one cell per line)::
+
+        Symbol / Pin / Description
+        SOT505-2 and / SOT833-1 / SOT902-1     <- K number-columns, grouped by "and"/","
+        OE / 1 / 7 / output enable ...          <- name, K numbers, description
+        A  / 2 / 6 / data input
+        ...
+
+    Only ACTS when: ``version`` heads one of >= 2 number columns, every extracted
+    name is found as a row with exactly K integers, and the recovered name-set is
+    identical to ``names`` (we only re-number, never rename). Any deviation -> None.
+    """
+    if not version or not names:
+        return None
+    want = version.upper().replace(" ", "")
+    name_set = {str(v).strip().upper() for v in names.values() if str(v).strip()}
+    if not name_set:
+        return None
+
+    lines: List[str] = []
+    for _, t in texts:
+        lines.extend(ln.strip() for ln in t.splitlines())
+    n = len(lines)
+
+    for start in range(n):
+        if not _VER_TOKEN.search(lines[start]):
+            continue
+        # Build the column groups from the contiguous run of version-header lines,
+        # merging a line into the next when it ends with "and"/"," (a shared column).
+        groups: List[set] = []
+        cur: set = set()
+        j = start
+        while j < n:
+            toks = [m.group(0).upper().replace(" ", "") for m in _VER_TOKEN.finditer(lines[j])]
+            if not toks:
+                break
+            cur.update(toks)
+            if re.search(r"(?:\band\b|[,&])\s*$", lines[j], re.IGNORECASE):
+                pass  # shared column continues onto the next line
+            else:
+                groups.append(cur)
+                cur = set()
+            j += 1
+        if cur:
+            groups.append(cur)
+
+        col = next((i for i, g in enumerate(groups) if want in g), None)
+        if col is None or len(groups) < 2:
+            continue  # not the multi-variant header we need; keep scanning
+        K = len(groups)
+
+        # Walk the data rows: a known name line, then exactly K integer lines.
+        result: Dict[int, str] = {}
+        seen: set = set()
+        p = j
+        while p < n and len(seen) < len(name_set):
+            up = lines[p].upper()
+            if up in name_set and up not in seen:
+                nums: List[int] = []
+                q = p + 1
+                while q < n and len(nums) < K and re.fullmatch(r"\d{1,3}", lines[q]):
+                    nums.append(int(lines[q]))
+                    q += 1
+                if len(nums) == K:
+                    result[nums[col]] = up
+                    seen.add(up)
+                    p = q
+                    continue
+            p += 1
+            if p - j > 500:  # runaway guard: never scan unboundedly
+                break
+
+        # Validate: exact bijection over the whole extracted name-set.
+        if seen == name_set and len(result) == len(name_set):
+            if pin_count and len(result) != pin_count:
+                return None
+            return result
+        return None  # header matched but the rows didn't -> fail closed
+    return None
+
+
 # --------------------------------------------------------------------------- entry point
 def repair_pins(
     pins: List[dict],
@@ -452,9 +550,33 @@ def repair_pins(
         log.append(f"page text unavailable ({type(exc).__name__}); only deterministic repairs applied")
 
     # 1) package-column check ---------------------------------------------------------------
+    # 1a) Deterministic first: if the datasheet's ordering table grounds the exact
+    # ordered variant (its Version/outline code, e.g. SOT833-1) and the multi-variant
+    # pin-description table can be read straight, take that variant's number column
+    # verbatim -- no LLM, no guessing. Fails closed to the LLM check below when the
+    # ordering table or the pin table can't be parsed unambiguously.
+    column_resolved = False
+    if part_number and pdf_path.is_file():
+        try:
+            from ..pdf_extractor.ordering_table import find_ordering_match, full_pdf_text
+            fitz_text = full_pdf_text(str(pdf_path))
+            om = find_ordering_match(fitz_text, part_number)
+            if om and om.version:
+                det = read_variant_column([(0, fitz_text)], names, om.version, om.pin_count)
+                if det:
+                    names = det
+                    package = om.package or package
+                    column_resolved = True
+                    log.append(
+                        f"column (deterministic) [{om.version}]: read {len(det)} pins "
+                        f"from the pin table; LLM column-check skipped"
+                    )
+        except Exception as exc:  # noqa: BLE001 - never lose the extraction to a repair bug
+            log.append(f"deterministic column read skipped: {type(exc).__name__}: {exc}")
+
     ctx = _page_context(texts, list(names), package=package, pin_count=pin_count) if texts else []
     pkg_cols = {m.group(1).upper() for _, t in ctx for m in _PKG_TOKENS.finditer(t)}
-    if len(pkg_cols) >= 2 and ctx:
+    if not column_resolved and len(pkg_cols) >= 2 and ctx:
         order_txt = "\n".join(t[:3000] for _, t in texts if "ORDERING" in t.upper())[:4000]
         prompt = (
             f"Part number ordered: {part_number or 'unknown'}. Packages mentioned on the pin page: {sorted(pkg_cols)}.\n"

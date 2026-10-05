@@ -3306,6 +3306,65 @@ def test_ordering_grounding_is_additive_when_absent():
     assert sel.package["type"] == "SON-8"
 
 
+def test_package_cell_glued_name_and_count():
+    # NXP/Nexperia glue the pin count onto the package name, with no separator
+    # ("XSON8"), which the TI-style `FAMILY (pins)` parser could not read.
+    from src.pdf_extractor.ordering_table import _package_cell
+    assert _package_cell("TSSOP8") == ("TSSOP", 8)
+    assert _package_cell("XSON8") == ("XSON", 8)
+    assert _package_cell("XQFN8U") == ("XQFN", 8)   # trailing variant letter ignored
+    assert _package_cell("SON8") == ("SON", 8)
+    assert _package_cell("TSSOP-8") == ("TSSOP", 8)  # dashed form too
+    # Existing TI / ADI forms must still parse (regression guard).
+    assert _package_cell("SOIC (DW) | 16") == ("SOIC", 16)
+    assert _package_cell("TO-100 (10)") == ("TO-100", 10)
+    assert _package_cell("SON") == ("SON", None)
+    # A drawing/version code is not a package cell (833 is out of pin range).
+    assert _package_cell("SOT833-1") is None
+    # Anchored to the whole line: a family token inside prose must not match.
+    assert _package_cell("SOPRANO singer") is None
+
+
+# Nexperia/NXP ordering table, as PyMuPDF extracts it: one column-cell per line,
+# the package Name and pin count glued ("XSON8"), the Version on its own line.
+_NXP_ORDERING = (
+    "Ordering information\n"
+    "Type number\nPackage\nTemperature range\nName\nDescription\nVersion\n"
+    "74LVC1G99DP\n-40 C to +125 C\nTSSOP8\n"
+    "plastic thin shrink small outline package; 8 leads;\n"
+    "body width 3 mm; lead length 0.5 mm\nSOT505-2\n"
+    "74LVC1G99GT\n-40 C to +125 C\nXSON8\n"
+    "plastic extremely thin small outline package; no leads;\n"
+    "8 terminals; body 1 x 1.95 x 0.5 mm\nSOT833-1\n"
+    "74LVC1G99GM\n-40 C to +125 C\nXQFN8U\n"
+    "plastic extremely thin quad flat package; no leads;\n"
+    "8 terminals; UTLP based; body 1.6 x 1.6 x 0.5 mm\nSOT902-1\n"
+)
+
+
+def test_ordering_table_nxp_glued_variants():
+    # Each ordered suffix resolves to its own leadless family -- the exact thing
+    # that lets extraction tell XSON8 (GT) from XQFN8U (GM).
+    m = find_ordering_match(_NXP_ORDERING, "74LVC1G99GT")
+    assert m is not None and m.exact
+    assert m.package == "XSON" and m.pin_count == 8
+    m = find_ordering_match(_NXP_ORDERING, "74LVC1G99GM")
+    assert m is not None and m.package == "XQFN" and m.pin_count == 8
+    m = find_ordering_match(_NXP_ORDERING, "74LVC1G99DP")
+    assert m is not None and m.package == "TSSOP" and m.pin_count == 8
+
+
+def test_ordering_match_captures_version_code():
+    # The Version/outline code (SOT833-1) is the key that heads a pin-number
+    # column in a multi-variant pin table -- capture it for column selection.
+    m = find_ordering_match(_NXP_ORDERING, "74LVC1G99GT")
+    assert m is not None and m.version == "SOT833-1"
+    m = find_ordering_match(_NXP_ORDERING, "74LVC1G99GM")
+    assert m is not None and m.version == "SOT902-1"
+    m = find_ordering_match(_NXP_ORDERING, "74LVC1G99DP")
+    assert m is not None and m.version == "SOT505-2"
+
+
 # Fix 1 (fallback): when the deterministic parser can't read a vendor's
 # ordering-table layout, the LLM reads it -- but its answer is trusted only
 # after grounding against the document text.
