@@ -57,6 +57,11 @@ _POWER_TAB_ALIASES = {
     "D2PAK": "D2PAK",
 }
 
+# Geometry aliases whose canonical family token differs from the alias itself,
+# so they reuse an existing real pad grid: LFCSP is ADI's QFN (same leadless
+# perimeter grid) and XSON is a leadless SON variant (e.g. SOT833-1).
+_GEOMETRY_CANONICAL = {"LFCSP": "QFN", "XSON": "SON"}
+
 
 def _family(package_type: str) -> Optional[str]:
     """
@@ -78,10 +83,21 @@ def _family(package_type: str) -> Optional[str]:
     for alias in PACKAGE_TYPE_ALIASES:
         stripped = _strip(alias)
         if normalized.startswith(stripped) and not normalized[len(stripped):len(stripped) + 1].isalpha():
-            matches.append((stripped, stripped))
+            matches.append((stripped, _GEOMETRY_CANONICAL.get(stripped, stripped)))
     for stripped, canonical in _POWER_TAB_ALIASES.items():
         if normalized.startswith(stripped) and not normalized[len(stripped):len(stripped) + 1].isalpha():
             matches.append((stripped, canonical))
+    # Whole-word fallback for suffix forms like "32-LEAD LFCSP": the prefix
+    # match above only catches a family token at the start of the string.
+    if not matches:
+        tokens = set(re.split(r"[^A-Z0-9]+", (package_type or "").upper()))
+        for alias in PACKAGE_TYPE_ALIASES:
+            stripped = _strip(alias)
+            if stripped in tokens:
+                matches.append((stripped, _GEOMETRY_CANONICAL.get(stripped, stripped)))
+        for stripped, canonical in _POWER_TAB_ALIASES.items():
+            if stripped in tokens:
+                matches.append((stripped, canonical))
     return max(matches, key=lambda m: len(m[0]))[1] if matches else None
 
 

@@ -8,6 +8,7 @@ dimensions and can be customized as needed.
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from typing import Tuple, List, Optional
 from enum import Enum
@@ -692,6 +693,8 @@ PACKAGE_TYPE_ALIASES = {
     "DFN": PackageType.DFN,
     "WSON": PackageType.WSON,
     "SON": PackageType.SON,
+    # XSON is a leadless SON variant (e.g. SOT833-1); same geometry class as SON.
+    "XSON": PackageType.SON,
 
     # SOIC aliases ("SO-8" is the classic small-outline name for SOIC-8;
     # SOT23-5/6/8 are dual-row gull-wing per JEDEC MO-178, so the SOIC
@@ -706,8 +709,10 @@ PACKAGE_TYPE_ALIASES = {
     "LQFP": PackageType.LQFP,
     "QFP": PackageType.TQFP,
 
-    # QFN aliases
+    # QFN aliases (LFCSP is ADI's QFN-with-exposed-pad: same leadless perimeter
+    # pad grid, so the QFN geometry is exact — not a lossy approximation.)
     "QFN": PackageType.QFN,
+    "LFCSP": PackageType.QFN,
 
     # BGA aliases
     "BGA": PackageType.BGA,
@@ -722,6 +727,31 @@ PACKAGE_TYPE_ALIASES = {
 LOSSY_ALIASES = {"TSOP", "SSOP", "MSOP", "SOP", "LGA"}
 
 
+def _match_alias_key(normalized: str) -> Optional[str]:
+    """Resolve a PACKAGE_TYPE_ALIASES key from an upper-cased package string.
+
+    Resolution order, longest alias first so the short "SO" never shadows
+    "SON"/"SOIC":
+      1. exact key                         ("QFN")
+      2. family at the start               ("LQFP64" -> LQFP), next char not a
+         letter so "SO-8" matches SO but "SOT-23" does not
+      3. family as a whole word anywhere   ("32-LEAD LFCSP" -> LFCSP) — datasheet
+         package fields often put the family token last, after a lead count.
+
+    Returns the matched alias key, or None when nothing matches.
+    """
+    if normalized in PACKAGE_TYPE_ALIASES:
+        return normalized
+    for alias in sorted(PACKAGE_TYPE_ALIASES, key=len, reverse=True):
+        if normalized.startswith(alias) and not normalized[len(alias):len(alias) + 1].isalpha():
+            return alias
+    tokens = set(re.split(r"[^A-Z0-9]+", normalized))
+    for alias in sorted(PACKAGE_TYPE_ALIASES, key=len, reverse=True):
+        if alias in tokens:
+            return alias
+    return None
+
+
 def parse_package_type(package_str: str) -> PackageType:
     """
     Parse package type from string (e.g., "LQFP64" -> PackageType.LQFP).
@@ -734,25 +764,14 @@ def parse_package_type(package_str: str) -> PackageType:
     """
     normalized = (package_str or "").upper().strip()
 
-    def _resolve(alias: str) -> PackageType:
+    alias = _match_alias_key(normalized)
+    if alias is not None:
         if alias in LOSSY_ALIASES:
             logger.warning(
                 "Package type '%s' has no dedicated geometry; approximating with %s",
                 package_str, PACKAGE_TYPE_ALIASES[alias].value,
             )
         return PACKAGE_TYPE_ALIASES[alias]
-
-    # Try direct match
-    if normalized in PACKAGE_TYPE_ALIASES:
-        return _resolve(normalized)
-
-    # Try prefix match (e.g., "LQFP64" -> "LQFP"); longest alias wins so
-    # the short "SO" alias cannot shadow SON/SOP/SOIC, and the character
-    # after the alias must not be a letter ("SO-8" matches SO, "SOT-23"
-    # must not — SOT is a different, unsupported family).
-    for alias in sorted(PACKAGE_TYPE_ALIASES, key=len, reverse=True):
-        if normalized.startswith(alias) and not normalized[len(alias):len(alias) + 1].isalpha():
-            return _resolve(alias)
 
     raise SchematicGenerationError(
         f"Unknown package type '{package_str}'. Supported families: "
@@ -772,23 +791,13 @@ def lossy_approximation_reason(package_str: str) -> Optional[str]:
     dimensionally faithful, so the GLB is watermarked and the run exits degraded.
     """
     normalized = (package_str or "").upper().strip()
-
-    def _reason(alias: str) -> Optional[str]:
-        if alias in LOSSY_ALIASES:
-            return (
-                f"Package '{package_str}' has no dedicated geometry; "
-                f"approximated with {PACKAGE_TYPE_ALIASES[alias].value} "
-                "(pad grid may not match the datasheet)."
-            )
-        return None
-
-    if normalized in PACKAGE_TYPE_ALIASES:
-        return _reason(normalized)
-
-    for alias in sorted(PACKAGE_TYPE_ALIASES, key=len, reverse=True):
-        if normalized.startswith(alias) and not normalized[len(alias):len(alias) + 1].isalpha():
-            return _reason(alias)
-
+    alias = _match_alias_key(normalized)
+    if alias in LOSSY_ALIASES:
+        return (
+            f"Package '{package_str}' has no dedicated geometry; "
+            f"approximated with {PACKAGE_TYPE_ALIASES[alias].value} "
+            "(pad grid may not match the datasheet)."
+        )
     return None
 
 
