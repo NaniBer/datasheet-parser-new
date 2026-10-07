@@ -1305,16 +1305,16 @@ def test_enforce_known_package_type_raises_without_force():
     assert pin_data.package.type == "WLCSP-8", "package must not be mutated on failure"
 
 
-def test_enforce_known_package_type_force_substitutes_dip_and_flags():
+def test_enforce_known_package_type_force_substitutes_smd_and_flags():
     from src.main import enforce_known_package_type
 
     pin_data = _unknown_package_pin_data()
     enforce_known_package_type(pin_data, force_best_effort=True)
 
-    # Substitution is explicit: type rewritten and recorded so the GLB
-    # gets the unvalidated watermark.
-    assert pin_data.package.type == "DIP-8"
-    assert any("WLCSP-8" in e and "DIP-8" in e for e in pin_data.validation_errors)
+    # Substitution is explicit and surface-mount (SON), never a through-hole
+    # DIP: type rewritten and recorded so the GLB gets the unvalidated watermark.
+    assert pin_data.package.type == "SON-8"
+    assert any("WLCSP-8" in e and "SON-8" in e for e in pin_data.validation_errors)
 
 
 def test_enforce_known_package_type_force_substitutes_multi_package_variant():
@@ -1333,7 +1333,7 @@ def test_enforce_known_package_type_force_substitutes_multi_package_variant():
     )
     enforce_known_package_type(pin_data, force_best_effort=True)
 
-    assert pin_data.packages[0]["type"] == "DIP-8"
+    assert pin_data.packages[0]["type"] == "SON-8"
     assert pin_data.validation_errors
 
 

@@ -1189,10 +1189,15 @@ def enforce_known_package_type(
 
     Unknown package types used to render silently as DIP. Now they raise
     SchematicGenerationError unless --force-best-effort is set, in which
-    case the DIP substitution is made explicit: the selected package type
-    is rewritten to "DIP-<pin_count>" and the substitution is recorded in
-    pin_data.validation_errors (which triggers the GLB unvalidated
-    watermark).
+    case the substitution is made explicit: the selected package type is
+    rewritten to "SON-<pin_count>" and recorded in pin_data.validation_errors
+    (which triggers the GLB unvalidated watermark).
+
+    The fallback is a leadless surface-mount package (SON), NOT a through-hole
+    DIP: almost every unrecognized modern part is SMD, so defaulting to drilled
+    through-holes produced an unsolderable board (e.g. an SMD LFCSP rendered as
+    a DIP with real drills). SON keeps the DIP's 2-row pin arrangement but on
+    SMD pads, so a wrong guess is at least the right mount type.
     """
     from .schematic_generator import parse_package_type
 
@@ -1208,13 +1213,15 @@ def enforce_known_package_type(
     except SchematicGenerationError as e:
         if not force_best_effort:
             raise SchematicGenerationError(
-                f"{e} Re-run with --force-best-effort to substitute DIP "
-                "geometry (output will be marked unvalidated).",
+                f"{e} Re-run with --force-best-effort to substitute surface-mount "
+                "(SON) geometry (output will be marked unvalidated).",
                 error_code=ErrorCodes.PACKAGE_UNKNOWN,
                 details=e.details,
             )
 
-    substitute = f"DIP-{pin_count}"
+    # SMD leadless fallback, not a through-hole DIP: an unrecognized part is
+    # almost always SMD, and drilling holes for it ships an unsolderable board.
+    substitute = f"SON-{pin_count}"
     message = (
         f"Unknown package type '{package_type}'; substituted {substitute} "
         "geometry (--force-best-effort)"
@@ -2050,8 +2057,8 @@ def process_datasheet(
             print(f"  Selection reason: {selected_package.reason}")
 
         # Fail closed on unknown package geometry before any builder runs;
-        # with --force-best-effort this substitutes explicit DIP geometry
-        # and records it in validation_errors instead (ARCH-006).
+        # with --force-best-effort this substitutes explicit surface-mount
+        # (SON) geometry and records it in validation_errors instead (ARCH-006).
         enforce_known_package_type(
             pin_data,
             part_number=resolved_part_number,
@@ -2648,7 +2655,8 @@ def _run_cli():
             sys.exit(EXIT_DOMAIN_FAILURE)
 
         # Fail closed on unknown package geometry (ARCH-006); with
-        # --force-best-effort this substitutes explicit DIP geometry instead.
+        # --force-best-effort this substitutes explicit surface-mount (SON)
+        # geometry instead.
         try:
             enforce_known_package_type(
                 pin_data,
