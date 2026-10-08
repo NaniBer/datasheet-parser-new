@@ -33,6 +33,31 @@ from src.models.pin_data import PinData, PackageInfo, Pin
     ("D3", "input", "data"),
     ("PA5", "bidirectional", "io"),
     ("PD13", "bidirectional", "io"),
+    # regulator / LDO outputs the part sources -> power_out (AD9106 CLDO/DLDOx)
+    ("CLDO", "power_out", "supply"),
+    ("DLDO1", "power_out", "supply"),
+    ("DLDO2", "power_out", "supply"),
+    # adjust/set and sense pins -> passive/analog (AD9106 FSADJ2/CAL_SENSE)
+    ("FSADJ2", "passive", "analog"),
+    ("CAL_SENSE", "passive", "analog"),
+    ("VADJ", "passive", "analog"),
+    ("ISENSE", "passive", "analog"),
+    # analog/digital supply rails with domain tags / +- (PGA2311 VD+/VA+/VA-)
+    ("VD+", "power_in", "supply"),
+    ("VA+", "power_in", "supply"),
+    ("VA-", "power_in", "ground"),
+    ("AVDD", "power_in", "supply"),
+    ("DVDD", "power_in", "supply"),
+    ("VDDIO", "power_in", "supply"),
+    # ground rails with channel suffix (PGA2311 AGNDR/AGNDL)
+    ("AGNDR", "power_in", "ground"),
+    ("AGNDL", "power_in", "ground"),
+    ("DGND", "power_in", "ground"),
+    # SD/MMC data + command lines are bidirectional (693072010801)
+    ("DAT0", "bidirectional", "data"),
+    ("DAT2", "bidirectional", "data"),
+    ("CD/DAT3", "bidirectional", "data"),
+    ("CMD", "bidirectional", "data"),
 ])
 def test_classify_known_names(name, etype, role):
     t, r, _ = classify_pin_name(name)
