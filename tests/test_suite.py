@@ -2554,10 +2554,37 @@ def test_schematic_quad_side_codes(tmp_path):
         e = n.extras or {}
         if "id" in e:
             sides.setdefault(e["side"], set()).add(int(e["id"][0]))
-    assert sides[0] == {1, 2, 3, 4, 5}
+    # QFN is leadless, so pin 21 is the exposed thermal pad (EPAD), appended to
+    # the left column. The 20 real pins keep their counterclockwise side codes.
+    assert sides[0] == {1, 2, 3, 4, 5, 21}
     assert sides[3] == {6, 7, 8, 9, 10}
     assert sides[2] == {11, 12, 13, 14, 15}
     assert sides[1] == {16, 17, 18, 19, 20}
+
+
+def test_leadless_symbol_has_epad_pin(tmp_path):
+    # SCH / FP-02: a leadless QFN symbol carries an EPAD pin (pin N+1, passive,
+    # thermal) so the exposed pad can be wired to ground; a DIP must not.
+    from pygltflib import GLTF2
+    from src.schematic_generator.pinout_diagram_builder import build_pinout_diagram
+
+    def _epad_pins(pkg, n):
+        out = tmp_path / f"{pkg}.glb"
+        pins = [{"number": str(i), "name": f"P{i}"} for i in range(1, n + 1)]
+        assert build_pinout_diagram(pkg, n, "IC", pins, str(out))
+        g = GLTF2().load(str(out))
+        return [
+            (e.get("pinName"), e.get("electricalType"), e.get("role"))
+            for node in g.nodes
+            for e in [node.extras or {}]
+            if (e.get("pinName") or "").upper() == "EPAD"
+        ]
+
+    # The pin appears on both the pin-group node (full extras) and its label
+    # mesh (pinName only); assert the fully-typed EPAD pin is present.
+    qfn = _epad_pins("QFN-20", 20)
+    assert ("EPAD", "passive", "thermal") in qfn, qfn
+    assert _epad_pins("DIP-8", 8) == []
 
 
 def test_glb_pin_extras_match_pad_spec(tmp_path):

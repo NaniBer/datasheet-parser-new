@@ -177,6 +177,19 @@ class PinoutDiagramBuilder:
         # Calculate pin positions
         self.pin_positions = layout_pins(self.params, layout_arg)
 
+        # SCH / FP-02: leadless packages (QFN/LFCSP/DFN/SON) carry an exposed
+        # thermal pad that must be tied to ground. Mirror the footprint's
+        # exposed pad with a symbol pin (numbered pin_count+1, name EPAD) so the
+        # netlist can connect it. Appended as one extra pin below the left
+        # column, leaving the real pins' positions untouched.
+        from ..package_types.footprint_defaults import _family as _fp_family
+        self._has_exposed_pad = _fp_family(package_type) in ("QFN", "DFN", "WSON", "SON")
+        self._exposed_pad_number = str(pin_count + 1) if self._has_exposed_pad else None
+        if self._has_exposed_pad:
+            epad_pos = self._exposed_pad_position()
+            if epad_pos is not None:
+                self.pin_positions.append(epad_pos)
+
         logger.info(
             "Initialized schematic builder for %s (%d pins)" % (package_type, pin_count)
         )
@@ -384,6 +397,48 @@ class PinoutDiagramBuilder:
 
         return pin_assy
 
+    def _exposed_pad_position(self) -> Optional[PinPosition]:
+        """PinPosition for the exposed-pad (EPAD) pin.
+
+        Clones the geometry of the lowest left-side pin and drops it one pitch
+        lower, so the EPAD renders with the same rotation/text conventions and
+        the 32 real pins keep their positions. Returns None if there is no left
+        pin to anchor to (then the EPAD pin is simply omitted).
+        """
+        left = [p for p in self.pin_positions if p.side == "left"]
+        ref = min(left, key=lambda p: p.y) if left else (
+            self.pin_positions[-1] if self.pin_positions else None
+        )
+        if ref is None:
+            return None
+        y = ref.y - self.params.pin_pitch
+        return PinPosition(
+            pin_index=len(self.pin_positions),
+            pin_number=self._exposed_pad_number,
+            x=ref.x, y=y, side=ref.side, rotation=ref.rotation,
+            text_x=ref.text_x, text_y=y, text_halign=ref.text_halign,
+            num_x=ref.num_x, num_y=y, num_halign=ref.num_halign,
+        )
+
+    def _augment_pin_data(self, pin_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Append the EPAD pin to the pin list for leadless parts (idempotent).
+
+        Typed passive / role thermal so the extras + netlist treat it as the
+        grounded exposed pad.
+        """
+        if not self._has_exposed_pad:
+            return pin_data
+        if any(str(p.get("number")) == self._exposed_pad_number for p in pin_data):
+            return pin_data
+        return list(pin_data) + [{
+            "number": self._exposed_pad_number,
+            "name": "EPAD",
+            "electrical_type": "passive",
+            "role": "thermal",
+            "active_low": False,
+            "nc": False,
+        }]
+
     def build_all_pins(
         self, pin_data: List[Dict[str, Any]]
     ) -> cq.Assembly:
@@ -563,6 +618,10 @@ class PinoutDiagramBuilder:
         """
         try:
             logger.info("Building schematic for %s..." % output_path)
+
+            # SCH: add the exposed-pad (EPAD) pin for leadless parts so both the
+            # drawn symbol and the extras maps below include it.
+            pin_data = self._augment_pin_data(pin_data)
 
             # Build schematic assembly
             assembly = self.build_schematic(pin_data)
