@@ -827,6 +827,34 @@ class PcbFootprintBuilder:
 
         return markers_assy
 
+    # Pin-number legend text metrics. The OCC stroke font renders a digit about
+    # 0.53x the requested size wide and a numeral about 0.73x tall; we take a
+    # safe upper bound on each so the fitted number is guaranteed to stay inside
+    # the copper, never a hair over.
+    _NUM_CHAR_WIDTH = 0.60   # drawn width per character, as a fraction of size
+    _NUM_TEXT_HEIGHT = 0.75  # drawn cap height, as a fraction of size
+    _NUM_PAD_FILL = 0.90     # keep the number within 90% of the pad extent
+    _NUM_BASE_SIZE = 0.8     # reference-GLB size; never enlarged beyond this
+    _NUM_MIN_SIZE = 0.15     # legible floor; below this the number is unreadable anyway
+
+    def _fit_number_size(self, pin_number: str, avail_x: float, avail_y: float) -> float:
+        """Scale the pad-number text so it fits inside its own pad (FP-07/FP-10).
+
+        On fine-pitch quad packages a fixed 0.8 mm number is wider than the pad
+        (and the pitch), so two-digit labels bleed across neighbouring pads into
+        an unreadable strip. The number is shrunk until its drawn bounding box
+        fits within ``_NUM_PAD_FILL`` of the pad's own X and Y extents; it is
+        never grown past the reference ``_NUM_BASE_SIZE``, so pads already larger
+        than the text (DIP/SOIC/through-hole) keep the original size unchanged.
+        """
+        n = max(len(str(pin_number)), 1)
+        size = self._NUM_BASE_SIZE
+        if avail_x > 0:
+            size = min(size, self._NUM_PAD_FILL * avail_x / (self._NUM_CHAR_WIDTH * n))
+        if avail_y > 0:
+            size = min(size, self._NUM_PAD_FILL * avail_y / self._NUM_TEXT_HEIGHT)
+        return max(size, self._NUM_MIN_SIZE)
+
     def build_pin(self, pin_pos: PinPosition, pin_name: str = "", pin_number: str = "") -> cq.Assembly:
         """
         Build pin components (leg, text, pin number).
@@ -932,8 +960,12 @@ class PcbFootprintBuilder:
             copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
             pin_assy.add(copper_pad_assy)
 
-        # Pin number text (white, matching reference mat8)
-        text_size = 0.8
+        # Pin number text (white, matching reference mat8). The glyph is scaled
+        # to fit inside this pad's own copper so fine-pitch two-digit numbers no
+        # longer overflow the pad / pitch (FP-07/FP-10). The pad bbox honours the
+        # IPC rect size and any corner-relief length override.
+        px0, px1, py0, py1 = self._pad_bbox(pin_pos)
+        text_size = self._fit_number_size(pin_number, px1 - px0, py1 - py0)
         text_height = 0.2
         pin_text = cq.Workplane("XY").center(
             x, y

@@ -59,3 +59,13 @@ def test_dip_has_no_exposed_pad():
     # Leaded / through-hole parts must NOT get an exposed pad.
     assert not PcbFootprintBuilder("DIP-8", 8, "U")._has_exposed_pad
     assert not PcbFootprintBuilder("SOIC-8", 8, "U")._has_exposed_pad
+
+
+def test_pad_number_shrinks_to_fit_fine_pitch_pad():
+    # FP-10: a fixed-size pin number overflowed fine-pitch pads; the number is
+    # now scaled to fit inside its own pad (and the 0.5 mm pitch), never enlarged.
+    b = PcbFootprintBuilder("TQFP-48", 48, "U")
+    fine = b._fit_number_size("48", 0.29, 1.3)   # two digits on a 0.29 mm-wide pad
+    assert fine < 0.29 and fine < 0.5             # inside the pad and the pitch
+    # Large pads keep the reference size (no regression on DIP/SOIC/through-hole).
+    assert b._fit_number_size("8", 1.5, 1.5) == 0.8
