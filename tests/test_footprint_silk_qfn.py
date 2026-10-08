@@ -42,9 +42,20 @@ def test_leaded_packages_keep_their_original_silk(pkg, n, segments):
 
 
 def test_qfn48_footprint_glb_passes_hierarchy_validation(tmp_path):
+    # FP-02: a QFN carries a central exposed thermal pad, so it has one extra
+    # Legs child (pin 49) and must validate with exposed_pad=True.
     b = PcbFootprintBuilder("QFN-48", 48, "U")
+    assert b._has_exposed_pad
     pins = [{"number": i, "name": f"P{i}"} for i in range(1, 49)]
     out = tmp_path / "qfn48_footprint.glb"
     assert b.save_glb(str(out), pins)
-    ok, errors = validate_pcb_footprint_glb(str(out), pin_count=48, through_hole=False)
+    ok, errors = validate_pcb_footprint_glb(
+        str(out), pin_count=48, through_hole=False, exposed_pad=True
+    )
     assert ok, errors
+
+
+def test_dip_has_no_exposed_pad():
+    # Leaded / through-hole parts must NOT get an exposed pad.
+    assert not PcbFootprintBuilder("DIP-8", 8, "U")._has_exposed_pad
+    assert not PcbFootprintBuilder("SOIC-8", 8, "U")._has_exposed_pad

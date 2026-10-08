@@ -205,9 +205,13 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         # Leadless: terminals sit on the underside at the body edge, so the
         # molded body IS the E/D span. Publish it as E1/D1 too, so the drawn
         # fab outline is sourced from a real body dimension (not a lead span).
+        # D2/E2 is the exposed thermal pad: datasheet dims override, but when
+        # absent ~0.65x body is a safe JEDEC-typical default (QFN EPs run
+        # ~0.5-0.75 of body). Real datasheet D2/E2 flows in via extracted_dims.
         body = _QFN_BODY.get(pin_count, round((pin_count // 4 - 1) * 0.5 + 1.5, 2))
+        ep = round(body * 0.65, 2)
         return {"e": 0.5, "E": body, "E1": body, "D": body, "D1": body,
-                "b": 0.25, "L": 0.4}
+                "b": 0.25, "L": 0.4, "D2": ep, "E2": ep}
 
     if family in ("DFN", "WSON", "SON"):
         # Leadless, like QFN: body edge = terminal span, so E1 = E and D1 = D.
@@ -215,6 +219,7 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         # pad-clearance clamp only tightens it where the body would overlap pads.
         pitch = _DFN_PITCH.get(pin_count, 0.5)
         body_l = max(3.0, _dual_row_body_length(pin_count, pitch, margin=0.7))
+        # Exposed pad ~0.6x body (datasheet D2/E2 overrides via extracted_dims).
         return {
             "e": pitch,
             "E": 3.0,
@@ -223,6 +228,8 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
             "D1": body_l,
             "b": 0.3,
             "L": 0.4,
+            "D2": round(body_l * 0.6, 2),
+            "E2": round(3.0 * 0.6, 2),
         }
 
     if family in ("QFP", "LQFP", "TQFP"):

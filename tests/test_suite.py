@@ -1260,7 +1260,10 @@ def test_aliased_package_families_generate_valid_footprints(tmp_path, package_ty
 
     assert build_pcb_footprint(package_type, pin_count, "TEST", pins, str(output_path))
 
-    is_valid, errors = validate_pcb_footprint_glb(str(output_path), pin_count=pin_count, through_hole=False)
+    # Leadless families (WSON/SON/DFN) carry a central exposed thermal pad.
+    is_valid, errors = validate_pcb_footprint_glb(
+        str(output_path), pin_count=pin_count, through_hole=False, exposed_pad=True
+    )
     assert is_valid, errors
     assert output_path.stat().st_size > 0
 
@@ -1490,7 +1493,10 @@ def test_full_pipeline_dfn_pdf_to_pcb_footprint_glb(monkeypatch, tmp_path):
     assert output_path.exists()
     assert output_path.stat().st_size > 0
 
-    is_valid, errors = validate_pcb_footprint_glb(str(output_path), pin_count=pin_count, through_hole=False)
+    # DFN is leadless: it carries a central exposed thermal pad (pin N+1).
+    is_valid, errors = validate_pcb_footprint_glb(
+        str(output_path), pin_count=pin_count, through_hole=False, exposed_pad=True
+    )
     assert is_valid, f"GLB validation failed: {errors}"
 
 

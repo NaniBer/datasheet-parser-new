@@ -345,6 +345,24 @@ def _copper_pad_boxes(g, world) -> Dict[str, Box]:
     return out
 
 
+def _thermal_pad_names(g) -> set:
+    """Leg names of exposed/thermal pads (role 'thermal' or pinName 'EPAD').
+
+    The exposed pad sits UNDER the body by design, so checks that assume pads
+    lie outside the body outline (e.g. fab-pad clearance) must skip it.
+    """
+    root = _root(g)
+    legs = _find_child(g, root, "Legs") if root is not None else None
+    names = set()
+    if legs is None:
+        return names
+    for pin in (g.nodes[legs].children or []):
+        ex = g.nodes[pin].extras or {}
+        if ex.get("role") == "thermal" or ex.get("pinName") == "EPAD":
+            names.add(g.nodes[pin].name)
+    return names
+
+
 def _silk_boxes(g, world) -> List[Box]:
     """One 3D AABB per silkscreen object (each BodyLine + silk pin-1 marker)."""
     root = _root(g)
@@ -486,6 +504,9 @@ def check_pad_numbering_perimeter(ctx: PartContext) -> _Outcome:
     g = ctx.glb("footprint")
     world = _world_matrices(g)
     pads = _copper_pad_boxes(g, world)
+    # The central exposed pad is not part of the perimeter numbering sweep.
+    for tp in _thermal_pad_names(g):
+        pads.pop(tp, None)
     if len(pads) < 4:
         return _Outcome(CheckStatus.SKIP, "too few pads for a perimeter test")
     axes = _board_axes(list(pads.values()))
@@ -1415,6 +1436,10 @@ def check_fab_pad_clearance(ctx: PartContext) -> _Outcome:
     g = ctx.glb("footprint")
     world = _world_matrices(g)
     pads = _copper_pad_boxes(g, world)
+    # The exposed thermal pad lies under the body by design; it is not a
+    # perimeter pad the fab outline must clear.
+    for tp in _thermal_pad_names(g):
+        pads.pop(tp, None)
     fab = _fab_boxes(g, world)
     if not pads or not fab:
         return _Outcome(CheckStatus.UNRUN, f"no {'pads' if not pads else 'fab'} geometry")

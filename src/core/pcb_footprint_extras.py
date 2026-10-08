@@ -317,6 +317,8 @@ def inject_pcb_footprint_extras(
     pin_side_map: Optional[Dict[str, str]] = None,
     dims_source: Optional[str] = None,
     component_height: Optional[float] = None,
+    exposed_pad_number: Optional[str] = None,
+    exposed_pad_spec: Optional[dict] = None,
     # Legacy params kept for backwards compatibility
     body_width: Optional[float] = None,
     body_height: Optional[float] = None,
@@ -485,15 +487,27 @@ def inject_pcb_footprint_extras(
         # ── Individual pin groups (named by pin number) ────────────────────────
         elif name.isdigit() and par_name == "Legs":
             x, y = pin_position_map.get(name, (0.0, 0.0))
-            extras = _build_pin_extras(
-                name, x, y, is_through_hole, pad_spec=spec, side=sides.get(name)
-            )
+            # The exposed thermal pad is an SMD pad with its own (larger) size.
+            if exposed_pad_number is not None and name == exposed_pad_number:
+                extras = _build_pin_extras(
+                    name, x, y, False, pad_spec=exposed_pad_spec,
+                    side=sides.get(name),
+                )
+                extras["pinName"] = "EPAD"
+                extras["role"] = "thermal"
+            else:
+                extras = _build_pin_extras(
+                    name, x, y, is_through_hole, pad_spec=spec, side=sides.get(name)
+                )
 
         # ── Pin sub-components ────────────────────────────────────────────────
         # ref: no selectParent, no hideTransformControls
         elif name == "CopperCirclePad":
             is_pin1 = par_name == "1"
-            if not is_through_hole and spec.get("shape") == "rect":
+            if exposed_pad_number is not None and par_name == exposed_pad_number:
+                ext_x, ext_y = _rect_pad_xy_extents(exposed_pad_spec, sides.get(par_name))
+                pts = _rect_points(ext_x / 2.0, ext_y / 2.0)
+            elif not is_through_hole and spec.get("shape") == "rect":
                 ext_x, ext_y = _rect_pad_xy_extents(spec, sides.get(par_name))
                 pts = _rect_points(ext_x / 2.0, ext_y / 2.0)
             elif is_through_hole and is_pin1:

@@ -154,6 +154,11 @@ class PcbFootprintBuilder:
         self._body_outline_w: Optional[float] = None
         self._body_outline_l: Optional[float] = None
 
+        # Exposed thermal pad (QFN/DFN/SON underside pad). Populated from D2/E2
+        # by _apply_extracted_dims; stays None for leaded/through-hole parts.
+        self._epad_w: Optional[float] = None
+        self._epad_l: Optional[float] = None
+
         # Schematic parameters carry display proportions for readable
         # symbols; footprints must use real JEDEC dimensions instead.
         jedec_defaults = get_footprint_defaults(package_type, pin_count)
@@ -163,6 +168,18 @@ class PcbFootprintBuilder:
         # Dimensions extracted from the datasheet PDF override defaults
         if extracted_dims:
             self._apply_extracted_dims(extracted_dims)
+
+        # FP-02: leadless packages (QFN/LFCSP/DFN/WSON/SON) carry an exposed
+        # thermal pad under the body that must be soldered to ground. Add it as
+        # one extra Legs child (numbered pin_count+1, pinName EPAD) when the
+        # family is leadless and an exposed-pad dimension is available.
+        from ..package_types.footprint_defaults import _family as _fp_family
+        leadless = _fp_family(package_type) in ("QFN", "DFN", "WSON", "SON")
+        self._has_exposed_pad = bool(
+            leadless and not self.is_through_hole()
+            and self._epad_w and self._epad_l
+        )
+        self._exposed_pad_number = str(pin_count + 1) if self._has_exposed_pad else None
 
         # Pad shape/size from real dimensions (drill+ring for through-hole,
         # IPC-7351 rects from b/L for SMD; legacy circles when unknown).
@@ -426,6 +443,11 @@ class PcbFootprintBuilder:
             self._body_outline_w = float(dims["E1"])
         if dims.get("D1"):
             self._body_outline_l = float(dims["D1"])
+        # Exposed thermal pad (QFN/DFN/SON). D2 = length (Y), E2 = width (X).
+        if dims.get("E2"):
+            self._epad_w = float(dims["E2"])
+        if dims.get("D2"):
+            self._epad_l = float(dims["D2"])
 
     @property
     def fab_outline_width(self) -> float:
@@ -953,7 +975,45 @@ class PcbFootprintBuilder:
             pin_assy = self.build_pin(pos, pin_name, pin_num)
             legs_assy.add(pin_assy)
 
+        # FP-02: append the exposed thermal pad as the final Legs child.
+        if self._has_exposed_pad:
+            legs_assy.add(self.build_exposed_pad(self._exposed_pad_number))
+
         return legs_assy
+
+    def build_exposed_pad(self, pin_number: str) -> cq.Assembly:
+        """Build the central exposed thermal pad (QFN/DFN/SON underside pad).
+
+        One large rectangular SMD pad centred on the origin, sized from the
+        datasheet E2 x D2 (width x length). Same child order as a perimeter SMD
+        pad (SolderMask, CopperCirclePad, text) so the hierarchy validator and
+        the extras injector treat it uniformly; there is no drilled hole.
+        """
+        pin_assy = cq.Assembly(name=pin_number)
+        pad_x, pad_y = float(self._epad_w), float(self._epad_l)
+
+        solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT / 2).center(
+            0.0, 0.0
+        ).rect(pad_x + self.MASK_MARGIN, pad_y + self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
+        solder_mask_assy = cq.Assembly(name="SolderMask")
+        solder_mask_assy.add(solder_mask, color=self.BROWN_COLOR)
+        pin_assy.add(solder_mask_assy)
+
+        copper_pad = cq.Workplane("XY").center(0.0, 0.0).rect(pad_x, pad_y).extrude(
+            self.PAD_HEIGHT
+        )
+        copper_pad_assy = cq.Assembly(name="CopperCirclePad")
+        copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
+        pin_assy.add(copper_pad_assy)
+
+        pin_text = cq.Workplane("XY").center(0.0, 0.0).text(
+            pin_number, 0.8, 0.2, halign="center"
+        )
+        pin_text_assy = cq.Assembly(name="text")
+        pin_text_assy.add(pin_text, color=self.WHITE_COLOR)
+        pin_assy.add(pin_text_assy)
+
+        return pin_assy
 
     def build_schematic(self, pin_data: List[Dict[str, Any]]) -> cq.Assembly:
         """
@@ -1073,6 +1133,20 @@ class PcbFootprintBuilder:
                     pos.pin_number: (pos.x, pos.y)
                     for pos in self.pin_positions
                 }
+                pin_side_map = {
+                    pos.pin_number: pos.side for pos in self.pin_positions
+                }
+                exposed_pad_spec = None
+                if self._has_exposed_pad:
+                    # Centre pad at the origin; a rect spec so the extras injector
+                    # sizes its outline from the EPAD dims, not the perimeter pad.
+                    pin_position_map[self._exposed_pad_number] = (0.0, 0.0)
+                    pin_side_map[self._exposed_pad_number] = "top"
+                    exposed_pad_spec = {
+                        "shape": "rect",
+                        "width": float(self._epad_w),
+                        "length": float(self._epad_l),
+                    }
                 fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh = self._layer_half_dims()
                 extras_nodes = inject_pcb_footprint_extras(
                     work_path,
@@ -1083,11 +1157,11 @@ class PcbFootprintBuilder:
                     silk_dims=(silk_hw, silk_hh),
                     crtyd_dims=(crtyd_hw, crtyd_hh),
                     pad_spec=self.pad_spec,
-                    pin_side_map={
-                        pos.pin_number: pos.side for pos in self.pin_positions
-                    },
+                    pin_side_map=pin_side_map,
                     dims_source=self.dims_source,
                     component_height=self.component_height,
+                    exposed_pad_number=self._exposed_pad_number,
+                    exposed_pad_spec=exposed_pad_spec,
                 )
                 logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:
@@ -1098,6 +1172,7 @@ class PcbFootprintBuilder:
                     work_path,
                     pin_count=self.pin_count,
                     through_hole=self.is_through_hole(),
+                    exposed_pad=self._has_exposed_pad,
                 )
             except Exception as exc:
                 logger.warning("Skipping PCB footprint hierarchy validation: %s" % exc)
