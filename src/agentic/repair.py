@@ -377,6 +377,20 @@ def expand_groups_deterministic(pins: Dict[int, str]) -> Tuple[Dict[int, str], L
         exp = expand_numeric(label)
         if not exp or _lost_subscript(label):
             continue
+        # Fail closed on scattered groups: a deterministic ascending zip only maps
+        # pins to names correctly when the members are a CONTIGUOUS run (D0-D4 on
+        # pins 44-48 read in order). When they are non-contiguous (GPO0 to GPO3 on
+        # pins 5, 6, 41, 42) the pin-number order does NOT encode which pin holds
+        # which name, so an ascending guess would emit a confidently-wrong order
+        # (the GPO-swap defect). Leave the label in place: the group loop then
+        # resolves it from the pin-configuration drawing (vision) or, failing that,
+        # leaves it flagged rather than shipping a wrong permutation.
+        if members != list(range(members[0], members[-1] + 1)):
+            log.append(
+                f"non-contiguous group {label!r} pins={members}: not expanded "
+                "deterministically (pin order unreliable); left for drawing/vision"
+            )
+            continue
         if len(exp) == len(members):
             for n, nm in zip(members, exp):
                 out[n] = nm

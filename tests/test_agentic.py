@@ -99,6 +99,21 @@ def test_expand_groups_partial_fills_only_the_missing_names():
     assert (out[46], out[47]) == ("D2", "D3") and log and "expand-partial" in log[0]
 
 
+def test_expand_groups_skips_non_contiguous_pins():
+    # GPO0 to GPO3 on scattered pins 5, 6, 41, 42: the pin order does NOT encode
+    # which pin holds which name (datasheet maps 5=GPO1, 6=GPO0, 41=GPO3, 42=GPO2).
+    # A deterministic ascending zip would emit the wrong order, so the label must
+    # be left in place for the drawing/vision step instead.
+    pins = {5: "GPO0 to GPO3", 6: "GPO0 to GPO3", 41: "GPO0 to GPO3", 42: "GPO0 to GPO3"}
+    out, log = expand_groups_deterministic(pins)
+    assert out == pins, "non-contiguous group must not be expanded deterministically"
+    assert log and "non-contiguous" in log[0]
+    # A contiguous run of the same range still expands (pin order is reliable).
+    cont = {5: "GPO0 to GPO3", 6: "GPO0 to GPO3", 7: "GPO0 to GPO3", 8: "GPO0 to GPO3"}
+    out2, log2 = expand_groups_deterministic(cont)
+    assert [out2[n] for n in (5, 6, 7, 8)] == ["GPO0", "GPO1", "GPO2", "GPO3"]
+
+
 def test_lost_subscript_range_is_not_expanded_blindly():
     from src.agentic.repair import _lost_subscript, range_numbers, _series_ok
 
