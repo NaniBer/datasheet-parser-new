@@ -3609,6 +3609,54 @@ def test_ordered_count_multivariant_no_match_fails_closed():
         _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)
 
 
+# --- caller part number is authoritative for the Value/MPN identity ----------
+# Regression for the QC "MPN/Value hygiene" cluster: the extractor's free-text
+# component_name is a weaker identity than the orderable the caller names. When
+# an explicit part number is supplied it must become the component_name, so the
+# symbol/footprint Value/MPN label carries the orderable (not the device family
+# or a marketing description).
+def test_caller_identity_overrides_family_name():
+    """TL16C2550 SCH-05: order code 'TL16C2550PFBR' must win over the datasheet
+    family name 'TL16C2550' the LLM returns."""
+    from src.main import _apply_caller_identity
+    from src.models.pin_data import PinData
+    pd = PinData(component_name="TL16C2550")
+    _apply_caller_identity(pd, "TL16C2550PFBR")
+    assert pd.component_name == "TL16C2550PFBR"
+
+
+def test_caller_identity_overrides_description():
+    """693072010801 SCH-04: the bare part number must win over the full product
+    description the LLM returns for a connector datasheet."""
+    from src.main import _apply_caller_identity
+    from src.models.pin_data import PinData
+    pd = PinData(component_name="693072010801 WR-CRD Micro SD Card Connector")
+    _apply_caller_identity(pd, "693072010801")
+    assert pd.component_name == "693072010801"
+
+
+def test_caller_identity_preserves_comma_suffix():
+    """74LVC1G99 SCH-02: a packing-code suffix must survive intact — nothing
+    truncates '74LVC1G99GT,115' at the comma."""
+    from src.main import _apply_caller_identity
+    from src.models.pin_data import PinData
+    pd = PinData(component_name="74LVC1G99")
+    _apply_caller_identity(pd, "74LVC1G99GT,115")
+    assert pd.component_name == "74LVC1G99GT,115"
+
+
+def test_caller_identity_no_part_number_is_noop():
+    """No explicit part number -> the extractor's name is kept verbatim, so
+    parts parsed without --part-number stay byte-identical."""
+    from src.main import _apply_caller_identity
+    from src.models.pin_data import PinData
+    pd = PinData(component_name="NE555")
+    _apply_caller_identity(pd, None)
+    _apply_caller_identity(pd, "")
+    _apply_caller_identity(pd, "   ")
+    assert pd.component_name == "NE555"
+
+
 def test_ordered_count_match_passes():
     from src.main import _enforce_ordered_pin_count
     from src.models.pin_data import PinData
