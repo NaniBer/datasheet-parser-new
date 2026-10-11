@@ -220,9 +220,12 @@ def validate_pcb_footprint_hierarchy(
             "text",
         ]
     else:
+        # SMD pads carry a solder-paste aperture (F.Paste) derived from the
+        # copper land; through-hole pads never do.
         expected_pin_children = [
             "SolderMask",
             "CopperCirclePad",
+            "PasteMask",
             "text",
         ]
 
@@ -231,9 +234,10 @@ def validate_pcb_footprint_hierarchy(
         if pin_index is None:
             errors.append("Legs is missing pin node %s" % pin_name)
             continue
-        # The exposed pad is always SMD-style, even on a through-hole part.
+        # The exposed pad is always SMD-style, even on a through-hole part, so it
+        # also carries a paste aperture.
         children = (
-            ["SolderMask", "CopperCirclePad", "text"]
+            ["SolderMask", "CopperCirclePad", "PasteMask", "text"]
             if pin_name == exposed_pad_name
             else expected_pin_children
         )

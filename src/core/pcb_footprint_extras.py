@@ -14,9 +14,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 try:
-    from pygltflib import GLTF2
+    from pygltflib import GLTF2, Node
 except ImportError:
     GLTF2 = None
+    Node = None
 
 
 _HIDE_CONTROLS = {"translate": "xyz", "rotate": "xyz", "scale": "xyz"}
@@ -285,6 +286,8 @@ def _footprint_layer_id(name: str, par_name: str) -> Optional[str]:
         return "F.Cu"
     if name in ("CopperCirclePin", "CopperCylinderPin"):
         return "*.Cu"                              # through-hole barrel: all copper
+    if name == "PasteMask":
+        return "F.Paste"                           # solder-paste stencil aperture (SMD only)
     if name == "SolderMask":
         return "F.Mask"
     if name == "HoleCylinderPin":
@@ -303,6 +306,72 @@ def _footprint_layer_id(name: str, par_name: str) -> Optional[str]:
     if name == "Body" and par_name == "PackageValue":
         return "F.Fab"
     return None
+
+
+def _add_paste_masks(gltf, parent_map: Dict[int, int]) -> int:
+    """Add one solder-paste aperture (``PasteMask``, layer ``F.Paste``) per SMD pad.
+
+    CadQuery only emits copper + mask geometry, so no paste node exists at all
+    (confirmed against both our output and the platform reference GLBs). Without
+    an ``F.Paste`` object the stencil export is empty and layer views fall back to
+    drawing the copper, so the pads read as bare copper.
+
+    The aperture is derived from the pad's copper (1:1, reusing its mesh and
+    placement — paste openings follow the copper land), which is the general rule
+    for leadless/leaded SMD pads. Mount type is read off the node tree, not the
+    package string: a pad with a drilled barrel (``HoleCylinderPin``) is
+    through-hole and gets **no** paste.
+    """
+    if Node is None:
+        return 0
+    nodes = gltf.nodes or []
+    legs_index = next(
+        (i for i, nd in enumerate(nodes) if (nd.name or "") == "Legs"), None
+    )
+    if legs_index is None:
+        return 0
+
+    added = 0
+    for pin_index in list(nodes[legs_index].children or []):
+        pin_node = nodes[pin_index]
+        child_indices = list(pin_node.children or [])
+        child_names = [(nodes[c].name or "") for c in child_indices]
+
+        # Through-hole pad (drilled barrel) → no solder paste.
+        if "HoleCylinderPin" in child_names:
+            continue
+        # Clone the copper land as the paste aperture.
+        try:
+            copper_pos = child_names.index("CopperCirclePad")
+        except ValueError:
+            continue
+        copper_index = child_indices[copper_pos]
+        copper_node = nodes[copper_index]
+
+        paste_extras = dict(copper_node.extras or {})
+        paste_extras["originalName"] = "PasteMask"
+        par_name = _parent_name(copper_index, nodes, parent_map)
+        lid = _footprint_layer_id("PasteMask", par_name)
+        if lid:
+            paste_extras["layerId"] = lid
+
+        paste_node = Node(
+            name="PasteMask",
+            mesh=copper_node.mesh,
+            translation=list(copper_node.translation) if copper_node.translation else None,
+            rotation=list(copper_node.rotation) if copper_node.rotation else None,
+            scale=list(copper_node.scale) if copper_node.scale else None,
+            extras=paste_extras,
+        )
+        nodes.append(paste_node)
+        new_index = len(nodes) - 1
+
+        # Keep paste adjacent to the copper it derives from.
+        child_indices.insert(copper_pos + 1, new_index)
+        pin_node.children = child_indices
+        added += 1
+
+    return added
 
 
 def inject_pcb_footprint_extras(
@@ -606,6 +675,11 @@ def inject_pcb_footprint_extras(
         if extras is not None:
             node.extras = extras
             updated += 1
+
+    # FP-15 / LAY-02: give every SMD pad its own solder-paste aperture tagged
+    # F.Paste (through-hole pads get none). Done after the walk so the copper
+    # extras it clones from are already populated.
+    updated += _add_paste_masks(gltf, parent_map)
 
     _fix_materials(gltf)
     gltf.save(str(Path(glb_path)))

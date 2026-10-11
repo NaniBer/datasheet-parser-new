@@ -1198,8 +1198,8 @@ def check_component_height_present(ctx: PartContext) -> _Outcome:
 
 
 _KNOWN_FOOTPRINT_LAYERS = {
-    "F.Cu", "B.Cu", "*.Cu", "F.Mask", "B.Mask", "F.SilkS",
-    "F.Fab", "F.CrtYd", "Edge.Cuts", "drill",
+    "F.Cu", "B.Cu", "*.Cu", "F.Mask", "B.Mask", "F.Paste", "B.Paste",
+    "F.SilkS", "F.Fab", "F.CrtYd", "Edge.Cuts", "drill",
 }
 
 
