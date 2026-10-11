@@ -235,6 +235,11 @@ class PcbFootprintBuilder:
         # the body outline (and the reference 2d.glb).
         self._recenter_pins()
 
+        # A square quad package (equal pins on all four sides) has D == E, so
+        # its pad ring must be square on both axes. Snap the two axes together
+        # before the SMD inset so the inset applies uniformly (TL16C2550 FP-01).
+        self._square_pad_ring()
+
         # IPC-7351: SMD pads are centered on the lead foot, not the lead
         # tip. layout_pins places pads at half the lead span (E/2); pull
         # them inward by half the lead length. Only applies when L comes
@@ -291,6 +296,65 @@ class PcbFootprintBuilder:
                     p.x -= dx
                     p.text_x -= dx
                     p.num_x -= dx
+
+    def is_square_quad(self) -> bool:
+        """True when the package is a square quad package (equal pins/side).
+
+        A quad package with the same number of pins on the vertical sides
+        (left/right) as on the horizontal sides (top/bottom) is physically
+        square: JEDEC MS-026 square QFP/QFN bodies have D == E (equal lead span
+        on both axes). Rectangular quad packages carry unequal pin counts and
+        are deliberately excluded so their genuinely different spans survive.
+        """
+        left = sum(1 for p in self.pin_positions if p.side == "left")
+        right = sum(1 for p in self.pin_positions if p.side == "right")
+        top = sum(1 for p in self.pin_positions if p.side == "top")
+        bottom = sum(1 for p in self.pin_positions if p.side == "bottom")
+        n_vert = max(left, right)
+        n_horiz = max(top, bottom)
+        if not n_vert or not n_horiz:
+            return False  # dual-row (no top/bottom) — not a quad package
+        return n_vert == n_horiz
+
+    def _square_pad_ring(self) -> None:
+        """Force equal pad-ring spans on both axes for a square quad package.
+
+        ``layout_pins`` places the left/right columns at ``body_width/2`` (= E,
+        the lead span) and the top/bottom rows at ``body_height/2`` (= D). On a
+        square package these are the same physical span, but the extractor can
+        read D as the molded body (D1) while E is the full lead span, so the
+        top/bottom rows land on a smaller span and the pads miss the leads —
+        TL16C2550 FP-01 put the top/bottom rows at y = ±3.20 mm while left/right
+        sat correctly at x = ±4.22 mm on a square TQFP-48, leaving 24 of 48 pads
+        ~1 mm short of their leads.
+
+        Snap both axes to the larger (true lead-span) half-distance: a body
+        dimension misread into the span axis is always the smaller of the two,
+        so ``max`` recovers the real lead span, and pads reaching their leads is
+        the safe direction. Called before the SMD inset so the inset then pulls
+        every side in by the same L/2.
+        """
+        if not self.is_square_quad():
+            return
+        vert = [p for p in self.pin_positions if p.side in ("left", "right")]
+        horiz = [p for p in self.pin_positions if p.side in ("top", "bottom")]
+        if not vert or not horiz:
+            return
+        half_x = max(abs(p.x) for p in vert)
+        half_y = max(abs(p.y) for p in horiz)
+        target = max(half_x, half_y)
+        for p in vert:
+            tgt = target if p.x >= 0 else -target
+            dx = tgt - p.x
+            p.x += dx
+            p.text_x += dx
+            p.num_x += dx
+        for p in horiz:
+            tgt = target if p.y >= 0 else -target
+            dy = tgt - p.y
+            p.y += dy
+            p.text_y += dy
+            p.num_y += dy
 
     def _relieve_corner_pads(self) -> None:
         """Shorten perpendicular corner pads to keep >= CORNER_CLEARANCE (FP-14).
@@ -598,7 +662,17 @@ class PcbFootprintBuilder:
                 self._silk_line_segments(y, -silk_hw, silk_hw, t) for y in (silk_hh, -silk_hh)):
             silk_hh = pad_y + self.SILK_PAD_CLEARANCE + 0.03 + t / 2.0
             silk_hw = max(silk_hw, pad_x)
-            crtyd_hh = max(crtyd_hh, silk_hh + t / 2.0 + self.CRTYD_MARGIN_Y)
+            # The courtyard only has to ENCLOSE the relocated silk line, not add
+            # a second full clearance beyond it — the old "+ CRTYD_MARGIN_Y" here
+            # double-counted the pad clearance and blew the courtyard out on the
+            # silk axis only (AD9106 QFN-32 came out 6.5 x 7.2 for a square 5x5
+            # body). Just clear the silk's outer edge (P2-2).
+            crtyd_hh = max(crtyd_hh, silk_hh + t / 2.0)
+        # A square quad package must have a square courtyard; after the per-axis
+        # relocation above the two axes can differ by a hair, so unify them to
+        # the larger half (still the tight enclosure, just symmetric).
+        if self.is_square_quad():
+            crtyd_hw = crtyd_hh = max(crtyd_hw, crtyd_hh)
         return fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh
 
     def calculate_pin_positions_footprint(self) -> List[PinPosition]:
