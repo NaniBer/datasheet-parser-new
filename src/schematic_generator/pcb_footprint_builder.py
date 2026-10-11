@@ -65,7 +65,7 @@ class PcbFootprintBuilder:
     PAD_SIDE_MARGIN = 0.06  # mm, gull-wing pad width = b + side margins
     PAD_MIN_GAP = 0.20      # mm, minimum copper gap between adjacent pads
     CORNER_CLEARANCE = 0.15  # mm, min copper-copper at quad corners (FP-14/IPC-2221B)
-    MASK_MARGIN = 0.102     # mm, solder mask opening beyond copper
+    MASK_MARGIN = 0.102     # mm, solder-mask opening beyond copper PER SIDE (KiCad solder_mask_margin convention; applied to each edge, so the full dimension grows by 2x this)
     PIN_CYLINDER_HEIGHT = 0.200  # mm (through PCB thickness)
     PAD_HEIGHT = 0.020  # mm (thin layer)
     TINY_HEIGHT = 0.001  # mm (minimum height for extrusion)
@@ -553,7 +553,7 @@ class PcbFootprintBuilder:
             return {
                 "shape": "circle",
                 "diameter": diameter,
-                "mask_diameter": diameter + self.MASK_MARGIN,
+                "mask_diameter": diameter + 2 * self.MASK_MARGIN,  # per-side margin on each edge
                 "drill": drill,
             }
 
@@ -1012,7 +1012,7 @@ class PcbFootprintBuilder:
 
                 solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
                     x, y
-                ).rect(pad_x + self.MASK_MARGIN, pad_y + self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
+                ).rect(pad_x + 2 * self.MASK_MARGIN, pad_y + 2 * self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
                 copper_pad = cq.Workplane("XY").center(
                     x, y
                 ).rect(pad_x, pad_y).extrude(self.PAD_HEIGHT)
@@ -1100,7 +1100,7 @@ class PcbFootprintBuilder:
 
         solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT / 2).center(
             0.0, 0.0
-        ).rect(pad_x + self.MASK_MARGIN, pad_y + self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
+        ).rect(pad_x + 2 * self.MASK_MARGIN, pad_y + 2 * self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
         solder_mask_assy = cq.Assembly(name="SolderMask")
         solder_mask_assy.add(solder_mask, color=self.BROWN_COLOR)
         pin_assy.add(solder_mask_assy)
