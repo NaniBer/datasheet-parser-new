@@ -5,9 +5,9 @@ output contract's vocabulary. Deliberately conservative: only high-confidence
 name patterns resolve to a concrete value; anything ambiguous returns None so it
 stays "unspecified"/"other" downstream — it never guesses.
 
-active_low is NAME-MARKER only (trailing #, leading /, _N suffix, overbar).
-Convention-only inversion (e.g. OE, RESET without a printed marker) is
-intentionally NOT inferred.
+active_low is NAME-MARKER only (trailing # or *, leading /, leading/trailing ~,
+_N suffix, combining overbar). Convention-only inversion (e.g. OE, RESET without
+a printed marker) is intentionally NOT inferred.
 
 Consumed fill-only in ComponentRecord.from_pin_data: it only fills fields the
 LLM/datasheet left empty and never overrides an existing value.
@@ -27,13 +27,29 @@ def _compact(name: str) -> str:
 
 
 def detect_active_low(name: str) -> bool:
-    """Conservative active-low: explicit printed markers only."""
+    """Conservative active-low: explicit printed markers only.
+
+    Recognised markers are the notations a datasheet prints on an active-low
+    pin name:
+      - trailing ``#`` or ``*``           (``CS#``, ``RESET*``)
+      - leading ``/`` or leading/trailing ``~``  (``/CS``, ``~CS``, ``CS~``)
+      - ``_N``/``_n`` suffix               (``RESET_N``)
+      - a combining overbar/macron on any character (``W̅E̅``)
+
+    Convention-only inversion (``OE``, ``RESET`` with no printed marker) is
+    deliberately NOT inferred — a bare name whose overbar was lost in
+    extraction stays active-high here (that is an upstream extraction gap,
+    not a classifier gap).
+    """
     if not name:
         return False
     n = name.strip()
     return (
         n.endswith("#")
+        or n.endswith("*")
         or n.startswith("/")
+        or n.startswith("~")
+        or n.endswith("~")
         or n.upper().endswith("_N")
         or any(ch in n for ch in _OVERBAR)
     )

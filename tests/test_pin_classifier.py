@@ -73,14 +73,30 @@ def test_ambiguous_names_stay_unknown(name):
 # --- conservative active_low: markers only, never conventions -----------------
 @pytest.mark.parametrize("name, expected", [
     ("OE#", True), ("/CS", True), ("RESET_N", True), ("W̅E̅", True),
+    # P1-2b: '*' and '~' are printed active-low notations too
+    ("RESET*", True), ("CS*", True), ("~CS", True), ("CS~", True),
     ("OE", False),        # convention-only inversion is NOT inferred
     ("RESET", False),
     ("NRST", False),
     ("VCC", False),
+    # bare names whose datasheet overbar was lost upstream stay active-high
+    ("CS", False), ("PWRDWN", False), ("INTRQ", False), ("TRIGGER", False),
 ])
 def test_active_low_conservative(name, expected):
     _, _, active_low = classify_pin_name(name)
     assert active_low is expected
+
+
+# --- the marker never corrupts the type/role: '*'/'~'/'#' are stripped --------
+@pytest.mark.parametrize("name, etype, role", [
+    ("RESET*", "input", "reset"),
+    ("CS#", "input", "control"),
+    ("~CS", "input", "control"),
+    ("CS~", "input", "control"),
+])
+def test_marked_names_still_type(name, etype, role):
+    t, r, active_low = classify_pin_name(name)
+    assert (t, r) == (etype, role) and active_low is True
 
 
 # --- fill-only integration in from_pin_data -----------------------------------
