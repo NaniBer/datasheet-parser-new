@@ -60,7 +60,25 @@ _POWER_TAB_ALIASES = {
 # Geometry aliases whose canonical family token differs from the alias itself,
 # so they reuse an existing real pad grid: LFCSP is ADI's QFN (same leadless
 # perimeter grid) and XSON is a leadless SON variant (e.g. SOT833-1).
-_GEOMETRY_CANONICAL = {"LFCSP": "QFN", "XSON": "SON"}
+_GEOMETRY_CANONICAL = {"LFCSP": "QFN", "XSON": "SON", "SOT833": "SON"}
+
+# NXP/JEDEC SOT833-1 — the 8-pin XSON outline (e.g. 74LVC1G99). It is a *very*
+# small leadless SON (body 1.0 x 1.95 mm, 0.5 mm pitch, 2 rows of 4), so it must
+# NOT inherit the generic SON-8 grid (~3.0 x 3.35 mm, 0.65 mm pitch) which
+# oversizes the body and courtyard ~3x. Values are the published SOT833-1
+# outline; b/L reuse the 0.5 mm-pitch leadless lead dims shared with QFN/HVSSOP
+# (not invented). Leadless => body edge is the terminal span (E = E1, D = D1).
+# There is no exposed thermal pad on this logic package, so D2/E2 are omitted
+# (a real EP would only ever come from the datasheet via extracted_dims).
+_SOT833_1_XSON8 = {
+    "e": 0.5,
+    "E": 1.0,
+    "E1": 1.0,
+    "D": 1.95,
+    "D1": 1.95,
+    "b": 0.25,
+    "L": 0.4,
+}
 
 
 def _family(package_type: str) -> Optional[str]:
@@ -112,6 +130,15 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
     has no tabulated footprint data (caller keeps existing parameters).
     """
     family = _family(package_type)
+
+    # SOT833-1 / XSON8: a tiny leadless SON variant that must not inherit the
+    # generic SON-8 grid (which oversizes body + courtyard ~3x). Keyed off the
+    # documented outline name (SOT833) or XSON with 8 pins — never a part
+    # number. Other XSON pin counts map to different outlines (SOT886/SOT891…)
+    # we do not tabulate, so they fall through to the generic SON branch.
+    normalized = re.sub(r"[^A-Z0-9]", "", (package_type or "").upper())
+    if "SOT833" in normalized or ("XSON" in normalized and pin_count == 8):
+        return dict(_SOT833_1_XSON8)
 
     if family in ("DIP", "PDIP", "CDIP"):
         # 300mil row spacing up to 28 pins, 600mil for wider packages.

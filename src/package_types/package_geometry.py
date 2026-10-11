@@ -74,7 +74,12 @@ class BodyGeometry:
     designator_offset: float = 16.0  # Distance above body
     designator_height: float = 0.5  # Text height
 
-    value_size: float = 4.0  # Font size for package value (matches designator_size)
+    # Font size for the package value/MPN label. Kept at ~1 mm so a long MPN
+    # renders a few mm wide instead of ~20-30 mm: at 4.0 a 12-char MPN measured
+    # ~30 mm wide / 3 mm tall; at 1.0 it is ~7 mm wide / ~0.75 mm tall and fits
+    # the (real-dimension) footprint body. Designator uses its own knob
+    # (designator_size) and is intentionally left larger.
+    value_size: float = 1.0
     value_offset: float = 3.0  # Distance below body
     value_height: float = 0.5  # Text height
 
@@ -174,7 +179,7 @@ def get_dip_parameters(pin_count: int) -> SchematicParameters:
             designator_size=3.0,
             designator_offset=25.0,
             designator_height=0.5,
-            value_size=3.0,
+            value_size=1.0,
             value_offset=2.5,
             value_height=0.5,
             top_margin=5.0
@@ -294,7 +299,7 @@ def get_tssop_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.2,
             designator_size=3.0,
             designator_offset=5.0,
-            value_size=3.0,
+            value_size=1.0,
             value_offset=2.5,
             top_margin=4.5,
         ),
@@ -335,7 +340,7 @@ def get_dfn_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
-            value_size=3.0,
+            value_size=1.0,
             value_offset=2.5,
             top_margin=5.0,
         ),
@@ -373,7 +378,7 @@ def get_wson_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
-            value_size=3.0,
+            value_size=1.0,
             value_offset=2.5,
             top_margin=5.0,
         ),
@@ -411,7 +416,7 @@ def get_son_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
-            value_size=3.0,
+            value_size=1.0,
             value_offset=2.5,
             top_margin=5.0,
         ),
@@ -474,7 +479,7 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
             border_height=0.2,  # Reduced from 0.3
             designator_size=3.0,
             designator_offset=5.0,
-            value_size=3.0,  # matches designator_size
+            value_size=1.0,  # ~1 mm tall so a long MPN stays a few mm wide
             value_offset=2.5,
             top_margin=6.2  # Increased from 4.0 for more space between body and pins
         ),
@@ -527,7 +532,7 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
             designator_size=3.0,
             designator_offset=6.0,
             designator_height=0.5,
-            value_size=3.0,
+            value_size=1.0,
             value_offset=2.5,
             value_height=0.5,
             top_margin=5.0
@@ -695,6 +700,9 @@ PACKAGE_TYPE_ALIASES = {
     "SON": PackageType.SON,
     # XSON is a leadless SON variant (e.g. SOT833-1); same geometry class as SON.
     "XSON": PackageType.SON,
+    # SOT833(-1) is the JEDEC outline name for the 8-pin XSON — same SON class,
+    # so a datasheet naming the outline (not "XSON8") still resolves.
+    "SOT833": PackageType.SON,
 
     # SOIC aliases ("SO-8" is the classic small-outline name for SOIC-8;
     # SOT23-5/6/8 are dual-row gull-wing per JEDEC MO-178, so the SOIC
