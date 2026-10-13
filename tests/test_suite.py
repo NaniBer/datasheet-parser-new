@@ -3161,9 +3161,12 @@ def test_quad_footprint_rows_centered_per_side():
         col = [p.y for p in b.pin_positions if p.side == side]
         assert (max(col) + min(col)) / 2 == pytest.approx(0.0, abs=0.01), side
 
-    # Pin ring must sit at the JEDEC lead span (E - L inset), not beyond.
+    # Pin ring must sit at the JEDEC lead span (E - L inset), not beyond. The
+    # MS-026 LQFP-64 is a 10x10 body with a 12x12 lead span; the old
+    # (pins/4 - 1) * pitch + 4.0 estimate under-stated it as 11.5 (body came out
+    # 9.5, #61), so the span is now the standard 12.0 (body 10.0 + 2.0).
     xs = [p.x for p in b.pin_positions]
-    assert max(xs) - min(xs) == pytest.approx(11.5 - 0.6, abs=0.05)
+    assert max(xs) - min(xs) == pytest.approx(12.0 - 0.6, abs=0.05)
 
 
 def test_dims_family_consistency_gate(_dim_extractor):
