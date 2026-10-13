@@ -302,7 +302,7 @@ platform-side.
 | 1 | TL16C2550 | Sch | HIGH | 31/48 pins show grouped label instead of pinName | P1-3 | Fixed `7a68c99` (data; render platform) |
 | 2 | TL16C2550 | Sch | HIGH | No active-low marking (22 pins) | P1-2 | Fixed `277a927` |
 | 3 | TL16C2550 | Sch | MED | Pins not grouped by function; D0-D7 split/out of order | P3-6 | Open |
-| 4 | TL16C2550 | Sch | MED | Symbol body 101.6×106.7 mm, >3× reference | P2-1 | Open |
+| 4 | TL16C2550 | Sch | MED | Symbol body 101.6×106.7 mm, >3× reference | P2-1 | Won't-fix (functional grouping is deliberate — see note) |
 | 5 | TL16C2550 | Sch | LOW | Value "TL16C2550" not "TL16C2550PFBR" | P3-1 | Fixed `307b5c7` |
 | 6 | TL16C2550 | FP | HIGHEST | Top/bottom rows y=±3.20 not ±4.22; 24/48 miss leads | P0-2 | Fixed `2b640f0` |
 | 7 | TL16C2550 | FP | HIGH | F.Fab 6.88×4.88 not 7.00×7.00 | P2-1 | Fixed `2b640f0` |
@@ -354,7 +354,7 @@ platform-side.
 | 53 | ADV7180 | Sch | HIGH | GPO0/1 and GPO2/3 swapped | P0-3 | Partial `7a68c99` (fail-closed; order needs vision) |
 | 54 | ADV7180 | Sch | HIGH | 16 pins show grouped label | P1-3 | Fixed `7a68c99` (data; render platform) |
 | 55 | ADV7180 | Sch | HIGH | Active-low missing on PWRDWN, INTRQ; not drawn on RESET | P1-2 | Fixed `277a927` (flag; render platform) |
-| 56 | ADV7180 | Sch | MED | Symbol body 86×91 mm, 2.8× reference | P2-1 | Open |
+| 56 | ADV7180 | Sch | MED | Symbol body 86×91 mm, 2.8× reference | P2-1 | Won't-fix (functional grouping is deliberate — see note) |
 | 57 | ADV7180 | Sch | LOW | Category drivers/receivers (is video decoder) | P3-2 | Not-ours (category) |
 | 58 | ADV7180 | FP | HIGH | Silk lines run over 24 pads | P2-3 | Open |
 | 59 | ADV7180 | FP | MED | Pads shifted 0.23 mm outward (short heel) | P3-7 | Open |
@@ -380,3 +380,16 @@ platform-side.
 - **Blocked (vendor data):** #45, #46, #47, #51 (693 microSD)
 - **Deferred (FP-08 contradiction):** pin-1 marker #13(part), #25, #38, #50, #63, #72
 - **Not-ours (platform/frontend):** 3D consumption #16/26/39/65/74, category #30/#57, label-mesh/subscript render #67, overbar render (render half of #17/#28/#55)
+
+### Decision note — symbol body size #4 / #56 (WON'T-FIX, 2026-10-13)
+Verified firsthand: the oversized schematic body is **not a sizing bug**. `ROLE_SIDE`
+(`component_record.py`) maps every pin role to **left or right only**, and
+`check_functional_grouping` (conformance SYM-04) enforces it — so a 48-pin part stacks
+~32 pins in one column at the 2.54 mm grid → ~100 mm tall. The "mostly empty" width is
+load-bearing too: narrowing below `column_floor` flips the tall column's end pins to
+top/bottom and breaks 3 conformance tests. The compact reference (~35 mm) achieves its
+size only by using a **4-sided, package-order** layout that **abandons functional
+grouping** — the opposite of what card **#3** asks for (group by function) and of our
+deliberate, conformance-enforced convention. Decision: **keep functional grouping**;
+#4/#56 are accepted as-is. Changing it would be a cross-cutting layout redesign
+(`src/models` ROLE_SIDE + `src/conformance`), not a bug fix.
