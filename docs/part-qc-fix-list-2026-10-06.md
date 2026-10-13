@@ -350,8 +350,8 @@ platform-side.
 | 49 | 693072010801 | FP | LOW | Solder mask 0.051 vs 0.102 | P2-4 | Fixed `6a70e86` |
 | 50 | 693072010801 | FP | LOW | Pin-1 marker outside courtyard | P3-4 | Deferred (FP-08 contradiction) |
 | 51 | 693072010801 | 3D | HIGH | No 3D model | P1-4 | Blocked (vendor STEP) / Not-ours consumption |
-| 52 | ADV7180 | Sch | HIGHEST | Pins 24/25 wrong: ELPF↔AGND, PVDD↔ELPF | P0-3 | Open (needs vision figure-read) |
-| 53 | ADV7180 | Sch | HIGH | GPO0/1 and GPO2/3 swapped | P0-3 | Partial `7a68c99` (fail-closed; order needs vision) |
+| 52 | ADV7180 | Sch | HIGHEST | Pins 24/25 wrong: ELPF↔AGND, PVDD↔ELPF | P0-3 | Fixed `97c5540` (deterministic variant-table read: 24=ELPF, 25=PVDD) |
+| 53 | ADV7180 | Sch | HIGH | GPO0/1 and GPO2/3 swapped | P0-3 | Fixed `97c5540` (figure/vision; fail-closed to grouped if unread) |
 | 54 | ADV7180 | Sch | HIGH | 16 pins show grouped label | P1-3 | Fixed `7a68c99` (data; render platform) |
 | 55 | ADV7180 | Sch | HIGH | Active-low missing on PWRDWN, INTRQ; not drawn on RESET | P1-2 | Fixed `277a927` (flag; render platform) |
 | 56 | ADV7180 | Sch | MED | Symbol body 86×91 mm, 2.8× reference | P2-1 | Won't-fix (functional grouping is deliberate — see note) |
