@@ -306,11 +306,11 @@ platform-side.
 | 5 | TL16C2550 | Sch | LOW | Value "TL16C2550" not "TL16C2550PFBR" | P3-1 | Fixed `307b5c7` |
 | 6 | TL16C2550 | FP | HIGHEST | Top/bottom rows y=±3.20 not ±4.22; 24/48 miss leads | P0-2 | Fixed `2b640f0` |
 | 7 | TL16C2550 | FP | HIGH | F.Fab 6.88×4.88 not 7.00×7.00 | P2-1 | Fixed `2b640f0` |
-| 8 | TL16C2550 | FP | HIGH | Silk lines run over 24 pads | P2-3 | Open |
+| 8 | TL16C2550 | FP | HIGH | Silk lines run over 24 pads | P2-3 | Not-reproduced (silk-pad clearance 0.23 mm ≥ 0.20; FP-07 clip handles it) |
 | 9 | TL16C2550 | FP | MED | Courtyard 10.2×8.2, inside leads in Y | P2-2 | Fixed `2b640f0` |
 | 10 | TL16C2550 | FP | MED | Paste tagged F.Cu on all 48 pads | P1-1 | Fixed `4b02744` |
 | 11 | TL16C2550 | FP | MED | Layer views show red copper on every layer | P1-1 | Fixed `4b02744` (render platform) |
-| 12 | TL16C2550 | FP | LOW | Pads 0.17 mm short of land pattern | P3-7 | Open |
+| 12 | TL16C2550 | FP | LOW | Pads 0.17 mm short of land pattern | P3-7 | Fixed `358577b` (L_max=0.75; pad 1.30→1.45) |
 | 13 | TL16C2550 | FP | LOW | Pin-1 marker outside courtyard; value text 15.4 mm | P3-4 | Partial `a2c2864` (value text); marker deferred |
 | 14 | TL16C2550 | FP | LOW | Solder mask 0.051 vs 0.102 declared | P2-4 | Fixed `6a70e86` |
 | 15 | TL16C2550 | FP | LOW | Pad-number 0.58 mm overlaps at 0.5 mm pitch | P3-5 | Fixed `f1cf76c` |
@@ -356,10 +356,10 @@ platform-side.
 | 55 | ADV7180 | Sch | HIGH | Active-low missing on PWRDWN, INTRQ; not drawn on RESET | P1-2 | Fixed `277a927` (flag; render platform) |
 | 56 | ADV7180 | Sch | MED | Symbol body 86×91 mm, 2.8× reference | P2-1 | Won't-fix (functional grouping is deliberate — see note) |
 | 57 | ADV7180 | Sch | LOW | Category drivers/receivers (is video decoder) | P3-2 | Not-ours (category) |
-| 58 | ADV7180 | FP | HIGH | Silk lines run over 24 pads | P2-3 | Open |
-| 59 | ADV7180 | FP | MED | Pads shifted 0.23 mm outward (short heel) | P3-7 | Open |
+| 58 | ADV7180 | FP | HIGH | Silk lines run over 24 pads | P2-3 | Not-reproduced (silk-pad clearance 0.23 mm ≥ 0.20; FP-07 clip handles it) |
+| 59 | ADV7180 | FP | MED | Pads shifted 0.23 mm outward (short heel) | P3-7 | Fixed `358577b` (pad center 4.45→4.20, on the foot) |
 | 60 | ADV7180 | FP | MED | Paste tagged F.Cu | P1-1 | Fixed `4b02744` |
-| 61 | ADV7180 | FP | LOW | Body 7.38 mm larger than package max | P2-1 | Open |
+| 61 | ADV7180 | FP | LOW | Body 7.38 mm larger than package max | P2-1 | Fixed `358577b` (MS-026 body 7.38→7.00) |
 | 62 | ADV7180 | FP | LOW | Solder mask 0.051 vs 0.102 | P2-4 | Fixed `6a70e86` |
 | 63 | ADV7180 | FP | LOW | Pin-1 marker outside courtyard | P3-4 | Deferred (FP-08 contradiction) |
 | 64 | ADV7180 | FP | LOW | Pad numbers larger than pads, overlap | P3-5 | Fixed `f1cf76c` |
@@ -367,9 +367,9 @@ platform-side.
 | 66 | PGA2311P | Sch | HIGH | CS and MUTE lost active-low marking | P1-2 | Fixed `277a927` |
 | 67 | PGA2311P | Sch | MED | 7 labels scrambled ("V R IN" for VINR) | P1-3 | Not-ours (subscript render / label mesh) |
 | 68 | PGA2311P | Sch | LOW | 5 power pins typed unspecified | P1-5 | Fixed `bd2b6d3` |
-| 69 | PGA2311P | FP | MED | Body 5.87×20.38 not 6.4×19.3 | P2-1 | Open |
+| 69 | PGA2311P | FP | MED | Body 5.87×20.38 not 6.4×19.3 | P2-1 | Partial `358577b` (length 20.38→19.38; width clamped by FP-19 — see note) |
 | 70 | PGA2311P | FP | MED | Paste nodes on through-hole pads, F.Cu | P1-1 | Fixed `4b02744` (no paste on TH) |
-| 71 | PGA2311P | FP | LOW | Drill 0.83 mm tight for PDIP leads | P3-7 | Open |
+| 71 | PGA2311P | FP | LOW | Drill 0.83 mm tight for PDIP leads | P3-7 | Not-reproduced (0.83 mm is vendor-correct: TI golden ref 0.813, IPC-2222) |
 | 72 | PGA2311P | FP | LOW | *[FP-03 dropped from PDF; inferred pin-1-marker]* | P3-4 | Deferred (FP-08 contradiction) |
 | 73 | PGA2311P | FP | LOW | Solder mask 0.051 vs 0.102 | P2-4 | Fixed `6a70e86` |
 | 74 | PGA2311P | 3D | HIGH | No 3D model (EasyEDA links PDIP-16, not exported) | P1-4 | Not-ours (3D consumption) |
@@ -393,3 +393,12 @@ grouping** — the opposite of what card **#3** asks for (group by function) and
 deliberate, conformance-enforced convention. Decision: **keep functional grouping**;
 #4/#56 are accepted as-is. Changing it would be a cross-cutting layout redesign
 (`src/models` ROLE_SIDE + `src/conformance`), not a bug fix.
+
+### Follow-up — #69 PGA2311P body WIDTH (open, needs a conformance decision)
+The length is fixed (`358577b`, 20.38→19.38). The width stays clamped to 5.87 mm
+instead of the real 6.35 mm because a real DIP body overlaps the through-hole
+annular rings (normal for DIP), and the **FP-19 conformance check**
+(`src/conformance/checks.py`) forbids any fab-over-pad — its committed test
+asserts DIP-8 passes, so the builder clamps the width. Correcting it needs an
+**FP-19 through-hole exemption** (let leaded/TH bodies overlap their own
+annulus), a conformance change out of scope for the footprint-defaults work.
