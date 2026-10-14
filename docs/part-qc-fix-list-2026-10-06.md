@@ -320,7 +320,7 @@ platform-side.
 | 19 | 74LVC1G99 | Sch | LOW | Pin order differs from standard | P3-6 | Open |
 | 20 | 74LVC1G99 | FP | HIGHEST | Wrong land pattern; 8 pads outside package | P0-1 | Fixed `eb29820` (+`a276816`) |
 | 21 | 74LVC1G99 | FP | HIGH | Body 1.28×3.35 not 1.0×1.95 | P2-1 | Fixed `a2c2864` |
-| 22 | 74LVC1G99 | FP | MED | Courtyard 4.2×3.85, 4× standard | P2-2 | Open (verify it follows `a2c2864`) |
+| 22 | 74LVC1G99 | FP | MED | Courtyard 4.2×3.85, 4× standard | P2-2 | Fixed `a2c2864` (follows XSON body → courtyard now 2.20×2.50, = standard; verified) |
 | 23 | 74LVC1G99 | FP | MED | Paste tagged F.Cu on all 8 pads | P1-1 | Fixed `4b02744` |
 | 24 | 74LVC1G99 | FP | LOW | Solder mask 0.051 vs 0.102 | P2-4 | Fixed `6a70e86` |
 | 25 | 74LVC1G99 | FP | LOW | Pin-1 only a dot outside courtyard | P3-4 | Deferred (FP-08 contradiction) |
