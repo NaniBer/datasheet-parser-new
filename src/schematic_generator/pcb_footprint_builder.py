@@ -614,6 +614,13 @@ class PcbFootprintBuilder:
                     xd, yd = spec["width"], spec["length"]
                 else:
                     xd, yd = spec["length"], spec["width"]
+            elif self.is_through_hole() and spec.get("drill"):
+                # Through-hole (DIP): the molded body legitimately overlaps the
+                # copper annular ring between the two pin rows; it must only clear
+                # the DRILL hole (the lead exits the body into the hole). So the
+                # hole, not the copper pad, bounds how wide the body may be -- a
+                # real DIP body (e.g. 6.35 mm) sits over its annuli by design.
+                xd = yd = spec["drill"]
             else:
                 xd = yd = spec["diameter"]
             if pos.side in ("left", "right"):

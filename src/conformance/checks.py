@@ -700,6 +700,25 @@ def _hole_node(g, pin_index: int) -> Optional[int]:
     return _find_child(g, pin_index, "HoleCylinderPin") or _find_child(g, pin_index, "CopperCylinderPin")
 
 
+def _through_hole_pad_boxes(g, world) -> Dict[str, "Box"]:
+    """Per-pin DRILL-HOLE 3D AABB for plated-through-hole pads (pins that carry a
+    hole node). Empty for a surface-mount part. Used by FP-19 to bound a leaded
+    body by its holes rather than its copper annuli."""
+    root = _root(g)
+    legs = _find_child(g, root, "Legs") if root is not None else None
+    out: Dict[str, "Box"] = {}
+    if legs is None:
+        return out
+    for pin in (g.nodes[legs].children or []):
+        hole = _hole_node(g, pin)
+        if hole is None:
+            continue
+        b = _subtree_aabb3(g, hole, world)
+        if b is not None:
+            out[g.nodes[pin].name] = b
+    return out
+
+
 def check_annular_ring(ctx: PartContext) -> _Outcome:
     """FP-10: through-hole pads keep >= 0.05 mm annular ring on every side."""
     miss = _need_glb(ctx, "footprint")
@@ -1440,6 +1459,16 @@ def check_fab_pad_clearance(ctx: PartContext) -> _Outcome:
     # perimeter pad the fab outline must clear.
     for tp in _thermal_pad_names(g):
         pads.pop(tp, None)
+    # Through-hole exemption: on a leaded part (DIP) the molded body legitimately
+    # overlaps the copper annular ring between the two pin rows -- that is normal,
+    # not a defect. The hard constraint is that the body must never cover the
+    # DRILL HOLE (the lead exits the body into the hole). So for a through-hole
+    # pad, clear the fab against the HOLE, not the copper pad. Surface-mount pads
+    # keep the strict copper-pad bound, so a real SMD body-oversize bug is still
+    # caught (a body so oversized it reaches the holes also still fails).
+    for pin_name, hole_box in _through_hole_pad_boxes(g, world).items():
+        if pin_name in pads:
+            pads[pin_name] = hole_box
     fab = _fab_boxes(g, world)
     if not pads or not fab:
         return _Outcome(CheckStatus.UNRUN, f"no {'pads' if not pads else 'fab'} geometry")
