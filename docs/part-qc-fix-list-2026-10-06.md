@@ -367,7 +367,7 @@ platform-side.
 | 66 | PGA2311P | Sch | HIGH | CS and MUTE lost active-low marking | P1-2 | Fixed `277a927` |
 | 67 | PGA2311P | Sch | MED | 7 labels scrambled ("V R IN" for VINR) | P1-3 | Not-ours (subscript render / label mesh) |
 | 68 | PGA2311P | Sch | LOW | 5 power pins typed unspecified | P1-5 | Fixed `bd2b6d3` |
-| 69 | PGA2311P | FP | MED | Body 5.87×20.38 not 6.4×19.3 | P2-1 | Partial `358577b` (length 20.38→19.38; width clamped by FP-19 — see note) |
+| 69 | PGA2311P | FP | MED | Body 5.87×20.38 not 6.4×19.3 | P2-1 | Fixed `358577b`+`fe9dc14` (length 19.38; width now 6.35 via FP-19 through-hole exemption) |
 | 70 | PGA2311P | FP | MED | Paste nodes on through-hole pads, F.Cu | P1-1 | Fixed `4b02744` (no paste on TH) |
 | 71 | PGA2311P | FP | LOW | Drill 0.83 mm tight for PDIP leads | P3-7 | Not-reproduced (0.83 mm is vendor-correct: TI golden ref 0.813, IPC-2222) |
 | 72 | PGA2311P | FP | LOW | *[FP-03 dropped from PDF; inferred pin-1-marker]* | P3-4 | Deferred (FP-08 contradiction) |
