@@ -301,7 +301,7 @@ platform-side.
 |---|------|---------|-----|-------|---------|--------|
 | 1 | TL16C2550 | Sch | HIGH | 31/48 pins show grouped label instead of pinName | P1-3 | Fixed `7a68c99` (data; render platform) |
 | 2 | TL16C2550 | Sch | HIGH | No active-low marking (22 pins) | P1-2 | Fixed `277a927` |
-| 3 | TL16C2550 | Sch | MED | Pins not grouped by function; D0-D7 split/out of order | P3-6 | Open |
+| 3 | TL16C2550 | Sch | MED | Pins not grouped by function; D0-D7 split/out of order | P3-6 | Fixed `6cbacb6` (bus drawn in bit order; data+address blocks) |
 | 4 | TL16C2550 | Sch | MED | Symbol body 101.6×106.7 mm, >3× reference | P2-1 | Won't-fix (functional grouping is deliberate — see note) |
 | 5 | TL16C2550 | Sch | LOW | Value "TL16C2550" not "TL16C2550PFBR" | P3-1 | Fixed `307b5c7` |
 | 6 | TL16C2550 | FP | HIGHEST | Top/bottom rows y=±3.20 not ±4.22; 24/48 miss leads | P0-2 | Fixed `2b640f0` |
@@ -317,7 +317,7 @@ platform-side.
 | 16 | TL16C2550 | 3D | HIGH | No real 3D model; box at wrong size | P1-4 | Not-ours (3D consumption) |
 | 17 | 74LVC1G99 | Sch | MED | OE flagged active-low but drawn without overbar | P1-2 | Fixed `277a927` (overbar render platform) |
 | 18 | 74LVC1G99 | Sch | MED | Part number cut to 74LVC1G99GT,1 not ...,115 | P3-1 | Fixed `307b5c7` (worked around; comma-split root platform) |
-| 19 | 74LVC1G99 | Sch | LOW | Pin order differs from standard | P3-6 | Open |
+| 19 | 74LVC1G99 | Sch | LOW | Pin order differs from standard | P3-6 | Won't-fix (D,C,B,A single letters, not a numbered bus — convention) |
 | 20 | 74LVC1G99 | FP | HIGHEST | Wrong land pattern; 8 pads outside package | P0-1 | Fixed `eb29820` (+`a276816`) |
 | 21 | 74LVC1G99 | FP | HIGH | Body 1.28×3.35 not 1.0×1.95 | P2-1 | Fixed `a2c2864` |
 | 22 | 74LVC1G99 | FP | MED | Courtyard 4.2×3.85, 4× standard | P2-2 | Fixed `a2c2864` (follows XSON body → courtyard now 2.20×2.50, = standard; verified) |
@@ -327,7 +327,7 @@ platform-side.
 | 26 | 74LVC1G99 | 3D | HIGH | No 3D model; body follows wrong footprint | P1-4 | Not-ours (3D consumption) |
 | 27 | AD9106 | Sch | HIGH | EPAD pin missing from symbol | P0-4 | Fixed `ea25c2e` |
 | 28 | AD9106 | Sch | HIGH | No active-low on CS, RESET, TRIGGER | P1-2 | Fixed `277a927` (flag; bare-name render platform) |
-| 29 | AD9106 | Sch | LOW | Pin order/shape differ from standard | P3-6 | Open |
+| 29 | AD9106 | Sch | LOW | Pin order/shape differ from standard | P3-6 | Won't-fix (mixed-prefix analog block — convention, like #4/#56) |
 | 30 | AD9106 | Sch | LOW | Filed under ADC but is a DAC | P3-2 | Not-ours (category) |
 | 31 | AD9106 | Sch | LOW | CLDO unspecified; pin 24 type inconsistent | P1-5 | Fixed `bd2b6d3` |
 | 32 | AD9106 | FP | HIGHEST | Through-hole DIP-32 not 5×5 LFCSP-32 | P0-1 | Fixed `eb29820` |
@@ -338,10 +338,10 @@ platform-side.
 | 37 | AD9106 | FP | LOW | Solder mask 0.051 vs 0.102 | P2-4 | Fixed `6a70e86` |
 | 38 | AD9106 | FP | LOW | Pin-1 marker outside courtyard | P3-4 | Deferred (FP-08 contradiction) |
 | 39 | AD9106 | 3D | HIGH | 3D shows DIP-32 box not 5×5 LFCSP | P1-4 | Not-ours (3D consumption) |
-| 40 | 693072010801 | Sch | HIGH | Shield pins S1–S4 missing from symbol | P0-5 | Open |
+| 40 | 693072010801 | Sch | HIGH | Shield pins S1–S4 missing from symbol | P0-5 | Blocked (only 8 contacts extracted; shield tabs need vendor spec, like #45) |
 | 41 | 693072010801 | Sch | MED | MPN/value hold product description not part number | P3-1 | Fixed `307b5c7` |
 | 42 | 693072010801 | Sch | LOW | Signal pins typed unspecified | P1-5 | Fixed `bd2b6d3` |
-| 43 | 693072010801 | Sch | LOW | Pin order/side/shape differ from standard | P3-6 | Open |
+| 43 | 693072010801 | Sch | LOW | Pin order/side/shape differ from standard | P3-6 | Won't-fix (connector vs IC symbol — convention) |
 | 44 | 693072010801 | FP | HIGHEST | Through-hole DIP-8 not SMD microSD socket | P0-1 | Fixed `93dc79b` |
 | 45 | 693072010801 | FP | HIGH | No shield pads | P0-5 | Blocked (Würth land pattern) |
 | 46 | 693072010801 | FP | HIGH | Body 5.9×10.2 not 13.6×13.7 | P2-1 | Blocked (vendor dims) |
