@@ -1894,6 +1894,44 @@ def _builder_inputs_from_record(
     return record.to_pin_data(), dims
 
 
+# Package families whose dash-suffix is a *case code*, not a lead count:
+# "SOT-23" is a 3-pin part, "TO-220" a 3-lead power tab, "SC-70" a 3–6-lead
+# small-outline. Deriving a pin count from their trailing number would be
+# actively wrong, so they are excluded from the "FAMILY-NN -> NN pins"
+# shortcut in _pin_count_from_package_string below.
+_CASE_CODE_PACKAGE_RE = re.compile(r"^(SOT|SC[-\s]?\d|SC-|DPAK|D2PAK|TO[-\s]?\d)", re.IGNORECASE)
+_PACKAGE_TRAILING_COUNT_RE = re.compile(r"(\d{1,4})\s*$")
+
+
+def _pin_count_from_package_string(package) -> Optional[int]:
+    """Derive the lead count from a ``FAMILY-NN`` package string (``"LQFP-48"``
+    -> 48) so a caller that supplies only a package can still disambiguate
+    same-family variants.
+
+    This closes a real gap: ADV7180 ships both a 48-lead and a 64-lead LQFP pin
+    table, so a caller passing only ``package="LQFP-48"`` (no explicit pin count)
+    left variant selection unable to tell them apart — it merged/picked the
+    64-lead table and emitted duplicate pins numbered past 48.
+
+    Returns ``None`` for families whose numeric suffix is a *case code* rather
+    than a pin count (``SOT-23`` = 3 pins, ``TO-220`` = 3 leads) and for strings
+    with no trailing number (``"microSD"``). Conservative by design: only an
+    unambiguous ``family + trailing count`` yields a number, so SOT/TO callers
+    behave exactly as before (no count derived).
+    """
+    if not package:
+        return None
+    s = str(package).strip()
+    if _CASE_CODE_PACKAGE_RE.match(s):
+        return None
+    m = _PACKAGE_TRAILING_COUNT_RE.search(s)
+    if not m:
+        return None
+    n = int(m.group(1))
+    # Sanity bound on a real lead count; avoids absurd matches from stray digits.
+    return n if 2 <= n <= 2000 else None
+
+
 def _apply_caller_variant(pin_data, package, pin_count, verbose=False) -> None:
     """Seed ordered_pin_count / ordered_package_type from a caller-supplied
     package or pin count (--package / --pin-count).
@@ -1902,6 +1940,12 @@ def _apply_caller_variant(pin_data, package, pin_count, verbose=False) -> None:
     ground truth that drives variant selection, ordering enforcement, and
     re-extraction — vendor-agnostic, no order-code decoding. A no-op when neither
     is given.
+
+    When only a package is given, a lead count embedded in the package string
+    ("LQFP-48" -> 48) is used to seed ordered_pin_count so same-family variants
+    (e.g. a 48- vs 64-lead LQFP) can be disambiguated. An explicit --pin-count
+    always wins; case-code families (SOT/TO) derive nothing (see
+    _pin_count_from_package_string).
     """
     if pin_data is None:
         return
@@ -1910,9 +1954,19 @@ def _apply_caller_variant(pin_data, package, pin_count, verbose=False) -> None:
             pin_data.ordered_pin_count = int(pin_count)
         except (TypeError, ValueError):
             pass
+    derived_count = None
     if package:
         pin_data.ordered_package_type = str(package)
+        if not pin_data.ordered_pin_count:
+            derived_count = _pin_count_from_package_string(package)
+            if derived_count:
+                pin_data.ordered_pin_count = derived_count
     if verbose and (pin_count or package):
+        if derived_count:
+            print(
+                f"  Derived ordered pin count {derived_count} from package "
+                f"{package!r} (disambiguates same-family variants)"
+            )
         spec = " ".join(
             x for x in (package, f"{pin_count} pins" if pin_count else "") if x
         )

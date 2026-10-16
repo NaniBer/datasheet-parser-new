@@ -103,3 +103,49 @@ def test_footprint_unsupported_flag_round_trips():
     pd.footprint_unsupported_reason = "module land pattern differs"
     rec = ComponentRecord.from_pin_data(pd)
     assert rec.to_pin_data().footprint_unsupported_reason == "module land pattern differs"
+
+
+# --- caller package string -> ordered pin count (multi-variant disambiguation) ---
+# Regression: ADV7180 ships both a 48- and a 64-lead LQFP pin table. A caller
+# passing only package="LQFP-48" (no explicit pin count) must still select the
+# 48-lead variant; before the fix, ordered_pin_count stayed None, the 64-lead
+# table was read, and pins numbered past 48 (duplicate names) were emitted.
+from src.main import _pin_count_from_package_string, _apply_caller_variant
+
+
+def test_pin_count_derived_from_package_string():
+    assert _pin_count_from_package_string("LQFP-48") == 48
+    assert _pin_count_from_package_string("TQFP-48") == 48
+    assert _pin_count_from_package_string("XSON-8") == 8
+    assert _pin_count_from_package_string("LFCSP-32") == 32
+    assert _pin_count_from_package_string("PDIP-16") == 16
+    assert _pin_count_from_package_string("WLCSP-25") == 25
+
+
+def test_pin_count_not_derived_for_case_code_families():
+    # SOT/TO/SC suffixes are package case codes, NOT lead counts.
+    for s in ("SOT-23", "SOT-89", "SOT-223", "TO-220", "TO-92", "SC-70", "SC70"):
+        assert _pin_count_from_package_string(s) is None, s
+    # No trailing number / bare family -> nothing derived.
+    for s in ("microSD", "DIP", "LQFP", "", None):
+        assert _pin_count_from_package_string(s) is None, s
+
+
+def test_apply_caller_variant_seeds_count_from_package_only():
+    pd = PinData(component_name="ADV7180")
+    _apply_caller_variant(pd, package="LQFP-48", pin_count=None)
+    assert pd.ordered_package_type == "LQFP-48"
+    assert pd.ordered_pin_count == 48  # derived, enables 48- vs 64-lead selection
+
+
+def test_explicit_pin_count_wins_over_package_string():
+    pd = PinData(component_name="ADV7180")
+    _apply_caller_variant(pd, package="LQFP-48", pin_count=64)
+    assert pd.ordered_pin_count == 64  # explicit caller count is authoritative
+
+
+def test_apply_caller_variant_no_count_for_sot():
+    pd = PinData(component_name="BAV99")
+    _apply_caller_variant(pd, package="SOT-23", pin_count=None)
+    assert pd.ordered_package_type == "SOT-23"
+    assert pd.ordered_pin_count is None  # case code must not become a pin count

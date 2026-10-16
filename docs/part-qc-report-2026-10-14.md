@@ -1,7 +1,7 @@
 # Part QC — Work Report
 
-**Date:** 2026-10-14
-**Branch:** `fix/part-qc-comparison-log` · **PR [#27](https://github.com/NaniBer/datasheet-parser-new/pull/27)** (GitHub, not yet merged) · **25 commits**
+**Date:** 2026-10-14 (updated 2026-10-16 with live-endpoint verification)
+**Branch:** `fix/part-qc-comparison-log` · **27 commits** · **merged into GitLab `main`**; also open as **PR [#27](https://github.com/NaniBer/datasheet-parser-new/pull/27)** on GitHub (not yet merged there)
 **Source:** IDEEZA Part Comparison Log (`docs/IDEEZA_Part_Comparison_Log.pdf`, 2026-10-05) — 6 parts, **74 QC cards**
 **Per-card detail:** see the [Complete Card Inventory](part-qc-fix-list-2026-10-06.md#complete-card-inventory-all-74) (all 74 rows, each with status + fixing commit).
 
@@ -11,13 +11,13 @@ Parts: TL16C2550PFBR (TQFP-48) · 74LVC1G99GT (XSON8) · AD9106BCPZ (LFCSP-32) �
 
 ## Headline
 
-**48 of 74 cards fixed** (47 code commits + 1 already-resolved). **Zero open engineering items remain** — every one of the remaining 26 cards is blocked on external vendor data, owned by the platform/frontend, or a deliberate convention / QC decision. None can be closed from this repository.
+**48 of 74 cards fixed.** Of the remaining 26, almost all are blocked on external vendor data, owned by the platform/frontend, or a deliberate convention / QC decision and cannot be closed from this repository. The one genuine engineering follow-up on our side is the **ADV7180 GPO-order reliability (#53)** — it is vision-dependent and a live test showed it is not yet reliably correct (see Partial + Production verification).
 
 | Outcome | Count | Meaning |
 |---|---|---|
 | **Fixed — fully** | 40 | Our output is correct; a QC re-review passes |
 | **Fixed — data-only** | 7 | Our data is correct; the **platform** must render it |
-| **Partial** | 1 | ADV7180 GPO — correct when vision reads the figure, else fail-closed (never wrong) |
+| **Partial** | 1 | ADV7180 GPO order — pins 5/6 correct; 41/42 vision-dependent, not yet reliably correct (live test) |
 | **Not-reproduced** | 3 | Already correct in our output; verified with evidence |
 | **Won't-fix (convention/decision)** | 5 | Deliberate, conformance-enforced conventions |
 | **Deferred (QC decision)** | 5 | Pin-1 marker — contradicts a committed fix |
@@ -38,7 +38,7 @@ Parts: TL16C2550PFBR (TQFP-48) · 74LVC1G99GT (XSON8) · AD9106BCPZ (LFCSP-32) �
 - **Pin electrical types:** regulator / supply / ground / data pins now typed instead of shipping as "unspecified" (ERC-checkable).
 - **Component identity:** the caller's ordered part number is now the authoritative MPN/Value (was the LLM's weaker free-text reading).
 - **Dimensional correctness:** JEDEC MS-026 body/span tables, IPC pad land (L_max), solder-mask margin drawn at the declared 0.102 mm/side, square courtyards, pad-number text scaled to fit.
-- **ADV7180 pinout (HIGHEST/HIGH):** pins 24/25 corrected via a deterministic ordered-variant pin-table read (ELPF/PVDD); GPO order read from the pin-configuration figure.
+- **ADV7180 pins 24/25 (HIGHEST):** corrected via a deterministic ordered-variant pin-table read — now ELPF/PVDD, **confirmed on the live endpoint**. *(The GPO order, #53, is only partial — see the Partial section.)*
 - **Schematic bus ordering:** numbered buses (D0–D7) drawn in bit order instead of scrambled pin-number order.
 - **74LVC1G99 XSON sizing**, **value-text sizing**, and **PGA2311P body width** (via a carefully-scoped through-hole exemption to the FP-19 conformance rule).
 
@@ -71,7 +71,15 @@ The **pin-1 marker** cards contradict a fix we already committed (FP-08): one as
 The **693 microSD connector**: shield pins S1–S4, the shield land pattern, and the true body size all need the **Würth manufacturer drawing**. The mount-type blocker is fixed (no longer a drilled DIP), but a correct socket needs the vendor spec.
 
 ### Partial (1)
-**ADV7180 GPO order (#53):** fixed when the vision figure-read succeeds; otherwise it fails closed (stays grouped) rather than ship a guessed order — never wrong, but not guaranteed.
+**ADV7180 GPO order (#53):** the scattered GPO group escalates to the pin-configuration figure (a vision read). A validity gate blocks any result that isn't a clean permutation of GPO0–3, so it never ships obvious garbage — **but the gate does not guarantee the figure's exact order.** A live production run returned pins 5/6 correct (GPO1/GPO0) but 41/42 as GPO2/GPO3, which appears to disagree with the datasheet figure (41=GPO3 / 42=GPO2). So #53 is **not yet reliably correct** and is the one open engineering follow-up on our side — options are a deterministic figure read or a stricter gate.
+
+---
+
+## Production verification (live endpoint, 2026-10-16)
+
+One end-to-end call to the live `/agentic` endpoint (ADV7180) confirmed the deployed service is running the merged code and exercised two of the hardest fixes:
+- **#52 confirmed in production:** pin 24 = **ELPF**, pin 25 = **PVDD** (the old code returned AGND/ELPF). The deterministic variant-table fix works on the real service.
+- **#53 limitation surfaced:** pins 5/6 came back correct (GPO1/GPO0) but 41/42 as GPO2/GPO3 — a valid permutation that passed the gate but likely disagrees with the datasheet figure. This live run is why #53 is classed **Partial**, not Fixed, and is a good example of the review discipline: the limitation was found by testing, not assumed away.
 
 ---
 
@@ -91,9 +99,9 @@ Work was done with **controlled-parallel subagents** — one per non-colliding f
 
 ## Caveats
 
-- **PR #27 is not merged** and has not had human code review.
+- **Merged into GitLab `main`**; the GitHub PR #27 is still open and has not had separate human code review there.
 - The **7 data-fixed** cards depend on the platform rendering our output.
-- **ADV7180 GPO (#53)** depends on a non-deterministic vision read (fail-closed when it can't read).
+- **ADV7180 GPO (#53)** depends on a non-deterministic vision read; a live test showed it can return a plausible-but-wrong order (41/42) — it is not yet reliably correct.
 - Full `test_suite.py` has ~7 **pre-existing** failures (API-key/env + dev-only reference-GLB assets), unrelated to this work; targeted test slices for each change pass.
 - A **cost-logging change in `main.py`** remains uncommitted, intentionally kept out of this PR.
 
@@ -101,8 +109,9 @@ Work was done with **controlled-parallel subagents** — one per non-colliding f
 
 ## Recommended next steps
 
-1. **Review + merge PR #27** (25 commits, parser-side work complete).
-2. **Route to the platform team:** the 9 not-ours cards + the 3D body-consumption question.
-3. **Route to QC:** the pin-1 marker contradiction (FP-08 vs the card).
-4. **Obtain the Würth microSD drawing** to unblock the 4 connector cards.
-5. Decide where the parked **cost-logging** change should land (separate branch).
+1. **GitHub PR #27** (27 commits) — review/merge or close, since the work is already in GitLab `main`.
+2. **Fix ADV7180 #53 GPO 41/42 order** — the one open engineering item; a deterministic figure read or a stricter validity gate.
+3. **Route to the platform team:** the 9 not-ours cards + the 3D body-consumption question.
+4. **Route to QC:** the pin-1 marker contradiction (FP-08 vs the card).
+5. **Obtain the Würth microSD drawing** to unblock the 4 connector cards.
+6. Decide where the parked **cost-logging** change should land (separate branch).
