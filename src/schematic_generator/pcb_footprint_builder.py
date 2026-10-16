@@ -65,7 +65,7 @@ class PcbFootprintBuilder:
     PAD_SIDE_MARGIN = 0.06  # mm, gull-wing pad width = b + side margins
     PAD_MIN_GAP = 0.20      # mm, minimum copper gap between adjacent pads
     CORNER_CLEARANCE = 0.15  # mm, min copper-copper at quad corners (FP-14/IPC-2221B)
-    MASK_MARGIN = 0.102     # mm, solder mask opening beyond copper
+    MASK_MARGIN = 0.102     # mm, solder-mask opening beyond copper PER SIDE (KiCad solder_mask_margin convention; applied to each edge, so the full dimension grows by 2x this)
     PIN_CYLINDER_HEIGHT = 0.200  # mm (through PCB thickness)
     PAD_HEIGHT = 0.020  # mm (thin layer)
     TINY_HEIGHT = 0.001  # mm (minimum height for extrusion)
@@ -154,6 +154,11 @@ class PcbFootprintBuilder:
         self._body_outline_w: Optional[float] = None
         self._body_outline_l: Optional[float] = None
 
+        # Exposed thermal pad (QFN/DFN/SON underside pad). Populated from D2/E2
+        # by _apply_extracted_dims; stays None for leaded/through-hole parts.
+        self._epad_w: Optional[float] = None
+        self._epad_l: Optional[float] = None
+
         # Schematic parameters carry display proportions for readable
         # symbols; footprints must use real JEDEC dimensions instead.
         jedec_defaults = get_footprint_defaults(package_type, pin_count)
@@ -163,6 +168,18 @@ class PcbFootprintBuilder:
         # Dimensions extracted from the datasheet PDF override defaults
         if extracted_dims:
             self._apply_extracted_dims(extracted_dims)
+
+        # FP-02: leadless packages (QFN/LFCSP/DFN/WSON/SON) carry an exposed
+        # thermal pad under the body that must be soldered to ground. Add it as
+        # one extra Legs child (numbered pin_count+1, pinName EPAD) when the
+        # family is leadless and an exposed-pad dimension is available.
+        from ..package_types.footprint_defaults import _family as _fp_family
+        leadless = _fp_family(package_type) in ("QFN", "DFN", "WSON", "SON")
+        self._has_exposed_pad = bool(
+            leadless and not self.is_through_hole()
+            and self._epad_w and self._epad_l
+        )
+        self._exposed_pad_number = str(pin_count + 1) if self._has_exposed_pad else None
 
         # Pad shape/size from real dimensions (drill+ring for through-hole,
         # IPC-7351 rects from b/L for SMD; legacy circles when unknown).
@@ -217,6 +234,11 @@ class PcbFootprintBuilder:
         # dimensions, so recenter each pad row/column on the origin to match
         # the body outline (and the reference 2d.glb).
         self._recenter_pins()
+
+        # A square quad package (equal pins on all four sides) has D == E, so
+        # its pad ring must be square on both axes. Snap the two axes together
+        # before the SMD inset so the inset applies uniformly (TL16C2550 FP-01).
+        self._square_pad_ring()
 
         # IPC-7351: SMD pads are centered on the lead foot, not the lead
         # tip. layout_pins places pads at half the lead span (E/2); pull
@@ -274,6 +296,65 @@ class PcbFootprintBuilder:
                     p.x -= dx
                     p.text_x -= dx
                     p.num_x -= dx
+
+    def is_square_quad(self) -> bool:
+        """True when the package is a square quad package (equal pins/side).
+
+        A quad package with the same number of pins on the vertical sides
+        (left/right) as on the horizontal sides (top/bottom) is physically
+        square: JEDEC MS-026 square QFP/QFN bodies have D == E (equal lead span
+        on both axes). Rectangular quad packages carry unequal pin counts and
+        are deliberately excluded so their genuinely different spans survive.
+        """
+        left = sum(1 for p in self.pin_positions if p.side == "left")
+        right = sum(1 for p in self.pin_positions if p.side == "right")
+        top = sum(1 for p in self.pin_positions if p.side == "top")
+        bottom = sum(1 for p in self.pin_positions if p.side == "bottom")
+        n_vert = max(left, right)
+        n_horiz = max(top, bottom)
+        if not n_vert or not n_horiz:
+            return False  # dual-row (no top/bottom) — not a quad package
+        return n_vert == n_horiz
+
+    def _square_pad_ring(self) -> None:
+        """Force equal pad-ring spans on both axes for a square quad package.
+
+        ``layout_pins`` places the left/right columns at ``body_width/2`` (= E,
+        the lead span) and the top/bottom rows at ``body_height/2`` (= D). On a
+        square package these are the same physical span, but the extractor can
+        read D as the molded body (D1) while E is the full lead span, so the
+        top/bottom rows land on a smaller span and the pads miss the leads —
+        TL16C2550 FP-01 put the top/bottom rows at y = ±3.20 mm while left/right
+        sat correctly at x = ±4.22 mm on a square TQFP-48, leaving 24 of 48 pads
+        ~1 mm short of their leads.
+
+        Snap both axes to the larger (true lead-span) half-distance: a body
+        dimension misread into the span axis is always the smaller of the two,
+        so ``max`` recovers the real lead span, and pads reaching their leads is
+        the safe direction. Called before the SMD inset so the inset then pulls
+        every side in by the same L/2.
+        """
+        if not self.is_square_quad():
+            return
+        vert = [p for p in self.pin_positions if p.side in ("left", "right")]
+        horiz = [p for p in self.pin_positions if p.side in ("top", "bottom")]
+        if not vert or not horiz:
+            return
+        half_x = max(abs(p.x) for p in vert)
+        half_y = max(abs(p.y) for p in horiz)
+        target = max(half_x, half_y)
+        for p in vert:
+            tgt = target if p.x >= 0 else -target
+            dx = tgt - p.x
+            p.x += dx
+            p.text_x += dx
+            p.num_x += dx
+        for p in horiz:
+            tgt = target if p.y >= 0 else -target
+            dy = tgt - p.y
+            p.y += dy
+            p.text_y += dy
+            p.num_y += dy
 
     def _relieve_corner_pads(self) -> None:
         """Shorten perpendicular corner pads to keep >= CORNER_CLEARANCE (FP-14).
@@ -426,6 +507,11 @@ class PcbFootprintBuilder:
             self._body_outline_w = float(dims["E1"])
         if dims.get("D1"):
             self._body_outline_l = float(dims["D1"])
+        # Exposed thermal pad (QFN/DFN/SON). D2 = length (Y), E2 = width (X).
+        if dims.get("E2"):
+            self._epad_w = float(dims["E2"])
+        if dims.get("D2"):
+            self._epad_l = float(dims["D2"])
 
     @property
     def fab_outline_width(self) -> float:
@@ -467,7 +553,7 @@ class PcbFootprintBuilder:
             return {
                 "shape": "circle",
                 "diameter": diameter,
-                "mask_diameter": diameter + self.MASK_MARGIN,
+                "mask_diameter": diameter + 2 * self.MASK_MARGIN,  # per-side margin on each edge
                 "drill": drill,
             }
 
@@ -528,6 +614,13 @@ class PcbFootprintBuilder:
                     xd, yd = spec["width"], spec["length"]
                 else:
                     xd, yd = spec["length"], spec["width"]
+            elif self.is_through_hole() and spec.get("drill"):
+                # Through-hole (DIP): the molded body legitimately overlaps the
+                # copper annular ring between the two pin rows; it must only clear
+                # the DRILL hole (the lead exits the body into the hole). So the
+                # hole, not the copper pad, bounds how wide the body may be -- a
+                # real DIP body (e.g. 6.35 mm) sits over its annuli by design.
+                xd = yd = spec["drill"]
             else:
                 xd = yd = spec["diameter"]
             if pos.side in ("left", "right"):
@@ -576,7 +669,17 @@ class PcbFootprintBuilder:
                 self._silk_line_segments(y, -silk_hw, silk_hw, t) for y in (silk_hh, -silk_hh)):
             silk_hh = pad_y + self.SILK_PAD_CLEARANCE + 0.03 + t / 2.0
             silk_hw = max(silk_hw, pad_x)
-            crtyd_hh = max(crtyd_hh, silk_hh + t / 2.0 + self.CRTYD_MARGIN_Y)
+            # The courtyard only has to ENCLOSE the relocated silk line, not add
+            # a second full clearance beyond it — the old "+ CRTYD_MARGIN_Y" here
+            # double-counted the pad clearance and blew the courtyard out on the
+            # silk axis only (AD9106 QFN-32 came out 6.5 x 7.2 for a square 5x5
+            # body). Just clear the silk's outer edge (P2-2).
+            crtyd_hh = max(crtyd_hh, silk_hh + t / 2.0)
+        # A square quad package must have a square courtyard; after the per-axis
+        # relocation above the two axes can differ by a hair, so unify them to
+        # the larger half (still the tight enclosure, just symmetric).
+        if self.is_square_quad():
+            crtyd_hw = crtyd_hh = max(crtyd_hw, crtyd_hh)
         return fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh
 
     def calculate_pin_positions_footprint(self) -> List[PinPosition]:
@@ -805,6 +908,34 @@ class PcbFootprintBuilder:
 
         return markers_assy
 
+    # Pin-number legend text metrics. The OCC stroke font renders a digit about
+    # 0.53x the requested size wide and a numeral about 0.73x tall; we take a
+    # safe upper bound on each so the fitted number is guaranteed to stay inside
+    # the copper, never a hair over.
+    _NUM_CHAR_WIDTH = 0.60   # drawn width per character, as a fraction of size
+    _NUM_TEXT_HEIGHT = 0.75  # drawn cap height, as a fraction of size
+    _NUM_PAD_FILL = 0.90     # keep the number within 90% of the pad extent
+    _NUM_BASE_SIZE = 0.8     # reference-GLB size; never enlarged beyond this
+    _NUM_MIN_SIZE = 0.15     # legible floor; below this the number is unreadable anyway
+
+    def _fit_number_size(self, pin_number: str, avail_x: float, avail_y: float) -> float:
+        """Scale the pad-number text so it fits inside its own pad (FP-07/FP-10).
+
+        On fine-pitch quad packages a fixed 0.8 mm number is wider than the pad
+        (and the pitch), so two-digit labels bleed across neighbouring pads into
+        an unreadable strip. The number is shrunk until its drawn bounding box
+        fits within ``_NUM_PAD_FILL`` of the pad's own X and Y extents; it is
+        never grown past the reference ``_NUM_BASE_SIZE``, so pads already larger
+        than the text (DIP/SOIC/through-hole) keep the original size unchanged.
+        """
+        n = max(len(str(pin_number)), 1)
+        size = self._NUM_BASE_SIZE
+        if avail_x > 0:
+            size = min(size, self._NUM_PAD_FILL * avail_x / (self._NUM_CHAR_WIDTH * n))
+        if avail_y > 0:
+            size = min(size, self._NUM_PAD_FILL * avail_y / self._NUM_TEXT_HEIGHT)
+        return max(size, self._NUM_MIN_SIZE)
+
     def build_pin(self, pin_pos: PinPosition, pin_name: str = "", pin_number: str = "") -> cq.Assembly:
         """
         Build pin components (leg, text, pin number).
@@ -888,7 +1019,7 @@ class PcbFootprintBuilder:
 
                 solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
                     x, y
-                ).rect(pad_x + self.MASK_MARGIN, pad_y + self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
+                ).rect(pad_x + 2 * self.MASK_MARGIN, pad_y + 2 * self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
                 copper_pad = cq.Workplane("XY").center(
                     x, y
                 ).rect(pad_x, pad_y).extrude(self.PAD_HEIGHT)
@@ -910,8 +1041,12 @@ class PcbFootprintBuilder:
             copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
             pin_assy.add(copper_pad_assy)
 
-        # Pin number text (white, matching reference mat8)
-        text_size = 0.8
+        # Pin number text (white, matching reference mat8). The glyph is scaled
+        # to fit inside this pad's own copper so fine-pitch two-digit numbers no
+        # longer overflow the pad / pitch (FP-07/FP-10). The pad bbox honours the
+        # IPC rect size and any corner-relief length override.
+        px0, px1, py0, py1 = self._pad_bbox(pin_pos)
+        text_size = self._fit_number_size(pin_number, px1 - px0, py1 - py0)
         text_height = 0.2
         pin_text = cq.Workplane("XY").center(
             x, y
@@ -953,7 +1088,45 @@ class PcbFootprintBuilder:
             pin_assy = self.build_pin(pos, pin_name, pin_num)
             legs_assy.add(pin_assy)
 
+        # FP-02: append the exposed thermal pad as the final Legs child.
+        if self._has_exposed_pad:
+            legs_assy.add(self.build_exposed_pad(self._exposed_pad_number))
+
         return legs_assy
+
+    def build_exposed_pad(self, pin_number: str) -> cq.Assembly:
+        """Build the central exposed thermal pad (QFN/DFN/SON underside pad).
+
+        One large rectangular SMD pad centred on the origin, sized from the
+        datasheet E2 x D2 (width x length). Same child order as a perimeter SMD
+        pad (SolderMask, CopperCirclePad, text) so the hierarchy validator and
+        the extras injector treat it uniformly; there is no drilled hole.
+        """
+        pin_assy = cq.Assembly(name=pin_number)
+        pad_x, pad_y = float(self._epad_w), float(self._epad_l)
+
+        solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT / 2).center(
+            0.0, 0.0
+        ).rect(pad_x + 2 * self.MASK_MARGIN, pad_y + 2 * self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
+        solder_mask_assy = cq.Assembly(name="SolderMask")
+        solder_mask_assy.add(solder_mask, color=self.BROWN_COLOR)
+        pin_assy.add(solder_mask_assy)
+
+        copper_pad = cq.Workplane("XY").center(0.0, 0.0).rect(pad_x, pad_y).extrude(
+            self.PAD_HEIGHT
+        )
+        copper_pad_assy = cq.Assembly(name="CopperCirclePad")
+        copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
+        pin_assy.add(copper_pad_assy)
+
+        pin_text = cq.Workplane("XY").center(0.0, 0.0).text(
+            pin_number, 0.8, 0.2, halign="center"
+        )
+        pin_text_assy = cq.Assembly(name="text")
+        pin_text_assy.add(pin_text, color=self.WHITE_COLOR)
+        pin_assy.add(pin_text_assy)
+
+        return pin_assy
 
     def build_schematic(self, pin_data: List[Dict[str, Any]]) -> cq.Assembly:
         """
@@ -1073,6 +1246,20 @@ class PcbFootprintBuilder:
                     pos.pin_number: (pos.x, pos.y)
                     for pos in self.pin_positions
                 }
+                pin_side_map = {
+                    pos.pin_number: pos.side for pos in self.pin_positions
+                }
+                exposed_pad_spec = None
+                if self._has_exposed_pad:
+                    # Centre pad at the origin; a rect spec so the extras injector
+                    # sizes its outline from the EPAD dims, not the perimeter pad.
+                    pin_position_map[self._exposed_pad_number] = (0.0, 0.0)
+                    pin_side_map[self._exposed_pad_number] = "top"
+                    exposed_pad_spec = {
+                        "shape": "rect",
+                        "width": float(self._epad_w),
+                        "length": float(self._epad_l),
+                    }
                 fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh = self._layer_half_dims()
                 extras_nodes = inject_pcb_footprint_extras(
                     work_path,
@@ -1083,11 +1270,11 @@ class PcbFootprintBuilder:
                     silk_dims=(silk_hw, silk_hh),
                     crtyd_dims=(crtyd_hw, crtyd_hh),
                     pad_spec=self.pad_spec,
-                    pin_side_map={
-                        pos.pin_number: pos.side for pos in self.pin_positions
-                    },
+                    pin_side_map=pin_side_map,
                     dims_source=self.dims_source,
                     component_height=self.component_height,
+                    exposed_pad_number=self._exposed_pad_number,
+                    exposed_pad_spec=exposed_pad_spec,
                 )
                 logger.info("Injected extras into %d nodes" % extras_nodes)
             except Exception as exc:
@@ -1098,6 +1285,7 @@ class PcbFootprintBuilder:
                     work_path,
                     pin_count=self.pin_count,
                     through_hole=self.is_through_hole(),
+                    exposed_pad=self._has_exposed_pad,
                 )
             except Exception as exc:
                 logger.warning("Skipping PCB footprint hierarchy validation: %s" % exc)

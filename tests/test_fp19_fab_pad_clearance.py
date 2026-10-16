@@ -80,3 +80,21 @@ def test_leadless_fab_clears_pads_and_stays_off_lead_span():
     # Leadless body sits over its own terminals -> clamp engages, FP-19 passes.
     out = _footprint("WSON-8", 8)
     assert check_fab_pad_clearance(PartContext("x", {"footprint": out})).status is CheckStatus.PASS
+
+
+# --- through-hole exemption (#69): a DIP body overlaps its own annular rings ---
+def test_through_hole_body_keeps_true_width_over_annuli():
+    # A real DIP body (E1 = 6.35) is WIDER than the gap between the inner copper
+    # edges, so it overlaps the annular rings -- normal for DIP. It must NOT be
+    # clamped down to clear the copper; the drill hole (not the copper) bounds it.
+    b = PcbFootprintBuilder("PDIP-16", 16, "IC")
+    fab_hw, *_ = b._layer_half_dims()
+    assert abs(fab_hw - b.fab_outline_width / 2) < 1e-9     # unclamped == real E1/2
+    assert abs(2 * fab_hw - 6.35) < 0.01                    # true PDIP body width
+
+
+def test_fp19_passes_through_hole_body_over_annuli_but_clear_of_holes():
+    # FP-19 clears the fab against the DRILL HOLE for through-hole pads, so a DIP
+    # body that overlaps its copper annuli (but clears the holes) passes.
+    out = _footprint("PDIP-16", 16)
+    assert check_fab_pad_clearance(PartContext("x", {"footprint": out})).status is CheckStatus.PASS

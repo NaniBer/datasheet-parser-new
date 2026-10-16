@@ -99,6 +99,21 @@ def test_expand_groups_partial_fills_only_the_missing_names():
     assert (out[46], out[47]) == ("D2", "D3") and log and "expand-partial" in log[0]
 
 
+def test_expand_groups_skips_non_contiguous_pins():
+    # GPO0 to GPO3 on scattered pins 5, 6, 41, 42: the pin order does NOT encode
+    # which pin holds which name (datasheet maps 5=GPO1, 6=GPO0, 41=GPO3, 42=GPO2).
+    # A deterministic ascending zip would emit the wrong order, so the label must
+    # be left in place for the drawing/vision step instead.
+    pins = {5: "GPO0 to GPO3", 6: "GPO0 to GPO3", 41: "GPO0 to GPO3", 42: "GPO0 to GPO3"}
+    out, log = expand_groups_deterministic(pins)
+    assert out == pins, "non-contiguous group must not be expanded deterministically"
+    assert log and "non-contiguous" in log[0]
+    # A contiguous run of the same range still expands (pin order is reliable).
+    cont = {5: "GPO0 to GPO3", 6: "GPO0 to GPO3", 7: "GPO0 to GPO3", 8: "GPO0 to GPO3"}
+    out2, log2 = expand_groups_deterministic(cont)
+    assert [out2[n] for n in (5, 6, 7, 8)] == ["GPO0", "GPO1", "GPO2", "GPO3"]
+
+
 def test_lost_subscript_range_is_not_expanded_blindly():
     from src.agentic.repair import _lost_subscript, range_numbers, _series_ok
 
@@ -279,3 +294,131 @@ def test_read_variant_column_fails_closed():
     assert read_variant_column([(1, "just prose mentioning SOIC pins")], _EXTRACTED, "SOT833-1") is None
     # pin-count guard
     assert read_variant_column([(3, _PIN_DESC)], _EXTRACTED, "SOT833-1", pin_count=16) is None
+
+
+# --- deterministic grouped variant pin-function table (ADV7180-style, #52) --------------------
+from src.agentic.repair import read_variant_pin_table
+
+# A multi-variant "Pin No. | Mnemonic | Type | Description" document, one cell per
+# line (as PyMuPDF extracts it). The decoy 64-lead table names pin 24 AGND; the
+# ordered 48-lead table names it ELPF, so a correct read must SELECT the 48-lead
+# table. A trailing register-map table (rows that look like "1 / RW") must not be
+# scanned as pin rows. Names are the datasheet's, encoded here (the test) only --
+# the parser in src/ hardcodes nothing.
+def _row(pin_cell, mnemonic, typ, desc):
+    return [pin_cell, mnemonic, typ, desc]
+
+
+_ADV_LIKE = "\n".join(
+    ["Table 11. 64-Lead LQFP Pin Function Descriptions", "Pin No.", "Mnemonic", "Type", "Description",
+     *_row("24", "AGND", "G", "Analog Ground."),            # decoy: different name on pin 24
+     *_row("30", "ELPF", "I", "External loop filter."),
+     "Table 12. 48-Lead LQFP Pin Function Descriptions", "Pin No.", "Mnemonic", "Type", "Description",
+     *_row("1, 13, 19, 43", "DGND", "G", "Digital Ground."),
+     *_row("2, 4", "DVDDIO", "P", "Digital I/O Supply Voltage."),
+     *_row("3", "SFL", "O", "Subcarrier Frequency Lock."),
+     *_row("5, 6, 41, 42", "GPO0 to GPO3", "O", "General-Purpose Outputs."),
+     *_row("7 to 12, 20, 22", "P7 to P2, P1, P0", "O", "Video Pixel Output Port."),
+     *_row("14", "LLC", "O", "Line-locked output clock."),
+     *_row("15, 48", "NC", "", "No Connect Pins."),
+     *_row("16", "XTAL1", "O", "Crystal pin."),
+     *_row("17", "XTAL", "I", "Crystal input pin."),
+     *_row("18, 44", "DVDD", "P", "Digital Supply Voltage."),
+     *_row("21", "PWRDWN", "I", "Power-down pin."),
+     "Table 12. 48-Lead LQFP Pin Function Descriptions (Continued)", "Pin No.", "Mnemonic", "Type", "Description",
+     *_row("23, 28, 32", "AGND", "G", "Analog Ground."),
+     *_row("24", "ELPF", "I", "The recommended external loop filter must be connected here."),
+     *_row("25", "PVDD", "P", "PLL Supply Voltage."),
+     *_row("26, 27, 33 to 36", "AIN1 to AIN6", "I", "Analog Video Input Channels."),
+     *_row("29", "VREFP", "O", "Internal Voltage Reference Output."),
+     *_row("30", "VREFN", "O", "Internal Voltage Reference Output."),
+     *_row("31", "AVDD", "P", "Analog Supply Voltage."),
+     *_row("37", "RESET", "I", "System Reset Input."),
+     *_row("38", "ALSB", "I", "I2C address select."),
+     *_row("39", "SDATA", "I/O", "I2C Port Serial Data."),
+     *_row("40", "SCLK", "I", "I2C Port Serial Clock."),
+     *_row("45", "VS/FIELD", "O", "Vertical Sync Output Signal."),
+     *_row("46", "INTRQ", "O", "Interrupt Request Output."),
+     *_row("47", "HS", "O", "Horizontal Sync Output Signal."),
+     "Table 13. Global Status Register", "Bit", "Access", "Description",
+     "1", "RW", "status bit", "2", "RW", "status bit"]  # register rows must be ignored
+)
+
+
+def test_variant_pin_table_selects_ordered_variant_and_reads_single_names():
+    got = read_variant_pin_table(_ADV_LIKE, 48, "LQFP")
+    assert got is not None
+    # #52: the 48-lead table's own names, NOT the decoy 64-lead table.
+    assert got[24] == "ELPF" and got[25] == "PVDD"
+    assert got[23] == got[28] == got[32] == "AGND"
+    # full, unambiguous coverage of the whole variant
+    assert set(got) == set(range(1, 49))
+
+
+def test_variant_pin_table_leaves_scattered_range_as_group_for_the_drawing():
+    got = read_variant_pin_table(_ADV_LIKE, 48, "LQFP")
+    # #53: a numeric range on NON-contiguous pins is left as the GROUP LABEL so the
+    # per-pin order is resolved from the drawing, never guessed from pin order.
+    assert got[5] == got[6] == got[41] == got[42] == "GPO0 to GPO3"
+    assert is_group(got[5])
+    assert got[26] == got[36] == "AIN1 to AIN6" and is_group(got[26])
+
+
+def test_variant_pin_table_fails_closed():
+    # wrong ordered count: no 20-lead table in the document
+    assert read_variant_pin_table(_ADV_LIKE, 20, "LQFP") is None
+    # family mismatch: the 48-lead table is LQFP, not SOIC
+    assert read_variant_pin_table(_ADV_LIKE, 48, "SOIC") is None
+    # single-variant document: nothing to select, so this read does not act
+    one = "\n".join(["Table 1. 8-Lead SOIC Pin Function Descriptions", "Pin No.", "Mnemonic",
+                     "1", "A", "2", "B", "3", "C", "4", "D", "5", "E", "6", "F", "7", "G", "8", "H"])
+    assert read_variant_pin_table(one, 8, "SOIC") is None
+    # no pin count
+    assert read_variant_pin_table(_ADV_LIKE, None, "LQFP") is None
+
+
+# --- #53: non-contiguous numeric group order comes ONLY from the drawing (vision) -------------
+def _drive_group_repair(tmp_path, monkeypatch, vision_reply):
+    """Run real repair_pins on a scattered GPO group, faking page text / rendering
+    and the single vision call. No deterministic table in the doc, so the group
+    reaches the drawing/vision escalation."""
+    import src.agentic.repair as R
+    import src.chat_bot as chat_bot
+    import src.pdf_extractor.ordering_table as ot
+
+    pdf = tmp_path / "d.pdf"; pdf.write_bytes(PDF_BYTES)
+    page = ("PIN CONFIGURATION\n48-LEAD LQFP\n5, 6, 41, 42 GPO0 to GPO3\n"
+            "pins 5 6 41 42 shown in Figure 11\n")
+    # _page_context indexes texts by page order (texts[pno-1]); page 1 keeps it simple.
+    monkeypatch.setattr(R, "_page_texts", lambda p: [(1, page)])
+    monkeypatch.setattr(R, "_render_page_b64", lambda *a, **k: "")
+    monkeypatch.setattr(ot, "full_pdf_text", lambda p: "")          # no variant table -> det. read no-ops
+    monkeypatch.setattr(ot, "find_ordering_match", lambda *a, **k: None)
+    monkeypatch.setattr(chat_bot, "get_completion_from_messages",
+                        lambda messages, *a, **k: vision_reply)
+
+    pins = [{"number": n, "name": "GPO0 to GPO3", "type": "O", "nc": False} for n in (5, 6, 41, 42)]
+    return R.repair_pins(pins, pdf, "ADV7180KST48Z", package="LQFP", pin_count=48)
+
+
+def test_scattered_numeric_group_takes_the_drawing_order(tmp_path, monkeypatch):
+    # The drawing (vision) reports the swapped order; it is accepted because it is a
+    # clean permutation of GPO0..GPO3 -- the documented ground truth for this part.
+    rep = _drive_group_repair(tmp_path, monkeypatch,
+                              '{"5": "GPO1", "6": "GPO0", "41": "GPO3", "42": "GPO2"}')
+    names = {p["number"]: p["name"] for p in rep["pins"]}
+    assert (names[5], names[6], names[41], names[42]) == ("GPO1", "GPO0", "GPO3", "GPO2")
+    assert rep["flags"]["unresolved"] == []
+    # the per-pin order must have come from the drawing, never from a text guess
+    assert any("escalating to vision" in r for r in rep["repairs"])
+    assert not any(r.startswith("text(") for r in rep["repairs"])
+
+
+def test_scattered_numeric_group_fails_closed_when_drawing_unreadable(tmp_path, monkeypatch):
+    # Vision cannot read the figure: the group must stay a grouped label (fail closed),
+    # never a guessed ascending order.
+    rep = _drive_group_repair(tmp_path, monkeypatch,
+                              '{"5": "?", "6": "?", "41": "?", "42": "?"}')
+    names = {p["number"]: p["name"] for p in rep["pins"]}
+    assert all(names[n] == "GPO0 to GPO3" for n in (5, 6, 41, 42))
+    assert set(rep["flags"]["unresolved"]) == {5, 6, 41, 42}

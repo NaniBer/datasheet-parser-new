@@ -1189,10 +1189,15 @@ def enforce_known_package_type(
 
     Unknown package types used to render silently as DIP. Now they raise
     SchematicGenerationError unless --force-best-effort is set, in which
-    case the DIP substitution is made explicit: the selected package type
-    is rewritten to "DIP-<pin_count>" and the substitution is recorded in
-    pin_data.validation_errors (which triggers the GLB unvalidated
-    watermark).
+    case the substitution is made explicit: the selected package type is
+    rewritten to "SON-<pin_count>" and recorded in pin_data.validation_errors
+    (which triggers the GLB unvalidated watermark).
+
+    The fallback is a leadless surface-mount package (SON), NOT a through-hole
+    DIP: almost every unrecognized modern part is SMD, so defaulting to drilled
+    through-holes produced an unsolderable board (e.g. an SMD LFCSP rendered as
+    a DIP with real drills). SON keeps the DIP's 2-row pin arrangement but on
+    SMD pads, so a wrong guess is at least the right mount type.
     """
     from .schematic_generator import parse_package_type
 
@@ -1208,13 +1213,15 @@ def enforce_known_package_type(
     except SchematicGenerationError as e:
         if not force_best_effort:
             raise SchematicGenerationError(
-                f"{e} Re-run with --force-best-effort to substitute DIP "
-                "geometry (output will be marked unvalidated).",
+                f"{e} Re-run with --force-best-effort to substitute surface-mount "
+                "(SON) geometry (output will be marked unvalidated).",
                 error_code=ErrorCodes.PACKAGE_UNKNOWN,
                 details=e.details,
             )
 
-    substitute = f"DIP-{pin_count}"
+    # SMD leadless fallback, not a through-hole DIP: an unrecognized part is
+    # almost always SMD, and drilling holes for it ships an unsolderable board.
+    substitute = f"SON-{pin_count}"
     message = (
         f"Unknown package type '{package_type}'; substituted {substitute} "
         "geometry (--force-best-effort)"
@@ -1912,6 +1919,39 @@ def _apply_caller_variant(pin_data, package, pin_count, verbose=False) -> None:
         print(f"  Caller-specified variant: {spec} (ground truth)")
 
 
+def _apply_caller_identity(pin_data, explicit_part_number, verbose=False) -> None:
+    """Make a caller-supplied part number authoritative for the component
+    identity (the Value / MPN label), overriding the extractor's free-text name.
+
+    When the platform names the exact orderable part it is creating (the
+    ``--part-number`` the deterministic table parser already honours), that is
+    the identity the user wants on the symbol/footprint — not the LLM's reading
+    of the datasheet, which is a weaker signal in two recurring ways:
+      * it returns the device *family* ("TL16C2550") for an order code
+        ("TL16C2550PFBR"), dropping the orderable suffix, and
+      * for descriptive datasheets it returns a full marketing string
+        ("693072010801 WR-CRD Micro SD Card Connector") instead of the bare
+        part number.
+    The orderable the caller passes is the correct Value/MPN in both cases.
+
+    Fail-safe and never an inference: only an EXPLICIT caller part number wins.
+    When none is supplied the extractor's ``component_name`` is kept verbatim, so
+    parts parsed without ``--part-number`` are byte-identical to before. This
+    makes the LLM path consistent with the deterministic table parser, which has
+    always set ``component_name = part_number``.
+    """
+    pn = (explicit_part_number or "").strip()
+    if not pn or pin_data is None:
+        return
+    if getattr(pin_data, "component_name", None) != pn:
+        if verbose:
+            print(
+                f"  Component identity set from caller part number: {pn!r} "
+                f"(was {getattr(pin_data, 'component_name', None)!r})"
+            )
+        pin_data.component_name = pn
+
+
 def process_datasheet(
     input_path: Path,
     output_path: Path,
@@ -1986,6 +2026,8 @@ def process_datasheet(
         # downstream chain — variant selection, ordering enforcement,
         # re-extraction — honors it instead of guessing.
         _apply_caller_variant(pin_data, package, pin_count, verbose)
+        # A caller-supplied part number is the authoritative Value/MPN identity.
+        _apply_caller_identity(pin_data, part_number, verbose)
 
         # When the text extraction couldn't be grounded in the datasheet (the
         # graphical/analog case), read the pinout from a rendered image instead.
@@ -2050,8 +2092,8 @@ def process_datasheet(
             print(f"  Selection reason: {selected_package.reason}")
 
         # Fail closed on unknown package geometry before any builder runs;
-        # with --force-best-effort this substitutes explicit DIP geometry
-        # and records it in validation_errors instead (ARCH-006).
+        # with --force-best-effort this substitutes explicit surface-mount
+        # (SON) geometry and records it in validation_errors instead (ARCH-006).
         enforce_known_package_type(
             pin_data,
             part_number=resolved_part_number,
@@ -2519,6 +2561,7 @@ def _emit_pins_only(input_path, output_path, args, effective_best_effort):
             force_best_effort=effective_best_effort,
         )
         _apply_caller_variant(pin_data, args.package, args.pin_count, args.verbose)
+        _apply_caller_identity(pin_data, args.part_number, args.verbose)
         _apply_vision_fallback(pin_data, content, input_path, resolved_part_number, args.verbose)
         apply_ordering_ground_truth(
             pin_data, input_path, resolved_part_number, args.model,
@@ -2627,6 +2670,9 @@ def _run_cli():
             # Caller-specified package / pin count is ground truth (seed before
             # ordering + selection so it drives variant choice, not a guess).
             _apply_caller_variant(pin_data, args.package, args.pin_count, args.verbose)
+            # A caller-supplied part number is the authoritative Value/MPN identity
+            # (set before the record is built so it round-trips to the label).
+            _apply_caller_identity(pin_data, args.part_number, args.verbose)
             # Phase 2: canonical ComponentRecord built at the extraction seam.
             component_record = ComponentRecord.from_pin_data(
                 pin_data, part_number=resolved_part_number
@@ -2648,7 +2694,8 @@ def _run_cli():
             sys.exit(EXIT_DOMAIN_FAILURE)
 
         # Fail closed on unknown package geometry (ARCH-006); with
-        # --force-best-effort this substitutes explicit DIP geometry instead.
+        # --force-best-effort this substitutes explicit surface-mount (SON)
+        # geometry instead.
         try:
             enforce_known_package_type(
                 pin_data,

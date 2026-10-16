@@ -79,6 +79,28 @@ def test_within_block_sorted_by_pin_number():
     assert lay["left"] == ["3", "7"]                        # sorted, no blank
 
 
+def test_numbered_bus_ordered_by_name_index_not_pin_number():
+    # A data bus whose bits map to scrambled pin numbers (D0..D2 on high pins,
+    # D3..D4 on low pins) must read in ascending BIT order, not pin-number order.
+    pins = [_d(1, "VCC", "supply"), _d(2, "GND", "ground"),
+            _d(10, "D3", "data"), _d(11, "D4", "data"),
+            _d(40, "D0", "data"), _d(41, "D1", "data"), _d(42, "D2", "data")]
+    lay = functional_side_layout(pins)
+    names = {p["number"]: p["name"] for p in pins}
+    assert [names[n] for n in lay["left"] if n] == ["D0", "D1", "D2", "D3", "D4"]
+
+
+def test_bus_rule_skips_mixed_prefix_block():
+    # Mixed prefixes in one role block (not a single bus) keep pin-number order.
+    pins = [_d(1, "VCC", "supply"), _d(2, "GND", "ground"),
+            _d(5, "IOUTP4", "analog"), _d(3, "FSADJ1", "analog"),
+            _d(4, "REFIO", "analog")]
+    lay = functional_side_layout(pins)
+    names = {p["number"]: p["name"] for p in pins}
+    # REFIO has no index + prefixes differ -> not a bus -> ascending pin number.
+    assert [names[n] for n in lay["left"] if n] == ["FSADJ1", "REFIO", "IOUTP4"]
+
+
 def test_nc_clustered_on_left_after_placed():
     pins = [_d(1, "VCC", "supply"), _d(2, "GND", "ground"), _d(3, "CLK", "clock"),
             _d(4, "OUT", "output"), _d(5, "NC", nc=True), _d(6, "DNC", nc=True)]

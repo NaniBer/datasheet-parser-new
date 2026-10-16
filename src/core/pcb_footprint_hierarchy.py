@@ -89,9 +89,14 @@ def validate_pcb_footprint_hierarchy(
     gltf: "GLTF2",
     pin_count: Optional[int] = None,
     through_hole: bool = True,
+    exposed_pad: bool = False,
 ) -> List[str]:
     """
     Validate that a GLB follows docs/PCB_FOOTPRINT_HIERARCHY.md.
+
+    When ``exposed_pad`` is set, leadless parts carry one extra Legs child
+    numbered ``pin_count+1`` for the central thermal pad; it is an SMD-style
+    pad (SolderMask, CopperCirclePad, text), never through-hole.
 
     Returns:
         A list of validation errors. Empty means valid.
@@ -194,8 +199,11 @@ def validate_pcb_footprint_hierarchy(
         return errors
 
     leg_names = _child_names(gltf, legs_index)
+    exposed_pad_name = str(pin_count + 1) if (exposed_pad and pin_count is not None) else None
     if pin_count is not None:
         expected_leg_names = [str(pin_number) for pin_number in range(1, pin_count + 1)]
+        if exposed_pad_name is not None:
+            expected_leg_names.append(exposed_pad_name)
         if leg_names != expected_leg_names:
             errors.append(
                 "Legs children mismatch: expected %s, got %s"
@@ -212,9 +220,12 @@ def validate_pcb_footprint_hierarchy(
             "text",
         ]
     else:
+        # SMD pads carry a solder-paste aperture (F.Paste) derived from the
+        # copper land; through-hole pads never do.
         expected_pin_children = [
             "SolderMask",
             "CopperCirclePad",
+            "PasteMask",
             "text",
         ]
 
@@ -223,7 +234,14 @@ def validate_pcb_footprint_hierarchy(
         if pin_index is None:
             errors.append("Legs is missing pin node %s" % pin_name)
             continue
-        _expect_child_order(gltf, pin_index, expected_pin_children, errors)
+        # The exposed pad is always SMD-style, even on a through-hole part, so it
+        # also carries a paste aperture.
+        children = (
+            ["SolderMask", "CopperCirclePad", "PasteMask", "text"]
+            if pin_name == exposed_pad_name
+            else expected_pin_children
+        )
+        _expect_child_order(gltf, pin_index, children, errors)
 
     return errors
 
@@ -232,6 +250,7 @@ def validate_pcb_footprint_glb(
     glb_path: str,
     pin_count: Optional[int] = None,
     through_hole: bool = True,
+    exposed_pad: bool = False,
 ) -> Tuple[bool, List[str]]:
     """
     Validate a saved GLB file against the PCB footprint hierarchy spec.
@@ -247,5 +266,6 @@ def validate_pcb_footprint_glb(
         gltf,
         pin_count=pin_count,
         through_hole=through_hole,
+        exposed_pad=exposed_pad,
     )
     return len(errors) == 0, errors

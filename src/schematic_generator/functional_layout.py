@@ -15,6 +15,7 @@ and the Sub-step 4 decision doc for the design rationale (Decisions A2 and B).
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from ..models import normalize_role, role_side
@@ -47,6 +48,39 @@ def _pin_num_key(n: str) -> int:
     return int(digits) if digits else 0
 
 
+# A numbered-bus name: an alphabetic (or underscore) prefix immediately followed
+# by an integer index, e.g. D0, A15, GPIO7, DQ12. The prefix is captured so a
+# block is only treated as a bus when every member shares ONE prefix.
+_BUS_NAME_RE = re.compile(r"^\s*([A-Za-z_]+?)(\d+)")
+
+
+def _bus_index(name: Any):
+    """``(PREFIX, index)`` for a bus-style name, else ``None`` (not a bus pin)."""
+    m = _BUS_NAME_RE.match(str(name or ""))
+    if not m:
+        return None
+    return m.group(1).upper(), int(m.group(2))
+
+
+def _order_block(block: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Order the pins of a single role block for drawing (top -> bottom).
+
+    A numbered bus — every pin's name is one shared alphabetic prefix plus an
+    integer index (D0..D7, A0..A15) — is drawn in ascending INDEX order so the
+    bus reads in bit order regardless of how the package numbers the pins (QC #3:
+    a data bus whose bits map to scrambled pin numbers was shown out of order).
+    Any other block keeps ascending pin-number order. Pin number breaks ties, so
+    the result is deterministic. General: no part number or name is special-cased.
+    """
+    keyed = [(_bus_index(p.get("name")), p) for p in block]
+    prefixes = {k[0] for k, _ in keyed if k}
+    is_bus = len(block) >= 2 and all(k is not None for k, _ in keyed) and len(prefixes) == 1
+    if is_bus:
+        return [p for _, p in sorted(
+            keyed, key=lambda kp: (kp[0][1], _pin_num_key(_num(kp[1]))))]
+    return sorted(block, key=lambda p: _pin_num_key(_num(p)))
+
+
 def _is_nc(pin: Dict[str, Any]) -> bool:
     """A pin is a no-connect if flagged, or its role resolves to ``nc``."""
     return bool(pin.get("nc")) or normalize_role(pin.get("role")) == "nc"
@@ -76,7 +110,7 @@ def functional_side_layout(pins: List[Dict[str, Any]]) -> Dict[str, List[Optiona
     # Emit each side in canonical block order, one blank between non-empty blocks.
     for side, order in BLOCK_ORDER.items():
         for role in order:
-            block = sorted(buckets[side].get(role, []), key=lambda p: _pin_num_key(_num(p)))
+            block = _order_block(buckets[side].get(role, []))
             if not block:
                 continue
             if layout[side]:

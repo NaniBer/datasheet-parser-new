@@ -377,6 +377,20 @@ def expand_groups_deterministic(pins: Dict[int, str]) -> Tuple[Dict[int, str], L
         exp = expand_numeric(label)
         if not exp or _lost_subscript(label):
             continue
+        # Fail closed on scattered groups: a deterministic ascending zip only maps
+        # pins to names correctly when the members are a CONTIGUOUS run (D0-D4 on
+        # pins 44-48 read in order). When they are non-contiguous (GPO0 to GPO3 on
+        # pins 5, 6, 41, 42) the pin-number order does NOT encode which pin holds
+        # which name, so an ascending guess would emit a confidently-wrong order
+        # (the GPO-swap defect). Leave the label in place: the group loop then
+        # resolves it from the pin-configuration drawing (vision) or, failing that,
+        # leaves it flagged rather than shipping a wrong permutation.
+        if members != list(range(members[0], members[-1] + 1)):
+            log.append(
+                f"non-contiguous group {label!r} pins={members}: not expanded "
+                "deterministically (pin order unreliable); left for drawing/vision"
+            )
+            continue
         if len(exp) == len(members):
             for n, nm in zip(members, exp):
                 out[n] = nm
@@ -491,6 +505,151 @@ def read_variant_column(
     return None
 
 
+# A line that is ONLY a pin-number list ("1, 13, 19, 43", "7 to 12, 20, 22",
+# "24"): digits joined by commas / ranges, no letters. This is how the "Pin No."
+# cell of a grouped pin-function table extracts (one cell per line in PyMuPDF).
+_PIN_NO_LINE = re.compile(r"^\d{1,3}(?:\s*(?:,|to|-|–|and|&)\s*\d{1,3})*$", re.IGNORECASE)
+# A variant pin-function table heading: "Table 12. 48-Lead LQFP Pin Function
+# Descriptions", "... 20-Pin Pin Assignment". The lead/pin count is group 1.
+_VARIANT_TABLE_HEADING = re.compile(
+    r"^Table\s+[\w.]+.*?\b(\d{1,3})\s*[- ]?\s*(?:LEAD|LEADS|PIN|PINS|TERMINAL|TERMINALS)\b"
+    r".*\b(?:FUNCTION|DESCRIPTION|DESCRIPTIONS|ASSIGNMENT|ASSIGNMENTS|CONFIGURATION)\b",
+    re.IGNORECASE,
+)
+# Any table caption. Marks where one table's rows end (the next table -- often a
+# register map whose rows would otherwise be misread as pin rows -- begins).
+_ANY_TABLE_HEADING = re.compile(r"^Table\s+[\w.]+[.\s]", re.IGNORECASE)
+
+
+def _parse_pin_no_cell(line: str, pin_count: int) -> Optional[List[int]]:
+    """``"7 to 12, 20, 22"`` -> ``[7,8,9,10,11,12,20,22]`` (the printed order).
+
+    Returns ``None`` when the line is not a pure pin-number list or any number
+    falls outside ``1..pin_count`` (so a stray numeric line in a description,
+    ``see Table 100``, can never be mistaken for a row)."""
+    s = (line or "").strip()
+    if not _PIN_NO_LINE.fullmatch(s):
+        return None
+    out: List[int] = []
+    for part in re.split(r"\s*,\s*", s):
+        m = re.fullmatch(r"(\d+)\s*(?:to|-|–)\s*(\d+)", part.strip(), re.IGNORECASE)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            if b < a or (b - a) >= pin_count:
+                return None
+            out.extend(range(a, b + 1))
+        elif part.strip().isdigit():
+            out.append(int(part.strip()))
+        else:
+            return None
+    if not out or any(n < 1 or n > pin_count for n in out):
+        return None
+    return out
+
+
+def _is_mnemonic_cell(line: str) -> bool:
+    """True when a line looks like a pin-name / group cell ("ELPF", "VS/FIELD",
+    "GPO0 to GPO3", "N.C.") rather than a prose description ("Digital Ground.").
+
+    Pin names are all-caps tokens; the only lowercase allowed is the word ``to``
+    inside a range label, so any other lowercase run marks the line as prose."""
+    s = (line or "").strip()
+    if not s or len(s) > 40 or not re.search(r"[A-Za-z]", s):
+        return False
+    return re.fullmatch(r"[A-Z0-9 ,/.:_+\-–()]+", re.sub(r"\bto\b", " ", s)) is not None
+
+
+def read_variant_pin_table(
+    full_text: str,
+    pin_count: Optional[int],
+    package: Optional[str] = None,
+) -> Optional[Dict[int, str]]:
+    """Read the ordered variant's grouped pin-function table straight from the
+    datasheet text. Pure text, NO LLM. Returns ``{number: name}`` or ``None``.
+
+    Handles the Analog Devices / TI style multi-variant layout where each
+    package has its OWN "Pin No. | Mnemonic | Type | Description" table and the
+    pin numbers are GROUPED per mnemonic (one cell per line in PyMuPDF)::
+
+        Table 12. 48-Lead LQFP Pin Function Descriptions
+        Pin No. / Mnemonic / Type / Description
+        23, 28, 32 / AGND / G / Analog Ground.
+        24 / ELPF / I / The recommended external loop filter ...
+        25 / PVDD / P / PLL Supply Voltage ...
+        5, 6, 41, 42 / GPO0 to GPO3 / O / General-Purpose Outputs ...
+
+    Picking the WRONG variant table is the usual cause of a mis-numbered pinout
+    (the 40/64-lead tables put different names on pin 24), so the ordered
+    variant is selected by its own ``<pin_count>-Lead`` heading. A single-name
+    row maps that name onto every pin in its cell. A range/group mnemonic
+    (``GPO0 to GPO3``) whose member count matches the pin cell is left AS THE
+    GROUP LABEL on each pin: the pin-number order does not reveal which pin holds
+    which member, so the group loop resolves the order from the drawing (vision)
+    or leaves it flagged -- never a guessed order.
+
+    Fails closed (returns ``None``) unless: the document is multi-variant (>= 2
+    distinct variant function-tables, so there is a selection to get right), the
+    ordered variant's table(s) are found, and the parsed rows cover EXACTLY pins
+    ``1..pin_count`` with no pin assigned twice. Any ambiguity keeps the caller's
+    existing pins.
+    """
+    if not pin_count or pin_count < 2 or not full_text:
+        return None
+    lines = [ln.strip() for ln in full_text.splitlines()]
+
+    # Multi-variant gate: how many DISTINCT variant pin-function tables exist?
+    variants = {int(m.group(1)) for ln in lines if (m := _VARIANT_TABLE_HEADING.match(ln))}
+    if len(variants) < 2 or pin_count not in variants:
+        return None
+
+    fam = None
+    if package:
+        fm = re.search(r"[A-Za-z]{2,}", package)
+        fam = fm.group(0).upper() if fm else None
+
+    result: Dict[int, str] = {}
+    conflict = False
+    n = len(lines)
+    i = 0
+    while i < n:
+        hm = _VARIANT_TABLE_HEADING.match(lines[i])
+        # Only the ordered variant's own table(s) (its pin count; and, when the
+        # package family is known, that family too -- some sheets reuse a lead
+        # count across two families).
+        if not (hm and int(hm.group(1)) == pin_count and (not fam or fam in lines[i].upper())):
+            i += 1
+            continue
+        j = i + 1
+        # Stop at the NEXT table caption of any kind: a variant's function table
+        # is split across pages as "...(Continued)" (re-entered by the outer
+        # loop), and the register-map tables that follow must not be scanned as
+        # pin rows.
+        while j < n and not _ANY_TABLE_HEADING.match(lines[j]):
+            pins = _parse_pin_no_cell(lines[j], pin_count)
+            if pins:
+                k = j + 1
+                while k < n and not lines[k]:
+                    k += 1
+                if k < n and _is_mnemonic_cell(lines[k]):
+                    mnem = lines[k]
+                    for p in pins:
+                        if p in result and result[p] != mnem:
+                            conflict = True
+                        else:
+                            result.setdefault(p, mnem)
+                    j = k + 1
+                    continue
+            j += 1
+        i = j
+
+    # Full, unambiguous coverage of the whole variant, or nothing.
+    if conflict or set(result) != set(range(1, pin_count + 1)):
+        return None
+    if len({v.upper() for v in result.values()}) < 2:  # degenerate
+        return None
+    return result
+
+
 # --------------------------------------------------------------------------- entry point
 def repair_pins(
     pins: List[dict],
@@ -570,6 +729,27 @@ def repair_pins(
                     log.append(
                         f"column (deterministic) [{om.version}]: read {len(det)} pins "
                         f"from the pin table; LLM column-check skipped"
+                    )
+            # 1b) Deterministic grouped-table read: on a MULTI-VARIANT datasheet
+            # where each package has its own "Pin No. | Mnemonic" function table
+            # (Analog Devices / TI), select the ordered variant's table by its
+            # own lead-count heading and take its names verbatim -- the usual
+            # root cause of a mis-numbered pinout is reading the wrong variant's
+            # table (the 40/64-lead tables name pin 24 differently). Fails closed
+            # unless the ordered variant's rows cover pins 1..N exactly. Range/
+            # group mnemonics (``GPO0 to GPO3``) are left as the group LABEL so
+            # the group loop resolves their per-pin order from the drawing.
+            if not column_resolved:
+                det = read_variant_pin_table(
+                    fitz_text, pin_count or len(names) or None, package
+                )
+                if det:
+                    names = det
+                    column_resolved = True
+                    log.append(
+                        f"variant pin table (deterministic): read {len(det)} pins "
+                        f"from the {pin_count or len(names)}-pin variant's function "
+                        f"table; LLM column-check skipped"
                     )
         except Exception as exc:  # noqa: BLE001 - never lose the extraction to a repair bug
             log.append(f"deterministic column read skipped: {type(exc).__name__}: {exc}")
@@ -671,6 +851,16 @@ def repair_pins(
                 log.append(f"letter-range {label!r} pins={members}: needs the drawing, escalating")
             elif _lost_subscript(label):
                 log.append(f"lost-subscript range {label!r} pins={members}: full names only in the drawing, escalating")
+            elif numbers and members != list(range(members[0], members[-1] + 1)):
+                # Pure numeric range (GPO0 to GPO3) on NON-CONTIGUOUS pins. The
+                # page text lists the pins and the range together but does NOT
+                # encode which pin holds which member -- only the pin-configuration
+                # DRAWING does. Skip the text step: it would read the pins in
+                # printed order and emit a confident ascending map (the GPO-swap
+                # defect). Fall through to the drawing/vision escalation, which is
+                # gated to a valid series permutation below (fail closed otherwise).
+                log.append(f"non-contiguous numeric range {label!r} pins={members}: "
+                           "per-pin order only in the drawing, escalating to vision")
             elif tokens and (row := resolve_from_row(texts, tokens, members)):
                 fix = {str(n): v for n, v in row.items()}
                 log.append(f"row-order {label!r} -> {row}")
@@ -756,6 +946,15 @@ def repair_pins(
                     if tokens and (prefix or len(unresolved) == len(tokens)) and not _fix_matches_tokens(
                             {n: fix2.get(str(n), "") for n in unresolved}, tokens, prefix):
                         log.append(f"rejected escalation {label!r} -> {fix2}: not a permutation of {tokens}")
+                        fix2 = {}
+                    # Numeric-series groups (GPO0 to GPO3): the drawing read is
+                    # trusted for the ORDER, but only if it is a clean permutation
+                    # of the series (one prefix, exactly the range's numbers). An
+                    # incomplete or off-series read is rejected -> the pins keep the
+                    # group label (fail closed) rather than take a guessed order.
+                    if numbers and len(unresolved) == len(numbers) and not _series_ok(
+                            {n: fix2.get(str(n), "") for n in unresolved}, numbers):
+                        log.append(f"rejected escalation {label!r} -> {fix2}: not a numbered series over {numbers}")
                         fix2 = {}
                     # Otherwise the escalation model's reading of the drawing is taken as-is
                     # (the series/permutation constraints police the guessers). When a

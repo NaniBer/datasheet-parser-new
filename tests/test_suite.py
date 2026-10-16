@@ -1260,7 +1260,10 @@ def test_aliased_package_families_generate_valid_footprints(tmp_path, package_ty
 
     assert build_pcb_footprint(package_type, pin_count, "TEST", pins, str(output_path))
 
-    is_valid, errors = validate_pcb_footprint_glb(str(output_path), pin_count=pin_count, through_hole=False)
+    # Leadless families (WSON/SON/DFN) carry a central exposed thermal pad.
+    is_valid, errors = validate_pcb_footprint_glb(
+        str(output_path), pin_count=pin_count, through_hole=False, exposed_pad=True
+    )
     assert is_valid, errors
     assert output_path.stat().st_size > 0
 
@@ -1305,16 +1308,16 @@ def test_enforce_known_package_type_raises_without_force():
     assert pin_data.package.type == "WLCSP-8", "package must not be mutated on failure"
 
 
-def test_enforce_known_package_type_force_substitutes_dip_and_flags():
+def test_enforce_known_package_type_force_substitutes_smd_and_flags():
     from src.main import enforce_known_package_type
 
     pin_data = _unknown_package_pin_data()
     enforce_known_package_type(pin_data, force_best_effort=True)
 
-    # Substitution is explicit: type rewritten and recorded so the GLB
-    # gets the unvalidated watermark.
-    assert pin_data.package.type == "DIP-8"
-    assert any("WLCSP-8" in e and "DIP-8" in e for e in pin_data.validation_errors)
+    # Substitution is explicit and surface-mount (SON), never a through-hole
+    # DIP: type rewritten and recorded so the GLB gets the unvalidated watermark.
+    assert pin_data.package.type == "SON-8"
+    assert any("WLCSP-8" in e and "SON-8" in e for e in pin_data.validation_errors)
 
 
 def test_enforce_known_package_type_force_substitutes_multi_package_variant():
@@ -1333,7 +1336,7 @@ def test_enforce_known_package_type_force_substitutes_multi_package_variant():
     )
     enforce_known_package_type(pin_data, force_best_effort=True)
 
-    assert pin_data.packages[0]["type"] == "DIP-8"
+    assert pin_data.packages[0]["type"] == "SON-8"
     assert pin_data.validation_errors
 
 
@@ -1490,7 +1493,10 @@ def test_full_pipeline_dfn_pdf_to_pcb_footprint_glb(monkeypatch, tmp_path):
     assert output_path.exists()
     assert output_path.stat().st_size > 0
 
-    is_valid, errors = validate_pcb_footprint_glb(str(output_path), pin_count=pin_count, through_hole=False)
+    # DFN is leadless: it carries a central exposed thermal pad (pin N+1).
+    is_valid, errors = validate_pcb_footprint_glb(
+        str(output_path), pin_count=pin_count, through_hole=False, exposed_pad=True
+    )
     assert is_valid, f"GLB validation failed: {errors}"
 
 
@@ -2548,10 +2554,37 @@ def test_schematic_quad_side_codes(tmp_path):
         e = n.extras or {}
         if "id" in e:
             sides.setdefault(e["side"], set()).add(int(e["id"][0]))
-    assert sides[0] == {1, 2, 3, 4, 5}
+    # QFN is leadless, so pin 21 is the exposed thermal pad (EPAD), appended to
+    # the left column. The 20 real pins keep their counterclockwise side codes.
+    assert sides[0] == {1, 2, 3, 4, 5, 21}
     assert sides[3] == {6, 7, 8, 9, 10}
     assert sides[2] == {11, 12, 13, 14, 15}
     assert sides[1] == {16, 17, 18, 19, 20}
+
+
+def test_leadless_symbol_has_epad_pin(tmp_path):
+    # SCH / FP-02: a leadless QFN symbol carries an EPAD pin (pin N+1, passive,
+    # thermal) so the exposed pad can be wired to ground; a DIP must not.
+    from pygltflib import GLTF2
+    from src.schematic_generator.pinout_diagram_builder import build_pinout_diagram
+
+    def _epad_pins(pkg, n):
+        out = tmp_path / f"{pkg}.glb"
+        pins = [{"number": str(i), "name": f"P{i}"} for i in range(1, n + 1)]
+        assert build_pinout_diagram(pkg, n, "IC", pins, str(out))
+        g = GLTF2().load(str(out))
+        return [
+            (e.get("pinName"), e.get("electricalType"), e.get("role"))
+            for node in g.nodes
+            for e in [node.extras or {}]
+            if (e.get("pinName") or "").upper() == "EPAD"
+        ]
+
+    # The pin appears on both the pin-group node (full extras) and its label
+    # mesh (pinName only); assert the fully-typed EPAD pin is present.
+    qfn = _epad_pins("QFN-20", 20)
+    assert ("EPAD", "passive", "thermal") in qfn, qfn
+    assert _epad_pins("DIP-8", 8) == []
 
 
 def test_glb_pin_extras_match_pad_spec(tmp_path):
@@ -3128,9 +3161,12 @@ def test_quad_footprint_rows_centered_per_side():
         col = [p.y for p in b.pin_positions if p.side == side]
         assert (max(col) + min(col)) / 2 == pytest.approx(0.0, abs=0.01), side
 
-    # Pin ring must sit at the JEDEC lead span (E - L inset), not beyond.
+    # Pin ring must sit at the JEDEC lead span (E - L inset), not beyond. The
+    # MS-026 LQFP-64 is a 10x10 body with a 12x12 lead span; the old
+    # (pins/4 - 1) * pitch + 4.0 estimate under-stated it as 11.5 (body came out
+    # 9.5, #61), so the span is now the standard 12.0 (body 10.0 + 2.0).
     xs = [p.x for p in b.pin_positions]
-    assert max(xs) - min(xs) == pytest.approx(11.5 - 0.6, abs=0.05)
+    assert max(xs) - min(xs) == pytest.approx(12.0 - 0.6, abs=0.05)
 
 
 def test_dims_family_consistency_gate(_dim_extractor):
@@ -3574,6 +3610,54 @@ def test_ordered_count_multivariant_no_match_fails_closed():
     )
     with pytest.raises(ValidationError):
         _enforce_ordered_pin_count(pd, "PART", force_best_effort=False)
+
+
+# --- caller part number is authoritative for the Value/MPN identity ----------
+# Regression for the QC "MPN/Value hygiene" cluster: the extractor's free-text
+# component_name is a weaker identity than the orderable the caller names. When
+# an explicit part number is supplied it must become the component_name, so the
+# symbol/footprint Value/MPN label carries the orderable (not the device family
+# or a marketing description).
+def test_caller_identity_overrides_family_name():
+    """TL16C2550 SCH-05: order code 'TL16C2550PFBR' must win over the datasheet
+    family name 'TL16C2550' the LLM returns."""
+    from src.main import _apply_caller_identity
+    from src.models.pin_data import PinData
+    pd = PinData(component_name="TL16C2550")
+    _apply_caller_identity(pd, "TL16C2550PFBR")
+    assert pd.component_name == "TL16C2550PFBR"
+
+
+def test_caller_identity_overrides_description():
+    """693072010801 SCH-04: the bare part number must win over the full product
+    description the LLM returns for a connector datasheet."""
+    from src.main import _apply_caller_identity
+    from src.models.pin_data import PinData
+    pd = PinData(component_name="693072010801 WR-CRD Micro SD Card Connector")
+    _apply_caller_identity(pd, "693072010801")
+    assert pd.component_name == "693072010801"
+
+
+def test_caller_identity_preserves_comma_suffix():
+    """74LVC1G99 SCH-02: a packing-code suffix must survive intact — nothing
+    truncates '74LVC1G99GT,115' at the comma."""
+    from src.main import _apply_caller_identity
+    from src.models.pin_data import PinData
+    pd = PinData(component_name="74LVC1G99")
+    _apply_caller_identity(pd, "74LVC1G99GT,115")
+    assert pd.component_name == "74LVC1G99GT,115"
+
+
+def test_caller_identity_no_part_number_is_noop():
+    """No explicit part number -> the extractor's name is kept verbatim, so
+    parts parsed without --part-number stay byte-identical."""
+    from src.main import _apply_caller_identity
+    from src.models.pin_data import PinData
+    pd = PinData(component_name="NE555")
+    _apply_caller_identity(pd, None)
+    _apply_caller_identity(pd, "")
+    _apply_caller_identity(pd, "   ")
+    assert pd.component_name == "NE555"
 
 
 def test_ordered_count_match_passes():

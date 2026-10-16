@@ -35,6 +35,10 @@ _SSOP_D = {16: 6.2, 20: 7.2, 24: 8.2, 28: 10.2}
 _QSOP_D = {8: 3.0, 16: 4.9, 20: 5.2, 24: 6.15, 28: 7.06}  # JEDEC MO-137
 _QFN_BODY = {12: 3.0, 16: 3.0, 20: 4.0, 24: 4.0, 28: 5.0, 32: 5.0, 40: 6.0, 48: 7.0, 64: 9.0}
 _QFP_PITCH = {32: 0.8, 44: 0.8, 48: 0.5, 52: 0.65, 64: 0.5, 80: 0.5, 100: 0.5, 144: 0.5}
+# JEDEC MS-026 nominal body size (E1 = D1, mm) for square LQFP/TQFP by pin
+# count. The lead span (E = D) is body + 2.0 mm (1.0 mm lead protrusion per
+# side, MS-026). Pin counts not listed fall back to a pitch-derived estimate.
+_QFP_BODY = {32: 7.0, 44: 10.0, 48: 7.0, 52: 10.0, 64: 10.0, 80: 12.0, 100: 14.0, 128: 14.0, 144: 20.0}
 _DFN_PITCH = {6: 0.65, 8: 0.65, 10: 0.5, 12: 0.5}
 
 # Power-tab / through-hole tab families (TO-220, DPAK/TO-252, D2PAK/TO-263,
@@ -55,6 +59,29 @@ _POWER_TAB_ALIASES = {
     "DPAK": "DPAK",
     "TO263": "D2PAK",
     "D2PAK": "D2PAK",
+}
+
+# Geometry aliases whose canonical family token differs from the alias itself,
+# so they reuse an existing real pad grid: LFCSP is ADI's QFN (same leadless
+# perimeter grid) and XSON is a leadless SON variant (e.g. SOT833-1).
+_GEOMETRY_CANONICAL = {"LFCSP": "QFN", "XSON": "SON", "SOT833": "SON"}
+
+# NXP/JEDEC SOT833-1 — the 8-pin XSON outline (e.g. 74LVC1G99). It is a *very*
+# small leadless SON (body 1.0 x 1.95 mm, 0.5 mm pitch, 2 rows of 4), so it must
+# NOT inherit the generic SON-8 grid (~3.0 x 3.35 mm, 0.65 mm pitch) which
+# oversizes the body and courtyard ~3x. Values are the published SOT833-1
+# outline; b/L reuse the 0.5 mm-pitch leadless lead dims shared with QFN/HVSSOP
+# (not invented). Leadless => body edge is the terminal span (E = E1, D = D1).
+# There is no exposed thermal pad on this logic package, so D2/E2 are omitted
+# (a real EP would only ever come from the datasheet via extracted_dims).
+_SOT833_1_XSON8 = {
+    "e": 0.5,
+    "E": 1.0,
+    "E1": 1.0,
+    "D": 1.95,
+    "D1": 1.95,
+    "b": 0.25,
+    "L": 0.4,
 }
 
 
@@ -78,10 +105,21 @@ def _family(package_type: str) -> Optional[str]:
     for alias in PACKAGE_TYPE_ALIASES:
         stripped = _strip(alias)
         if normalized.startswith(stripped) and not normalized[len(stripped):len(stripped) + 1].isalpha():
-            matches.append((stripped, stripped))
+            matches.append((stripped, _GEOMETRY_CANONICAL.get(stripped, stripped)))
     for stripped, canonical in _POWER_TAB_ALIASES.items():
         if normalized.startswith(stripped) and not normalized[len(stripped):len(stripped) + 1].isalpha():
             matches.append((stripped, canonical))
+    # Whole-word fallback for suffix forms like "32-LEAD LFCSP": the prefix
+    # match above only catches a family token at the start of the string.
+    if not matches:
+        tokens = set(re.split(r"[^A-Z0-9]+", (package_type or "").upper()))
+        for alias in PACKAGE_TYPE_ALIASES:
+            stripped = _strip(alias)
+            if stripped in tokens:
+                matches.append((stripped, _GEOMETRY_CANONICAL.get(stripped, stripped)))
+        for stripped, canonical in _POWER_TAB_ALIASES.items():
+            if stripped in tokens:
+                matches.append((stripped, canonical))
     return max(matches, key=lambda m: len(m[0]))[1] if matches else None
 
 
@@ -97,13 +135,25 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
     """
     family = _family(package_type)
 
+    # SOT833-1 / XSON8: a tiny leadless SON variant that must not inherit the
+    # generic SON-8 grid (which oversizes body + courtyard ~3x). Keyed off the
+    # documented outline name (SOT833) or XSON with 8 pins — never a part
+    # number. Other XSON pin counts map to different outlines (SOT886/SOT891…)
+    # we do not tabulate, so they fall through to the generic SON branch.
+    normalized = re.sub(r"[^A-Z0-9]", "", (package_type or "").upper())
+    if "SOT833" in normalized or ("XSON" in normalized and pin_count == 8):
+        return dict(_SOT833_1_XSON8)
+
     if family in ("DIP", "PDIP", "CDIP"):
-        # 300mil row spacing up to 28 pins, 600mil for wider packages.
+        # 300mil row spacing up to 28 pins, 600mil for wider packages. The body
+        # end margin is ~0.8 mm per side, matching the JEDEC MS-001 body length
+        # (DIP-16 = 19.3 mm, DIP-8 = 9.27 mm); the old 1.3 mm margin over-ran the
+        # body by ~1 mm (PGA2311P came out 20.38 mm long, #69).
         return {
             "e": 2.54,
             "E": 7.62 if pin_count <= 28 else 15.24,
             "E1": 6.35 if pin_count <= 28 else 13.7,
-            "D": _dual_row_body_length(pin_count, 2.54, margin=1.3),
+            "D": _dual_row_body_length(pin_count, 2.54, margin=0.8),
         }
 
     if family == "SOT23":
@@ -189,9 +239,13 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         # Leadless: terminals sit on the underside at the body edge, so the
         # molded body IS the E/D span. Publish it as E1/D1 too, so the drawn
         # fab outline is sourced from a real body dimension (not a lead span).
+        # D2/E2 is the exposed thermal pad: datasheet dims override, but when
+        # absent ~0.65x body is a safe JEDEC-typical default (QFN EPs run
+        # ~0.5-0.75 of body). Real datasheet D2/E2 flows in via extracted_dims.
         body = _QFN_BODY.get(pin_count, round((pin_count // 4 - 1) * 0.5 + 1.5, 2))
+        ep = round(body * 0.65, 2)
         return {"e": 0.5, "E": body, "E1": body, "D": body, "D1": body,
-                "b": 0.25, "L": 0.4}
+                "b": 0.25, "L": 0.4, "D2": ep, "E2": ep}
 
     if family in ("DFN", "WSON", "SON"):
         # Leadless, like QFN: body edge = terminal span, so E1 = E and D1 = D.
@@ -199,6 +253,7 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
         # pad-clearance clamp only tightens it where the body would overlap pads.
         pitch = _DFN_PITCH.get(pin_count, 0.5)
         body_l = max(3.0, _dual_row_body_length(pin_count, pitch, margin=0.7))
+        # Exposed pad ~0.6x body (datasheet D2/E2 overrides via extracted_dims).
         return {
             "e": pitch,
             "E": 3.0,
@@ -207,15 +262,24 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
             "D1": body_l,
             "b": 0.3,
             "L": 0.4,
+            "D2": round(body_l * 0.6, 2),
+            "E2": round(3.0 * 0.6, 2),
         }
 
     if family in ("QFP", "LQFP", "TQFP"):
         pitch = _QFP_PITCH.get(pin_count, 0.5)
-        # Lead span: pin row span + shoulders + lead feet on both sides.
-        span = round((pin_count // 4 - 1) * pitch + 4.0, 2)
-        body = round(span - 2.0, 2)  # MS-026: span = body + 2x (shoulder + foot)
+        # Body (E1/D1) is the JEDEC MS-026 standard size; the lead span (E/D) is
+        # body + 2.0 mm (1.0 mm lead protrusion per side). The old
+        # (pins/4 - 1) * pitch + 4.0 span over-stated 48-pin parts by ~0.5 mm,
+        # so the body came out 7.5 (clamped to 7.38, #61) instead of the real
+        # 7.0, and the SMD pads sat ~0.25 mm too far out with a short heel (#59).
+        body = _QFP_BODY.get(pin_count, round((pin_count // 4 - 1) * pitch + 2.0, 2))
+        span = round(body + 2.0, 2)
+        # IPC-7351 sizes the pad from the longest foot (L_max); MS-026 gull-wing
+        # L runs 0.45-0.75 mm, so L_max = 0.75 (the nominal 0.6 left the pad
+        # ~0.15 mm short of the land pattern, #12).
         return {"e": pitch, "E": span, "E1": body, "D": span, "D1": body,
-                "b": round(pitch * 0.45, 2), "L": 0.6}
+                "b": round(pitch * 0.45, 2), "L": 0.6, "L_max": 0.75}
 
     # BGA, LGA, LCCC, TSOP: no tabulated defaults yet.
     return None

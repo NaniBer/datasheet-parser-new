@@ -33,6 +33,31 @@ from src.models.pin_data import PinData, PackageInfo, Pin
     ("D3", "input", "data"),
     ("PA5", "bidirectional", "io"),
     ("PD13", "bidirectional", "io"),
+    # regulator / LDO outputs the part sources -> power_out (AD9106 CLDO/DLDOx)
+    ("CLDO", "power_out", "supply"),
+    ("DLDO1", "power_out", "supply"),
+    ("DLDO2", "power_out", "supply"),
+    # adjust/set and sense pins -> passive/analog (AD9106 FSADJ2/CAL_SENSE)
+    ("FSADJ2", "passive", "analog"),
+    ("CAL_SENSE", "passive", "analog"),
+    ("VADJ", "passive", "analog"),
+    ("ISENSE", "passive", "analog"),
+    # analog/digital supply rails with domain tags / +- (PGA2311 VD+/VA+/VA-)
+    ("VD+", "power_in", "supply"),
+    ("VA+", "power_in", "supply"),
+    ("VA-", "power_in", "ground"),
+    ("AVDD", "power_in", "supply"),
+    ("DVDD", "power_in", "supply"),
+    ("VDDIO", "power_in", "supply"),
+    # ground rails with channel suffix (PGA2311 AGNDR/AGNDL)
+    ("AGNDR", "power_in", "ground"),
+    ("AGNDL", "power_in", "ground"),
+    ("DGND", "power_in", "ground"),
+    # SD/MMC data + command lines are bidirectional (693072010801)
+    ("DAT0", "bidirectional", "data"),
+    ("DAT2", "bidirectional", "data"),
+    ("CD/DAT3", "bidirectional", "data"),
+    ("CMD", "bidirectional", "data"),
 ])
 def test_classify_known_names(name, etype, role):
     t, r, _ = classify_pin_name(name)
@@ -48,14 +73,30 @@ def test_ambiguous_names_stay_unknown(name):
 # --- conservative active_low: markers only, never conventions -----------------
 @pytest.mark.parametrize("name, expected", [
     ("OE#", True), ("/CS", True), ("RESET_N", True), ("W̅E̅", True),
+    # P1-2b: '*' and '~' are printed active-low notations too
+    ("RESET*", True), ("CS*", True), ("~CS", True), ("CS~", True),
     ("OE", False),        # convention-only inversion is NOT inferred
     ("RESET", False),
     ("NRST", False),
     ("VCC", False),
+    # bare names whose datasheet overbar was lost upstream stay active-high
+    ("CS", False), ("PWRDWN", False), ("INTRQ", False), ("TRIGGER", False),
 ])
 def test_active_low_conservative(name, expected):
     _, _, active_low = classify_pin_name(name)
     assert active_low is expected
+
+
+# --- the marker never corrupts the type/role: '*'/'~'/'#' are stripped --------
+@pytest.mark.parametrize("name, etype, role", [
+    ("RESET*", "input", "reset"),
+    ("CS#", "input", "control"),
+    ("~CS", "input", "control"),
+    ("CS~", "input", "control"),
+])
+def test_marked_names_still_type(name, etype, role):
+    t, r, active_low = classify_pin_name(name)
+    assert (t, r) == (etype, role) and active_low is True
 
 
 # --- fill-only integration in from_pin_data -----------------------------------
