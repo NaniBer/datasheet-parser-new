@@ -610,7 +610,13 @@ def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=F
         return
 
     text_pins, _container = _active_pins(pin_data)
-    expected = len(text_pins) or None
+    # Prefer the caller's ground-truth pin count (ordered_pin_count — e.g. derived
+    # from a "LQFP-48" package) over the text pass's count. On a multi-variant part
+    # the text pass can read the wrong-size table (ADV7180: the 64-lead instead of
+    # the ordered 48-lead); targeting the text count would then make the vision
+    # read "confirm" that wrong variant and select its figure. Fall back to the
+    # text count only when the caller gave no pin count.
+    expected = getattr(pin_data, "ordered_pin_count", None) or (len(text_pins) or None)
     if verbose:
         reason = (
             "grounded but table-less (graphical pinout) — cross-checking"
@@ -1607,6 +1613,62 @@ def _pinout_region_text(doc_text: str, max_chars: int = 12000) -> str:
     return doc_text[start:start + max_chars]
 
 
+# A per-variant pin-table header keyed by lead COUNT: "48-Lead LQFP", "48 Lead",
+# "48-lead", "48-pin", "48 Ld". The lead count is what separates one package's
+# table from the next on a multi-variant datasheet (ADV7180 prints 32/40/48/64-
+# lead tables back to back), so it anchors the slice to the ordered variant.
+_LEAD_COUNT_HDR_RE = re.compile(
+    r"\b(\d{1,3})\s*[-‐-―]?\s*(?:lead|pin|ld)s?\b", re.IGNORECASE
+)
+
+
+def _isolate_variant_region(
+    doc_text: str, count: Optional[int], max_chars: int = 12000
+) -> Optional[str]:
+    """Slice the datasheet down to the ORDERED variant's own pin table.
+
+    Multi-variant parts print one pin table per package ("32-Lead LFCSP",
+    "48-Lead LQFP", ...). Feeding every table to the targeted re-extraction lets
+    the model read the wrong one (ADV7180 keeps returning its 64-lead table).
+    Anchor on the header that names the ordered lead COUNT — preferring one that
+    sits next to a pin-table caption over a prose mention — and window from there
+    to the next variant header, so the re-extraction sees only the ordered
+    variant's table. Returns ``None`` when no matching header is found, so the
+    caller keeps its broad pinout text and nothing is made worse.
+    """
+    if not doc_text or not count:
+        return None
+    candidates = [
+        m for m in _LEAD_COUNT_HDR_RE.finditer(doc_text) if int(m.group(1)) == count
+    ]
+    if not candidates:
+        return None
+
+    def near_table(m) -> bool:
+        window = doc_text[max(0, m.start() - 90) : m.end() + 90].lower()
+        return any(
+            k in window
+            for k in (
+                "pin function",
+                "pin configuration",
+                "pin description",
+                "pin assignment",
+                "pinout",
+            )
+        )
+
+    best = next((m for m in candidates if near_table(m)), candidates[0])
+    start = best.start()
+    end = min(len(doc_text), start + max_chars)
+    # Stop at the next variant header announcing a DIFFERENT lead count.
+    for h in _LEAD_COUNT_HDR_RE.finditer(doc_text, best.end()):
+        if int(h.group(1)) != count:
+            end = min(h.start(), end)
+            break
+    region = doc_text[start:end]
+    return region if len(region) >= 50 else None
+
+
 def _package_label(base: Optional[str], count: int) -> Optional[str]:
     """Build a "<FAMILY>-<count>" label, stripping any trailing count on base."""
     base = re.sub(r"[-\s]*\d+\s*$", "", str(base or "")).strip()
@@ -1788,17 +1850,24 @@ def apply_ordering_ground_truth(
             print(f"  Ordering-table lookup skipped: {exc}")
         return
 
-    if not match:
-        return
     # Don't overwrite a caller-supplied package/count (set from --package /
     # --pin-count before this runs): the caller knows the exact ordered package,
     # so it outranks the datasheet-table read.
-    if match.pin_count and not pin_data.ordered_pin_count:
-        pin_data.ordered_pin_count = match.pin_count
-    if match.package and not pin_data.ordered_package_type:
-        pin_data.ordered_package_type = match.package
-    if verbose:
-        print(f"  Ordering table: {match.reason}")
+    if match:
+        if match.pin_count and not pin_data.ordered_pin_count:
+            pin_data.ordered_pin_count = match.pin_count
+        if match.package and not pin_data.ordered_package_type:
+            pin_data.ordered_package_type = match.package
+        if verbose:
+            print(f"  Ordering table: {match.reason}")
+    elif not pin_data.ordered_pin_count:
+        # No ordering-table match AND no caller-supplied count: there is no ground
+        # truth to enforce, so keep prior behaviour (leave the extraction as-is).
+        return
+    # else: the ordering table was unreadable but the CALLER gave a ground-truth
+    # pin count (e.g. --pin-count, or derived from "LQFP-48"). Fall through to the
+    # targeted re-extraction / enforcement below and use it — we don't need the
+    # datasheet's table to know the ordered variant when the caller told us.
 
     # Targeted re-extraction: the grounded package matches no extracted variant
     # and NC-padding can't explain it -> the wrong variant was read and there is
@@ -1812,15 +1881,21 @@ def apply_ordering_ground_truth(
         and not _ordered_variant_matches(pin_data, ordered)
         and not _nc_padding_can_reconcile(pin_data, ordered)
     ):
-        source_text = None
-        if content is not None:
-            try:
-                from .pdf_extractor.content_extractor import ContentExtractor
-                source_text = ContentExtractor.format_for_llm(content)
-            except Exception:
-                source_text = None
+        # Prefer a region isolated to the ORDERED variant's own pin table: a
+        # multi-variant datasheet (ADV7180: 32/40/48/64-lead tables) otherwise
+        # feeds every table to the re-extraction and the model reads the wrong
+        # one. Fall back to the broad extracted content / pinout window when no
+        # variant header is found.
+        source_text = _isolate_variant_region(doc_text, ordered)
         if not source_text:
-            source_text = _pinout_region_text(doc_text)
+            if content is not None:
+                try:
+                    from .pdf_extractor.content_extractor import ContentExtractor
+                    source_text = ContentExtractor.format_for_llm(content)
+                except Exception:
+                    source_text = None
+            if not source_text:
+                source_text = _pinout_region_text(doc_text)
         _reextract_ordered_variant(pin_data, source_text, part_number, model, verbose)
 
     _enforce_ordered_pin_count(pin_data, part_number, force_best_effort)
