@@ -149,3 +149,38 @@ def test_apply_caller_variant_no_count_for_sot():
     _apply_caller_variant(pd, package="SOT-23", pin_count=None)
     assert pd.ordered_package_type == "SOT-23"
     assert pd.ordered_pin_count is None  # case code must not become a pin count
+
+
+# --- variant-region isolation for the targeted re-extraction (ADV7180) ---
+# A multi-variant datasheet prints one pin table per package. The re-extraction
+# must see ONLY the ordered variant's table, or the model reads the wrong one
+# (ADV7180 kept returning its 64-lead table under the production model).
+from src.main import _isolate_variant_region
+
+
+def test_isolate_variant_region_picks_matching_lead_count():
+    doc = (
+        "Overview blah blah.\n"
+        "32-Lead LFCSP Pin Function Descriptions\n"
+        "Pin No. Mnemonic\n1 AAA\n2 BBB\n... up to 32 ...\n"
+        "64-Lead LQFP Pin Function Descriptions\n"
+        "Pin No. Mnemonic\n1 CCC\n ... up to 64 ...\n"
+        "48-Lead LQFP Pin Function Descriptions\n"
+        "Pin No. Mnemonic\n1 DGND\n24 ELPF\n25 PVDD\n48 NC\n"
+        "Absolute Maximum Ratings\n"
+    )
+    reg = _isolate_variant_region(doc, 48)
+    assert reg is not None
+    assert "48-Lead LQFP" in reg
+    # must NOT drag in the other variants' tables
+    assert "32-Lead LFCSP" not in reg
+    assert "64-Lead LQFP" not in reg
+    assert "ELPF" in reg and "PVDD" in reg
+
+
+def test_isolate_variant_region_none_when_no_matching_header():
+    doc = "Pin Function Descriptions\nPin No. Mnemonic\n1 OUT\n8 VCC\n"
+    # no "48-lead" style header -> None, caller keeps its broad text
+    assert _isolate_variant_region(doc, 48) is None
+    assert _isolate_variant_region(doc, None) is None
+    assert _isolate_variant_region("", 48) is None
