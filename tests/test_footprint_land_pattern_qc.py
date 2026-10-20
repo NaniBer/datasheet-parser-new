@@ -132,3 +132,33 @@ def test_qfn_body_still_clamped_inside_pad_ring():
     inner_x, _ = b._pad_inner_extents()
     assert 2 * fab_hw < 5.0          # pulled inside the 5 mm body
     assert fab_hw + b.LINE_THICKNESS / 2 <= inner_x + 1e-6
+
+
+def test_leadless_land_shorter_than_gullwing():
+    # QC (AD9106 LFCSP-32): a leadless land was coming out 1.1 mm (gull-wing
+    # toe/heel) when the datasheet-correct land is ~0.8 mm. Leadless terminals
+    # sit flush under the body, so QFN/LFCSP/DFN/SON must use the shorter leadless
+    # toe/heel; gull-wing families (QFP/SOIC) stay on 0.70.
+    dims = {"b": 0.25, "L": 0.40, "b_max": 0.30, "L_max": 0.40}
+    leadless = PcbFootprintBuilder("LFCSP-32", 32, "AD9106", extracted_dims=dims)
+    gull = PcbFootprintBuilder("TQFP-48", 48, "X", extracted_dims=dims)
+    l_len = leadless._compute_pad_spec(None, dims)["length"]
+    g_len = gull._compute_pad_spec(None, dims)["length"]
+    assert abs(l_len - 0.80) < 1e-6, f"LFCSP land {l_len} != 0.80"
+    assert abs(g_len - 1.10) < 1e-6, f"TQFP land {g_len} != 1.10 (gull-wing unchanged)"
+    assert l_len < g_len
+
+
+def test_solder_mask_keeps_dam_on_fine_pitch():
+    # QC (AD9106 LFCSP-32): full 0.102mm mask margin on a 0.3mm pad at 0.5mm
+    # pitch grows the aperture to 0.504mm > pitch, so adjacent solder-mask
+    # openings merge ("no gap between solder mask of pads"). The pitch-direction
+    # margin must clamp to keep a mask dam; the length direction keeps full margin.
+    dims = {"b": 0.25, "L": 0.40, "b_max": 0.30, "L_max": 0.40}
+    b = PcbFootprintBuilder("LFCSP-32", 32, "AD9106", extracted_dims=dims)
+    w = b.pad_spec["width"]; pitch = b.params.pin_pitch
+    m_pitch = min(b.MASK_MARGIN, max(0.0, (pitch - w - b.MASK_MIN_DAM) / 2))
+    aperture_w = w + 2 * m_pitch
+    dam = pitch - aperture_w
+    assert dam >= b.MASK_MIN_DAM - 1e-6, f"mask dam {dam:.3f} < {b.MASK_MIN_DAM}"
+    assert dam > 0, "adjacent solder-mask apertures still overlap"
