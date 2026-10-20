@@ -507,12 +507,12 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
         body_height=height,
         pin_geometry=PinGeometry(
             leg_length=2.0,
-            leg_width=0.05,  # Reduced from 0.1 for thinner pins
+            leg_width=0.15,  # KLC: pin line width ~0.15mm (6 mil) — was 0.05 (too thin)
             leg_thickness=0.2,  # Reduced from 0.3 for thinner pins
             point_size=0.3,
-            pin_num_size=0.6,  # Reduced from 0.8 for smaller text
+            pin_num_size=1.27,  # KLC: pin number text height 1.27mm (50 mil) — was 0.6 (too small)
             pin_num_offset=2.5,  # Pin numbers on the OUTSIDE (further from body) - FIXED: was -2.5
-            pin_name_size=0.5,  # Reduced from 0.7 for smaller text
+            pin_name_size=1.27,  # KLC: pin name text height 1.27mm (50 mil) — was 0.5 (too small)
             pin_name_offset=-0.5,  # Pin names on the INSIDE (closer to body) - FIXED: was 0.5
             pin_name_height=0.2,
             pin_num_height=0.2,
@@ -527,7 +527,7 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
             extra_top_num_offset=1.0     # Numbers at: y + 2.5 + 5 = y + 7.5 = HIGHER (further from body) = OUTSIDE ✓
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.25,
+            border_thickness=0.254,  # KLC: symbol body outline 0.254mm (10 mil)
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
