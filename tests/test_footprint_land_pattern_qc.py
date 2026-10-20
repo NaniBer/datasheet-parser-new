@@ -177,3 +177,24 @@ def test_xson_sot833_has_no_exposed_pad():
         n = 32 if "32" in pkg else 8
         b = PcbFootprintBuilder(pkg, n, "X", extracted_dims=epad_dims)
         assert b._has_exposed_pad, f"{pkg} should keep its exposed pad"
+
+
+def test_through_hole_pin1_pad_is_square():
+    # QC (PGA2311P / DIP): pin 1 should be a square pad (DIP pin-1 marker); the
+    # rest stay round. Verify pin 1's copper pad face area ~= d^2 (square) and
+    # noticeably larger than pin 2's circular pad (pi*r^2).
+    b = PcbFootprintBuilder("DIP-16", 16, "PGA2311P")
+    p1 = [pp for pp in b.pin_positions if str(pp.pin_number) == "1"][0]
+    p2 = [pp for pp in b.pin_positions if str(pp.pin_number) == "2"][0]
+
+    def copper_top_area(assy):
+        for ch in assy.children:
+            if ch.name == "CopperCirclePad":
+                wp = ch.children[0].obj  # shape sits one level down
+                return max(f.Area() for f in wp.val().Faces())
+        return None
+
+    a1 = copper_top_area(b.build_pin(p1, "VD+", "1"))
+    a2 = copper_top_area(b.build_pin(p2, "X", "2"))
+    assert a1 and a2
+    assert a1 > a2 * 1.1, f"pin 1 pad ({a1:.3f}) not distinctly square vs pin 2 ({a2:.3f})"

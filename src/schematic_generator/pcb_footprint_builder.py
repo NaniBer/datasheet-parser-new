@@ -984,20 +984,25 @@ class PcbFootprintBuilder:
             # CopperCirclePad, SolderMask, HoleCylinderPin, CopperCylinderPin,
             # CopperCirclePin, text.
 
+            # Pin 1 is drawn as a SQUARE pad (copper + mask) — the standard DIP
+            # pin-1 marker; all other through-hole pads stay round. (QC: PGA2311P
+            # pin 1 should be square, not the same round shape as the rest.)
+            is_pin1 = str(pin_number) == "1"
+
             # CopperCirclePad (F.Cu layer) - top layer copper pad
             copper_pad_radius = self.pad_spec["diameter"] / 2
-            copper_pad = cq.Workplane("XY").workplane(offset=self.PIN_CYLINDER_HEIGHT/2).center(
-                x, y
-            ).circle(copper_pad_radius).extrude(self.PAD_HEIGHT)
+            _cp = cq.Workplane("XY").workplane(offset=self.PIN_CYLINDER_HEIGHT/2).center(x, y)
+            copper_pad = (_cp.rect(2 * copper_pad_radius, 2 * copper_pad_radius)
+                          if is_pin1 else _cp.circle(copper_pad_radius)).extrude(self.PAD_HEIGHT)
             copper_pad_assy = cq.Assembly(name="CopperCirclePad")
             copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
             pin_assy.add(copper_pad_assy)
 
             # SolderMask (brown, largest)
             solder_mask_radius = self.pad_spec["mask_diameter"] / 2
-            solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
-                x, y
-            ).circle(solder_mask_radius).extrude(self.PAD_HEIGHT)
+            _sm = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(x, y)
+            solder_mask = (_sm.rect(2 * solder_mask_radius, 2 * solder_mask_radius)
+                           if is_pin1 else _sm.circle(solder_mask_radius)).extrude(self.PAD_HEIGHT)
             solder_mask_assy = cq.Assembly(name="SolderMask")
             solder_mask_assy.add(solder_mask, color=self.BROWN_COLOR)
             pin_assy.add(solder_mask_assy)
