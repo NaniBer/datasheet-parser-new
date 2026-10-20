@@ -516,11 +516,13 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
             pin_name_offset=-0.5,  # Pin names on the INSIDE (closer to body) - FIXED: was 0.5
             pin_name_height=0.2,
             pin_num_height=0.2,
-            # QFN-specific extra offsets (may differ from TQFP due to geometry)
-            extra_left_name_offset=2.0,   # Names at: x + (-0.5) = closer to body = INSIDE ✓
-            extra_left_num_offset=-5.0,   # Numbers at: x + 2.5 = further from body = OUTSIDE ✓
-            extra_right_name_offset=0.0,  # Names at: x + (-0.5) = closer to body = INSIDE ✓
-            extra_right_num_offset=0.5,   # Numbers at: x + 2.5 = further from body = OUTSIDE ✓
+            # Per-side offsets chosen so ALL four sides share the same gaps —
+            # name 1.5mm inside, number 3.5mm outside — fixing the QC finding that
+            # right-side labels sat farther from the pin than left-side ones.
+            extra_left_name_offset=2.0,   # left  name gap = -0.5 + 2.0 = +1.5 (inside)
+            extra_left_num_offset=-6.0,   # left  num  gap = +2.5 - 6.0 = -3.5 (outside)
+            extra_right_name_offset=-1.0, # right name gap = -0.5 - 1.0 = -1.5 (inside, mirror of left)
+            extra_right_num_offset=1.0,   # right num  gap = +2.5 + 1.0 = +3.5 (outside, mirror of left)
             extra_bottom_name_offset=1.0,  # Names at: y - (-0.5) + (-1) = y + 1.5 = HIGHER (closer to body) = INSIDE ✓
             extra_bottom_num_offset=-1.,  # Numbers at: y - 2.5 + (-5) = y - 7.5 = LOWER (further from body) = OUTSIDE ✓
             extra_top_name_offset=-1.0,    # Names at: y + (-0.5) + (-1) = y - 1.5 = LOWER (closer to body) = INSIDE ✓

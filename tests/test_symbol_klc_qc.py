@@ -26,3 +26,24 @@ def test_qfn_symbol_text_fits_within_pin_pitch():
     p = get_qfn_parameters(32)
     assert p.pin_geometry.pin_name_size < p.pin_pitch
     assert p.pin_geometry.pin_num_size < p.pin_pitch
+
+
+def test_qfn_label_gaps_symmetric_across_sides():
+    # QC (AD9106): right-side labels sat farther from the pin than left-side ones.
+    # Every side must share the same name/number gap magnitude.
+    from src.schematic_generator.pin_layout import layout_pins
+    p = get_qfn_parameters(32)
+    pins = layout_pins(p, None)
+
+    def gaps(side):
+        ps = [pp for pp in pins if pp.side == side]
+        pp = ps[len(ps) // 2]
+        if side in ("left", "right"):
+            return abs(round(pp.text_x - pp.x, 3)), abs(round(pp.num_x - pp.x, 3))
+        return abs(round(pp.text_y - pp.y, 3)), abs(round(pp.num_y - pp.y, 3))
+
+    g = {s: gaps(s) for s in ("left", "right", "top", "bottom")}
+    name_mags = {v[0] for v in g.values()}
+    num_mags = {v[1] for v in g.values()}
+    assert len(name_mags) == 1, f"name gaps not symmetric: {g}"
+    assert len(num_mags) == 1, f"number gaps not symmetric: {g}"
