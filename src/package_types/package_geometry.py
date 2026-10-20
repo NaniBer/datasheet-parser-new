@@ -321,7 +321,7 @@ def get_dfn_parameters(pin_count: int) -> SchematicParameters:
         body_height_margin=8.0,
         pin_geometry=PinGeometry(
             leg_length=4.0,
-            leg_width=0.1,
+            leg_width=0.15,  # KLC: pin line width ~0.15mm (6 mil) — was 0.1 (too thin)
             pin_name_size=0.7,
             pin_name_offset=2.0,
             pin_num_size=0.6,
@@ -336,7 +336,7 @@ def get_dfn_parameters(pin_count: int) -> SchematicParameters:
             extra_top_num_offset=0.0,
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.25,
+            border_thickness=0.254,  # KLC: symbol body outline 0.254mm (10 mil)
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
@@ -359,7 +359,7 @@ def get_wson_parameters(pin_count: int) -> SchematicParameters:
         body_height_margin=8.0,
         pin_geometry=PinGeometry(
             leg_length=4.0,
-            leg_width=0.1,
+            leg_width=0.15,  # KLC: pin line width ~0.15mm (6 mil) — was 0.1 (too thin)
             pin_name_size=0.7,
             pin_name_offset=2.0,
             pin_num_size=0.6,
@@ -374,7 +374,7 @@ def get_wson_parameters(pin_count: int) -> SchematicParameters:
             extra_top_num_offset=0.0,
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.25,
+            border_thickness=0.254,  # KLC: symbol body outline 0.254mm (10 mil)
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
@@ -397,7 +397,7 @@ def get_son_parameters(pin_count: int) -> SchematicParameters:
         body_height_margin=8.0,
         pin_geometry=PinGeometry(
             leg_length=4.0,
-            leg_width=0.1,
+            leg_width=0.15,  # KLC: pin line width ~0.15mm (6 mil) — was 0.1 (too thin)
             pin_name_size=0.7,
             pin_name_offset=2.0,
             pin_num_size=0.6,
@@ -412,7 +412,7 @@ def get_son_parameters(pin_count: int) -> SchematicParameters:
             extra_top_num_offset=0.0,
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.25,
+            border_thickness=0.254,  # KLC: symbol body outline 0.254mm (10 mil)
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,

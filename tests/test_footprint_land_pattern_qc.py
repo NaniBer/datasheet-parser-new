@@ -162,3 +162,18 @@ def test_solder_mask_keeps_dam_on_fine_pitch():
     dam = pitch - aperture_w
     assert dam >= b.MASK_MIN_DAM - 1e-6, f"mask dam {dam:.3f} < {b.MASK_MIN_DAM}"
     assert dam > 0, "adjacent solder-mask apertures still overlap"
+
+
+def test_xson_sot833_has_no_exposed_pad():
+    # QC (74LVC1G99 / XSON-8 / SOT833-1): a phantom center pad "9" was added.
+    # XSON/SOT833 are small-signal leadless outlines with NO thermal pad; a bogus
+    # extracted D2/E2 must not create one. Real QFN/DFN exposed pads are kept.
+    epad_dims = {"b": 0.25, "L": 0.4, "b_max": 0.3, "L_max": 0.4, "D2": 0.5, "E2": 0.5}
+    for pkg in ("XSON-8", "SOT833-1"):
+        b = PcbFootprintBuilder(pkg, 8, "74LVC1G99", extracted_dims=epad_dims)
+        assert not b._has_exposed_pad, f"{pkg} must not have an exposed pad"
+    # regression: a genuine leadless thermal-pad part still gets its EPAD
+    for pkg in ("LFCSP-32", "DFN-8", "QFN-32"):
+        n = 32 if "32" in pkg else 8
+        b = PcbFootprintBuilder(pkg, n, "X", extracted_dims=epad_dims)
+        assert b._has_exposed_pad, f"{pkg} should keep its exposed pad"
