@@ -47,3 +47,22 @@ def test_qfn_label_gaps_symmetric_across_sides():
     num_mags = {v[1] for v in g.values()}
     assert len(name_mags) == 1, f"name gaps not symmetric: {g}"
     assert len(num_mags) == 1, f"number gaps not symmetric: {g}"
+
+
+def test_tqfp_symbol_klc_and_symmetric_gaps():
+    # TL16C2550 (TQFP-48) QC: thin lines/text + right-side names on the body line.
+    from src.package_types.package_geometry import get_tqfp_parameters
+    from src.schematic_generator.pin_layout import layout_pins
+    p = get_tqfp_parameters(48)
+    g = p.pin_geometry
+    assert abs(g.pin_name_size - 1.27) < 1e-6 and abs(g.pin_num_size - 1.27) < 1e-6
+    assert g.leg_width >= 0.15 - 1e-6
+    assert abs(p.body_geometry.border_thickness - 0.254) < 1e-6
+    pins = layout_pins(p, None)
+    def gaps(side):
+        ps = [pp for pp in pins if pp.side == side]; pp = ps[len(ps) // 2]
+        if side in ("left", "right"): return abs(round(pp.text_x - pp.x, 2)), abs(round(pp.num_x - pp.x, 2))
+        return abs(round(pp.text_y - pp.y, 2)), abs(round(pp.num_y - pp.y, 2))
+    gg = {s: gaps(s) for s in ("left", "right", "top", "bottom")}
+    assert len({v[0] for v in gg.values()}) == 1, f"name gaps asymmetric: {gg}"
+    assert len({v[1] for v in gg.values()}) == 1, f"num gaps asymmetric: {gg}"
