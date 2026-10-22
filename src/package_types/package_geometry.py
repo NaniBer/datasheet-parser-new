@@ -321,7 +321,7 @@ def get_dfn_parameters(pin_count: int) -> SchematicParameters:
         body_height_margin=8.0,
         pin_geometry=PinGeometry(
             leg_length=4.0,
-            leg_width=0.1,
+            leg_width=0.15,  # KLC: pin line width ~0.15mm (6 mil) — was 0.1 (too thin)
             pin_name_size=0.7,
             pin_name_offset=2.0,
             pin_num_size=0.6,
@@ -336,7 +336,7 @@ def get_dfn_parameters(pin_count: int) -> SchematicParameters:
             extra_top_num_offset=0.0,
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.25,
+            border_thickness=0.254,  # KLC: symbol body outline 0.254mm (10 mil)
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
@@ -359,7 +359,7 @@ def get_wson_parameters(pin_count: int) -> SchematicParameters:
         body_height_margin=8.0,
         pin_geometry=PinGeometry(
             leg_length=4.0,
-            leg_width=0.1,
+            leg_width=0.15,  # KLC: pin line width ~0.15mm (6 mil) — was 0.1 (too thin)
             pin_name_size=0.7,
             pin_name_offset=2.0,
             pin_num_size=0.6,
@@ -374,7 +374,7 @@ def get_wson_parameters(pin_count: int) -> SchematicParameters:
             extra_top_num_offset=0.0,
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.25,
+            border_thickness=0.254,  # KLC: symbol body outline 0.254mm (10 mil)
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
@@ -397,7 +397,7 @@ def get_son_parameters(pin_count: int) -> SchematicParameters:
         body_height_margin=8.0,
         pin_geometry=PinGeometry(
             leg_length=4.0,
-            leg_width=0.1,
+            leg_width=0.15,  # KLC: pin line width ~0.15mm (6 mil) — was 0.1 (too thin)
             pin_name_size=0.7,
             pin_name_offset=2.0,
             pin_num_size=0.6,
@@ -412,7 +412,7 @@ def get_son_parameters(pin_count: int) -> SchematicParameters:
             extra_top_num_offset=0.0,
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.25,
+            border_thickness=0.254,  # KLC: symbol body outline 0.254mm (10 mil)
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,
@@ -455,27 +455,29 @@ def get_tqfp_parameters(pin_count: int) -> SchematicParameters:
         body_height=height,
         pin_geometry=PinGeometry(
             leg_length=2.0,
-            leg_width=0.05,  # Reduced from 0.1 for thinner pins
+            leg_width=0.15,  # KLC: pin line width ~0.15mm (6 mil) — was 0.05 (too thin)
             leg_thickness=0.2,  # Reduced from 0.3 for thinner pins
             point_size=0.3,
-            pin_num_size=0.6,  # Reduced from 0.8 for smaller text
+            pin_num_size=1.27,  # KLC: pin number text height 1.27mm (50 mil) — was 0.6
             pin_num_offset=2,  # Pin numbers on the OUTSIDE (further from body) - positive value to place correctly
-            pin_name_size=0.8,  # Reduced from 0.7 for smaller text
+            pin_name_size=1.27,  # KLC: pin name text height 1.27mm (50 mil) — was 0.8
             pin_name_offset=-2.0,  # Pin names on the INSIDE (closer to body)
             pin_name_height=0.2,  # Reduced from 0.3 for thinner text
             pin_num_height=0.2,  # Reduced from 0.3 for thinner text
-            # TQFP-specific extra offsets
-            extra_left_name_offset=4.0,      # Names at: x + (-2.0) + 4 = x + 2.0 = closer to body = INSIDE ✓
-            extra_left_num_offset=-6.0,      # Numbers at: x + 2.0 + (-6) = x - 4.0 = further from body = OUTSIDE ✓
-            extra_right_name_offset=1.0,     # Names at: x + (-2.0) + 1 = x - 1.0 = closer to body = INSIDE ✓
-            extra_right_num_offset=2.0,     # Numbers at: x + 2.0 + (-4) = x - 2.0 = further from body = OUTSIDE ✓ (was -1.5)
-            extra_bottom_name_offset=0.0,  # Names at: y - (-2.0) + (-2) = y = LOWER (closer to body) = INSIDE ✓
-            extra_bottom_num_offset=-2.0,     # Numbers at: y - 2.0 + (-2) = y - 4.0 = LOWER (further from body) = OUTSIDE ✓
-            extra_top_name_offset=0.5,      # Names at: y + (-2.0) + (-2) = y - 4.0 = LOWER (closer to body) = INSIDE ✓
-            extra_top_num_offset=4.0         # Numbers at: y + 2.0 + 1 = y + 3.0 = HIGHER (further from body) = OUTSIDE ✓
+            # Per-side offsets chosen so ALL four sides share the same gaps —
+            # name 2.0mm inside, number 4.0mm outside — fixing the QC finding that
+            # right-side names sat on the body line while left-side names were close.
+            extra_left_name_offset=4.0,      # left  name gap = -2.0 + 4.0 = +2.0 (inside)
+            extra_left_num_offset=-6.0,      # left  num  gap = +2.0 - 6.0 = -4.0 (outside)
+            extra_right_name_offset=0.0,     # right name gap = -2.0 + 0.0 = -2.0 (inside, mirror of left)
+            extra_right_num_offset=2.0,      # right num  gap = +2.0 + 2.0 = +4.0 (outside, mirror of left)
+            extra_bottom_name_offset=0.0,    # bottom name gap = +2.0 + 0.0 = +2.0 (inside)
+            extra_bottom_num_offset=-2.0,    # bottom num  gap = -2.0 - 2.0 = -4.0 (outside)
+            extra_top_name_offset=0.0,       # top   name gap = -2.0 + 0.0 = -2.0 (inside)
+            extra_top_num_offset=2.0         # top   num  gap = +2.0 + 2.0 = +4.0 (outside)
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.2,  # Reduced from 0.3 for thinner border
+            border_thickness=0.254,  # KLC: symbol body outline 0.254mm (10 mil) — was 0.2
             border_height=0.2,  # Reduced from 0.3
             designator_size=3.0,
             designator_offset=5.0,
@@ -507,27 +509,29 @@ def get_qfn_parameters(pin_count: int) -> SchematicParameters:
         body_height=height,
         pin_geometry=PinGeometry(
             leg_length=2.0,
-            leg_width=0.05,  # Reduced from 0.1 for thinner pins
+            leg_width=0.15,  # KLC: pin line width ~0.15mm (6 mil) — was 0.05 (too thin)
             leg_thickness=0.2,  # Reduced from 0.3 for thinner pins
             point_size=0.3,
-            pin_num_size=0.6,  # Reduced from 0.8 for smaller text
+            pin_num_size=1.27,  # KLC: pin number text height 1.27mm (50 mil) — was 0.6 (too small)
             pin_num_offset=2.5,  # Pin numbers on the OUTSIDE (further from body) - FIXED: was -2.5
-            pin_name_size=0.5,  # Reduced from 0.7 for smaller text
+            pin_name_size=1.27,  # KLC: pin name text height 1.27mm (50 mil) — was 0.5 (too small)
             pin_name_offset=-0.5,  # Pin names on the INSIDE (closer to body) - FIXED: was 0.5
             pin_name_height=0.2,
             pin_num_height=0.2,
-            # QFN-specific extra offsets (may differ from TQFP due to geometry)
-            extra_left_name_offset=2.0,   # Names at: x + (-0.5) = closer to body = INSIDE ✓
-            extra_left_num_offset=-5.0,   # Numbers at: x + 2.5 = further from body = OUTSIDE ✓
-            extra_right_name_offset=0.0,  # Names at: x + (-0.5) = closer to body = INSIDE ✓
-            extra_right_num_offset=0.5,   # Numbers at: x + 2.5 = further from body = OUTSIDE ✓
+            # Per-side offsets chosen so ALL four sides share the same gaps —
+            # name 1.5mm inside, number 3.5mm outside — fixing the QC finding that
+            # right-side labels sat farther from the pin than left-side ones.
+            extra_left_name_offset=2.0,   # left  name gap = -0.5 + 2.0 = +1.5 (inside)
+            extra_left_num_offset=-6.0,   # left  num  gap = +2.5 - 6.0 = -3.5 (outside)
+            extra_right_name_offset=-1.0, # right name gap = -0.5 - 1.0 = -1.5 (inside, mirror of left)
+            extra_right_num_offset=1.0,   # right num  gap = +2.5 + 1.0 = +3.5 (outside, mirror of left)
             extra_bottom_name_offset=1.0,  # Names at: y - (-0.5) + (-1) = y + 1.5 = HIGHER (closer to body) = INSIDE ✓
             extra_bottom_num_offset=-1.,  # Numbers at: y - 2.5 + (-5) = y - 7.5 = LOWER (further from body) = OUTSIDE ✓
             extra_top_name_offset=-1.0,    # Names at: y + (-0.5) + (-1) = y - 1.5 = LOWER (closer to body) = INSIDE ✓
             extra_top_num_offset=1.0     # Numbers at: y + 2.5 + 5 = y + 7.5 = HIGHER (further from body) = OUTSIDE ✓
         ),
         body_geometry=BodyGeometry(
-            border_thickness=0.25,
+            border_thickness=0.254,  # KLC: symbol body outline 0.254mm (10 mil)
             border_height=0.5,
             designator_size=3.0,
             designator_offset=6.0,

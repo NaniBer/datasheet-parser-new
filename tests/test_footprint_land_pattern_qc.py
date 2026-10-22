@@ -132,3 +132,69 @@ def test_qfn_body_still_clamped_inside_pad_ring():
     inner_x, _ = b._pad_inner_extents()
     assert 2 * fab_hw < 5.0          # pulled inside the 5 mm body
     assert fab_hw + b.LINE_THICKNESS / 2 <= inner_x + 1e-6
+
+
+def test_leadless_land_shorter_than_gullwing():
+    # QC (AD9106 LFCSP-32): a leadless land was coming out 1.1 mm (gull-wing
+    # toe/heel) when the datasheet-correct land is ~0.8 mm. Leadless terminals
+    # sit flush under the body, so QFN/LFCSP/DFN/SON must use the shorter leadless
+    # toe/heel; gull-wing families (QFP/SOIC) stay on 0.70.
+    dims = {"b": 0.25, "L": 0.40, "b_max": 0.30, "L_max": 0.40}
+    leadless = PcbFootprintBuilder("LFCSP-32", 32, "AD9106", extracted_dims=dims)
+    gull = PcbFootprintBuilder("TQFP-48", 48, "X", extracted_dims=dims)
+    l_len = leadless._compute_pad_spec(None, dims)["length"]
+    g_len = gull._compute_pad_spec(None, dims)["length"]
+    assert abs(l_len - 0.80) < 1e-6, f"LFCSP land {l_len} != 0.80"
+    assert abs(g_len - 1.10) < 1e-6, f"TQFP land {g_len} != 1.10 (gull-wing unchanged)"
+    assert l_len < g_len
+
+
+def test_solder_mask_keeps_dam_on_fine_pitch():
+    # QC (AD9106 LFCSP-32): full 0.102mm mask margin on a 0.3mm pad at 0.5mm
+    # pitch grows the aperture to 0.504mm > pitch, so adjacent solder-mask
+    # openings merge ("no gap between solder mask of pads"). The pitch-direction
+    # margin must clamp to keep a mask dam; the length direction keeps full margin.
+    dims = {"b": 0.25, "L": 0.40, "b_max": 0.30, "L_max": 0.40}
+    b = PcbFootprintBuilder("LFCSP-32", 32, "AD9106", extracted_dims=dims)
+    w = b.pad_spec["width"]; pitch = b.params.pin_pitch
+    m_pitch = min(b.MASK_MARGIN, max(0.0, (pitch - w - b.MASK_MIN_DAM) / 2))
+    aperture_w = w + 2 * m_pitch
+    dam = pitch - aperture_w
+    assert dam >= b.MASK_MIN_DAM - 1e-6, f"mask dam {dam:.3f} < {b.MASK_MIN_DAM}"
+    assert dam > 0, "adjacent solder-mask apertures still overlap"
+
+
+def test_xson_sot833_has_no_exposed_pad():
+    # QC (74LVC1G99 / XSON-8 / SOT833-1): a phantom center pad "9" was added.
+    # XSON/SOT833 are small-signal leadless outlines with NO thermal pad; a bogus
+    # extracted D2/E2 must not create one. Real QFN/DFN exposed pads are kept.
+    epad_dims = {"b": 0.25, "L": 0.4, "b_max": 0.3, "L_max": 0.4, "D2": 0.5, "E2": 0.5}
+    for pkg in ("XSON-8", "SOT833-1"):
+        b = PcbFootprintBuilder(pkg, 8, "74LVC1G99", extracted_dims=epad_dims)
+        assert not b._has_exposed_pad, f"{pkg} must not have an exposed pad"
+    # regression: a genuine leadless thermal-pad part still gets its EPAD
+    for pkg in ("LFCSP-32", "DFN-8", "QFN-32"):
+        n = 32 if "32" in pkg else 8
+        b = PcbFootprintBuilder(pkg, n, "X", extracted_dims=epad_dims)
+        assert b._has_exposed_pad, f"{pkg} should keep its exposed pad"
+
+
+def test_through_hole_pin1_pad_is_square():
+    # QC (PGA2311P / DIP): pin 1 should be a square pad (DIP pin-1 marker); the
+    # rest stay round. Verify pin 1's copper pad face area ~= d^2 (square) and
+    # noticeably larger than pin 2's circular pad (pi*r^2).
+    b = PcbFootprintBuilder("DIP-16", 16, "PGA2311P")
+    p1 = [pp for pp in b.pin_positions if str(pp.pin_number) == "1"][0]
+    p2 = [pp for pp in b.pin_positions if str(pp.pin_number) == "2"][0]
+
+    def copper_top_area(assy):
+        for ch in assy.children:
+            if ch.name == "CopperCirclePad":
+                wp = ch.children[0].obj  # shape sits one level down
+                return max(f.Area() for f in wp.val().Faces())
+        return None
+
+    a1 = copper_top_area(b.build_pin(p1, "VD+", "1"))
+    a2 = copper_top_area(b.build_pin(p2, "X", "2"))
+    assert a1 and a2
+    assert a1 > a2 * 1.1, f"pin 1 pad ({a1:.3f}) not distinctly square vs pin 2 ({a2:.3f})"

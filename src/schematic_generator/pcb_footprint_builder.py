@@ -17,6 +17,7 @@ Hierarchy follows KiCad KLC standards documented in docs/PCB_FOOTPRINT_HIERARCHY
 
 import logging
 import os
+import re
 from typing import List, Dict, Any, Optional
 
 import cadquery as cq
@@ -62,10 +63,19 @@ class PcbFootprintBuilder:
     # Pad sizing (IPC-7351 nominal density)
     ANNULAR_RING = 0.35     # mm per side, through-hole pad = drill + 2x ring
     PAD_TOE_HEEL = 0.70     # mm, gull-wing pad length = L + toe + heel
+    PAD_TOE_HEEL_LEADLESS = 0.40  # mm, leadless land (QFN/DFN/SON/LFCSP): the
+                            # terminal sits flush under the body, so the land needs
+                            # far less toe/heel than a gull-wing foot. Gull-wing's
+                            # 0.70 over-extends a leadless pad (AD9106 LFCSP-32:
+                            # L~0.4 -> 1.1mm instead of the correct ~0.8mm land).
     PAD_SIDE_MARGIN = 0.06  # mm, gull-wing pad width = b + side margins
     PAD_MIN_GAP = 0.20      # mm, minimum copper gap between adjacent pads
     CORNER_CLEARANCE = 0.15  # mm, min copper-copper at quad corners (FP-14/IPC-2221B)
     MASK_MARGIN = 0.102     # mm, solder-mask opening beyond copper PER SIDE (KiCad solder_mask_margin convention; applied to each edge, so the full dimension grows by 2x this)
+    MASK_MIN_DAM = 0.075    # mm, minimum solder-mask web (dam) kept between adjacent
+                            # apertures; the full MASK_MARGIN overruns a fine pitch
+                            # (0.3mm pad + 2x0.102 = 0.504 > 0.5 pitch -> apertures
+                            # merge), so the margin is clamped in the PITCH direction.
     PIN_CYLINDER_HEIGHT = 0.200  # mm (through PCB thickness)
     PAD_HEIGHT = 0.020  # mm (thin layer)
     TINY_HEIGHT = 0.001  # mm (minimum height for extrusion)
@@ -175,9 +185,14 @@ class PcbFootprintBuilder:
         # family is leadless and an exposed-pad dimension is available.
         from ..package_types.footprint_defaults import _family as _fp_family
         leadless = _fp_family(package_type) in ("QFN", "DFN", "WSON", "SON")
+        # XSON / SOT833 are small-signal leadless outlines with NO thermal pad
+        # (e.g. 74LVC1G99 in SOT833-1). Extraction can report a bogus D2/E2 for
+        # them; don't let it add a phantom centre pad (QC: spurious pad "9").
+        no_epad_outline = bool(re.search(r"XSON|SOT\s*-?\s*833", package_type or "", re.I))
         self._has_exposed_pad = bool(
             leadless and not self.is_through_hole()
             and self._epad_w and self._epad_l
+            and not no_epad_outline
         )
         self._exposed_pad_number = str(pin_count + 1) if self._has_exposed_pad else None
 
@@ -535,6 +550,20 @@ class PcbFootprintBuilder:
         """
         return self._body_outline_l or self.params.body_height
 
+    def _mask_margin_pitch(self, width: float) -> float:
+        """Per-side solder-mask margin in the PITCH direction.
+
+        Clamped so adjacent apertures keep a >= MASK_MIN_DAM solder-mask dam at
+        fine pitch (the full MASK_MARGIN overruns a 0.5 mm pitch and the openings
+        merge). This is the binding margin, so it is also the value the exported
+        metadata declares — keeping declared == drawn."""
+        if self.params.pin_pitch:
+            return min(
+                self.MASK_MARGIN,
+                max(0.0, (self.params.pin_pitch - width - self.MASK_MIN_DAM) / 2),
+            )
+        return self.MASK_MARGIN
+
     def _compute_pad_spec(self, jedec_defaults: Optional[Dict[str, Any]],
                           extracted_dims: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Pad shape and size per IPC-7351 from the best available dims."""
@@ -544,10 +573,15 @@ class PcbFootprintBuilder:
             th_dims.update(extracted_dims or {})
             b_eff = th_dims.get("b_max") or th_dims.get("b")
             if b_eff:
-                # IPC-2222: hole = lead diagonal + 0.25 clearance. DIP leads
-                # are rectangular (width b x ~0.25 thick); the diagonal
-                # governs insertion. Never below the standard 0.83 drill.
-                diagonal = (float(b_eff) ** 2 + self.LEAD_THICKNESS ** 2) ** 0.5
+                # IPC-2222: hole = lead diagonal + 0.25 clearance. DIP leads are
+                # rectangular (width b x thickness c); the diagonal governs
+                # insertion and the hole must fit the WIDEST lead, so prefer the
+                # published maxima (c_max/c) over the nominal LEAD_THICKNESS.
+                # Never below the standard 0.83 drill.
+                thickness = float(
+                    th_dims.get("c_max") or th_dims.get("c") or self.LEAD_THICKNESS
+                )
+                diagonal = (float(b_eff) ** 2 + thickness ** 2) ** 0.5
                 drill = max(drill, round(diagonal + self.HOLE_CLEARANCE, 2))
             diameter = drill + 2 * self.ANNULAR_RING
             return {
@@ -555,6 +589,7 @@ class PcbFootprintBuilder:
                 "diameter": diameter,
                 "mask_diameter": diameter + 2 * self.MASK_MARGIN,  # per-side margin on each edge
                 "drill": drill,
+                "solder_mask_margin": self.MASK_MARGIN,  # TH pitch (>=2.54) never clamps
             }
 
         dims = dict(jedec_defaults or {})
@@ -569,10 +604,24 @@ class PcbFootprintBuilder:
             width = float(b_eff) + self.PAD_SIDE_MARGIN
             if self.params.pin_pitch:
                 width = min(width, self.params.pin_pitch - self.PAD_MIN_GAP)
+            # Leadless terminals (QFN/DFN/SON/LFCSP) sit flush under the body, so
+            # their land needs far less toe/heel than a gull-wing foot — using the
+            # gull-wing 0.70 makes the pad ~0.3mm too long (AD9106 LFCSP-32).
+            from ..package_types.footprint_defaults import _family as _fp_family
+            toe_heel = (
+                self.PAD_TOE_HEEL_LEADLESS
+                if _fp_family(self.package_type) in ("QFN", "DFN", "WSON", "SON")
+                else self.PAD_TOE_HEEL
+            )
             return {
                 "shape": "rect",
                 "width": width,
-                "length": float(lead_eff) + self.PAD_TOE_HEEL,
+                "length": float(lead_eff) + toe_heel,
+                # Declared margin = the ACTUAL applied value, clamped in the pitch
+                # direction at fine pitch so the exported metadata matches the
+                # drawn mask (a consumer re-deriving the mask from this scalar
+                # can't then re-merge the apertures).
+                "solder_mask_margin": round(self._mask_margin_pitch(width), 4),
             }
 
         # No real lead dims: keep the legacy reference-GLB circles.
@@ -580,6 +629,7 @@ class PcbFootprintBuilder:
             "shape": "circle",
             "diameter": self.COPPER_PAD_DIAMETER,
             "mask_diameter": self.SOLDER_MASK_DIAMETER,
+            "solder_mask_margin": self.MASK_MARGIN,
         }
 
     def _pad_extents(self) -> tuple:
@@ -960,20 +1010,25 @@ class PcbFootprintBuilder:
             # CopperCirclePad, SolderMask, HoleCylinderPin, CopperCylinderPin,
             # CopperCirclePin, text.
 
+            # Pin 1 is drawn as a SQUARE pad (copper + mask) — the standard DIP
+            # pin-1 marker; all other through-hole pads stay round. (QC: PGA2311P
+            # pin 1 should be square, not the same round shape as the rest.)
+            is_pin1 = str(pin_number) == "1"
+
             # CopperCirclePad (F.Cu layer) - top layer copper pad
             copper_pad_radius = self.pad_spec["diameter"] / 2
-            copper_pad = cq.Workplane("XY").workplane(offset=self.PIN_CYLINDER_HEIGHT/2).center(
-                x, y
-            ).circle(copper_pad_radius).extrude(self.PAD_HEIGHT)
+            _cp = cq.Workplane("XY").workplane(offset=self.PIN_CYLINDER_HEIGHT/2).center(x, y)
+            copper_pad = (_cp.rect(2 * copper_pad_radius, 2 * copper_pad_radius)
+                          if is_pin1 else _cp.circle(copper_pad_radius)).extrude(self.PAD_HEIGHT)
             copper_pad_assy = cq.Assembly(name="CopperCirclePad")
             copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
             pin_assy.add(copper_pad_assy)
 
             # SolderMask (brown, largest)
             solder_mask_radius = self.pad_spec["mask_diameter"] / 2
-            solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
-                x, y
-            ).circle(solder_mask_radius).extrude(self.PAD_HEIGHT)
+            _sm = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(x, y)
+            solder_mask = (_sm.rect(2 * solder_mask_radius, 2 * solder_mask_radius)
+                           if is_pin1 else _sm.circle(solder_mask_radius)).extrude(self.PAD_HEIGHT)
             solder_mask_assy = cq.Assembly(name="SolderMask")
             solder_mask_assy.add(solder_mask, color=self.BROWN_COLOR)
             pin_assy.add(solder_mask_assy)
@@ -1012,14 +1067,24 @@ class PcbFootprintBuilder:
             if spec["shape"] == "rect":
                 # Corner pads may carry a shortened length (FP-14 relief).
                 length = self._pad_length_override.get(pin_number, spec["length"])
+                width = spec["width"]
+                # Clamp the mask margin in the PITCH direction so adjacent
+                # apertures keep a solder-mask dam (full 0.102 margin overruns a
+                # fine pitch and the openings merge -> "no gap between solder mask
+                # of pads"). The length direction has no neighbour, so it keeps the
+                # full margin.
+                m_len = self.MASK_MARGIN
+                m_pitch = self._mask_margin_pitch(width)
                 if pin_pos.side in ("top", "bottom"):
-                    pad_x, pad_y = spec["width"], length
+                    pad_x, pad_y = width, length
+                    mask_x, mask_y = pad_x + 2 * m_pitch, pad_y + 2 * m_len
                 else:
-                    pad_x, pad_y = length, spec["width"]
+                    pad_x, pad_y = length, width
+                    mask_x, mask_y = pad_x + 2 * m_len, pad_y + 2 * m_pitch
 
                 solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT/2).center(
                     x, y
-                ).rect(pad_x + 2 * self.MASK_MARGIN, pad_y + 2 * self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
+                ).rect(mask_x, mask_y).extrude(self.PAD_HEIGHT)
                 copper_pad = cq.Workplane("XY").center(
                     x, y
                 ).rect(pad_x, pad_y).extrude(self.PAD_HEIGHT)
