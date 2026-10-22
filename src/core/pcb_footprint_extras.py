@@ -256,7 +256,7 @@ def _build_pin_extras(
             "outerDiameter": None,
             "position": {"x": x, "y": y},
             "rotation": 0,
-            "solder_mask_margin": 0.102,
+            "solder_mask_margin": spec.get("solder_mask_margin", 0.102),
         }
     else:
         pin_data = {
@@ -267,7 +267,7 @@ def _build_pin_extras(
             "outerDiameter": spec.get("diameter", _PAD_OUTER_RADIUS * 2),
             "position": {"x": x, "y": y},
             "rotation": 0,
-            "solder_mask_margin": 0.102,
+            "solder_mask_margin": spec.get("solder_mask_margin", 0.102),
         }
 
     return {
