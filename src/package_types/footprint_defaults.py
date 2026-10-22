@@ -154,6 +154,14 @@ def get_footprint_defaults(package_type: str, pin_count: int) -> Optional[Dict[s
             "E": 7.62 if pin_count <= 28 else 15.24,
             "E1": 6.35 if pin_count <= 28 else 13.7,
             "D": _dual_row_body_length(pin_count, 2.54, margin=0.8),
+            # Lower-lead cross-section maxima (JEDEC MS-001: b 0.356-0.558,
+            # c 0.203-0.381). Published as b_max/c_max — the keys the through-hole
+            # drill derivation reads — so the hole = lead diagonal + clearance
+            # sizes to the widest lead (~0.93 mm) instead of sticking at the
+            # 0.83 mm floor (#71). Plain b/L are intentionally omitted so the
+            # 3D leg geometry and symbol insets are left untouched.
+            "b_max": 0.56,
+            "c_max": 0.38,
         }
 
     if family == "SOT23":

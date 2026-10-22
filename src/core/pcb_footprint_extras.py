@@ -224,7 +224,7 @@ def _build_pin_extras(
                 "thruHoleWth": 0,
                 "position": {"x": x, "y": y},
                 "rotation": 0,
-                "solder_mask_margin": 0.102,
+                "solder_mask_margin": spec.get("solder_mask_margin", 0.102),
             }
         else:
             pin_data = {
@@ -242,7 +242,7 @@ def _build_pin_extras(
                 "thruHoleWth": 0,
                 "position": {"x": x, "y": y},
                 "rotation": 0,
-                "solder_mask_margin": 0.102,
+                "solder_mask_margin": spec.get("solder_mask_margin", 0.102),
             }
     elif spec.get("shape") == "rect":
         length_x, width_y = _rect_pad_xy_extents(spec, side)

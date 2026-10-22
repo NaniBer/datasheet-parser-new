@@ -550,6 +550,20 @@ class PcbFootprintBuilder:
         """
         return self._body_outline_l or self.params.body_height
 
+    def _mask_margin_pitch(self, width: float) -> float:
+        """Per-side solder-mask margin in the PITCH direction.
+
+        Clamped so adjacent apertures keep a >= MASK_MIN_DAM solder-mask dam at
+        fine pitch (the full MASK_MARGIN overruns a 0.5 mm pitch and the openings
+        merge). This is the binding margin, so it is also the value the exported
+        metadata declares — keeping declared == drawn."""
+        if self.params.pin_pitch:
+            return min(
+                self.MASK_MARGIN,
+                max(0.0, (self.params.pin_pitch - width - self.MASK_MIN_DAM) / 2),
+            )
+        return self.MASK_MARGIN
+
     def _compute_pad_spec(self, jedec_defaults: Optional[Dict[str, Any]],
                           extracted_dims: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Pad shape and size per IPC-7351 from the best available dims."""
@@ -559,10 +573,15 @@ class PcbFootprintBuilder:
             th_dims.update(extracted_dims or {})
             b_eff = th_dims.get("b_max") or th_dims.get("b")
             if b_eff:
-                # IPC-2222: hole = lead diagonal + 0.25 clearance. DIP leads
-                # are rectangular (width b x ~0.25 thick); the diagonal
-                # governs insertion. Never below the standard 0.83 drill.
-                diagonal = (float(b_eff) ** 2 + self.LEAD_THICKNESS ** 2) ** 0.5
+                # IPC-2222: hole = lead diagonal + 0.25 clearance. DIP leads are
+                # rectangular (width b x thickness c); the diagonal governs
+                # insertion and the hole must fit the WIDEST lead, so prefer the
+                # published maxima (c_max/c) over the nominal LEAD_THICKNESS.
+                # Never below the standard 0.83 drill.
+                thickness = float(
+                    th_dims.get("c_max") or th_dims.get("c") or self.LEAD_THICKNESS
+                )
+                diagonal = (float(b_eff) ** 2 + thickness ** 2) ** 0.5
                 drill = max(drill, round(diagonal + self.HOLE_CLEARANCE, 2))
             diameter = drill + 2 * self.ANNULAR_RING
             return {
@@ -570,6 +589,7 @@ class PcbFootprintBuilder:
                 "diameter": diameter,
                 "mask_diameter": diameter + 2 * self.MASK_MARGIN,  # per-side margin on each edge
                 "drill": drill,
+                "solder_mask_margin": self.MASK_MARGIN,  # TH pitch (>=2.54) never clamps
             }
 
         dims = dict(jedec_defaults or {})
@@ -597,6 +617,11 @@ class PcbFootprintBuilder:
                 "shape": "rect",
                 "width": width,
                 "length": float(lead_eff) + toe_heel,
+                # Declared margin = the ACTUAL applied value, clamped in the pitch
+                # direction at fine pitch so the exported metadata matches the
+                # drawn mask (a consumer re-deriving the mask from this scalar
+                # can't then re-merge the apertures).
+                "solder_mask_margin": round(self._mask_margin_pitch(width), 4),
             }
 
         # No real lead dims: keep the legacy reference-GLB circles.
@@ -604,6 +629,7 @@ class PcbFootprintBuilder:
             "shape": "circle",
             "diameter": self.COPPER_PAD_DIAMETER,
             "mask_diameter": self.SOLDER_MASK_DIAMETER,
+            "solder_mask_margin": self.MASK_MARGIN,
         }
 
     def _pad_extents(self) -> tuple:
@@ -1048,12 +1074,7 @@ class PcbFootprintBuilder:
                 # of pads"). The length direction has no neighbour, so it keeps the
                 # full margin.
                 m_len = self.MASK_MARGIN
-                m_pitch = self.MASK_MARGIN
-                if self.params.pin_pitch:
-                    m_pitch = min(
-                        self.MASK_MARGIN,
-                        max(0.0, (self.params.pin_pitch - width - self.MASK_MIN_DAM) / 2),
-                    )
+                m_pitch = self._mask_margin_pitch(width)
                 if pin_pos.side in ("top", "bottom"):
                     pad_x, pad_y = width, length
                     mask_x, mask_y = pad_x + 2 * m_pitch, pad_y + 2 * m_len
