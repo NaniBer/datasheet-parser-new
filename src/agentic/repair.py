@@ -347,6 +347,17 @@ def resolve_from_row(texts, tokens: List[str], members: List[int]) -> Dict[int, 
     return {}
 
 
+def _scattered_dupes(mapping: Dict[int, str]) -> set:
+    """Non-power signal names carried by more than one pin (a per-pin pinout never
+    legitimately repeats one): the verification's duplicate rule, reused so the
+    package-column remap can be rejected *before* it scatters such a name rather
+    than only flagging the damage afterwards. Power/ground/no-connect names that
+    do repeat across pins are excluded (see :data:`SHARED_NAMES`)."""
+    vals = [str(v) for v in mapping.values()]
+    return {v for v in vals if vals.count(v) > 1 and v.upper() not in SHARED_NAMES
+            and not v.upper().startswith(("GND", "VCC", "VDD", "VS", "NC", "N.C"))}
+
+
 def _fix_matches_tokens(fix: Dict[int, str], tokens: List[str], prefix: Optional[str] = None) -> bool:
     """A comma-list group may only be resolved into a permutation of its own tokens.
 
@@ -854,9 +865,18 @@ def repair_pins(
             old_set = {v.upper() for v in names.values()}
             moved = sum(1 for n, v in remap.items() if names.get(n, "").upper() != v.upper())
             kept = sum(1 for v in remap.values() if v.upper() in old_set) / max(len(remap), 1)
-            if moved >= 0.3 * len(names) and kept >= 0.7:
+            # A real column fix only RE-NUMBERS: it must not duplicate a non-power
+            # signal that the extraction had on a single pin. Rejecting a remap that
+            # introduces a new scattered name keeps a wrong-column read (which can
+            # confuse a shared compound pin like VS/FIELD into a scattered "FIELD")
+            # from shipping -- fail closed to the extraction instead.
+            new_dupes = _scattered_dupes(remap) - _scattered_dupes(names)
+            if moved >= 0.3 * len(names) and kept >= 0.7 and not new_dupes:
                 names = remap
                 log.append(f"column-check: package={ans.get('package')} column_ok=False -> re-mapped {len(names)} pins ({moved} moved)")
+            elif new_dupes and moved >= 0.3 * len(names) and kept >= 0.7:
+                log.append(f"column-check: package={ans.get('package')} column_ok=False but re-map rejected "
+                           f"(would scatter {sorted(new_dupes)} across pins); keeping extraction")
             else:
                 log.append(f"column-check: package={ans.get('package')} column_ok=False but re-map rejected "
                            f"(moved={moved}, names kept={kept:.0%}); keeping extraction")
@@ -1100,9 +1120,7 @@ def repair_pins(
                     log.append(f"duplicate re-read failed: {type(exc).__name__}: {exc}")
 
     # 6) verify -----------------------------------------------------------------------------
-    vals = list(names.values())
-    dups = sorted({v for v in vals if vals.count(v) > 1 and v.upper() not in SHARED_NAMES
-                   and not v.upper().startswith(("GND", "VCC", "VDD", "VS", "NC", "N.C"))})
+    dups = sorted(_scattered_dupes(names))
     leftover = sorted(n for n, v in names.items() if is_group(v) or is_suspicious(v))
     flags = {"duplicates": dups, "unresolved": leftover, "pin_count": len(names)}
 
