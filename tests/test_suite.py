@@ -2345,10 +2345,15 @@ from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
 
 def test_through_hole_pad_has_annular_ring():
     # IPC minimum annular ring: pad = drill + 2 * 0.35mm ring.
-    # Reference: Ultra Librarian DIP16_300_TEX uses 1.524 pad / 0.813 drill.
+    # Drill is derived per IPC-2222 from the worst-case JEDEC MS-001 DIP lead
+    # (b_max 0.56 x c_max 0.38 -> diagonal 0.677) + 0.25 clearance = 0.93mm, so
+    # pad = 0.93 + 2*0.35 = 1.63mm. The older Ultra Librarian DIP16_300 0.813
+    # drill / 1.524 pad left only ~0.14mm lead clearance (the "tight" drill QC
+    # flagged); the lead-derived 0.93mm restores the IPC-2222 Level B 0.25mm.
     b = PcbFootprintBuilder("DIP-16", 16, "X")
     assert b.pad_spec["shape"] == "circle"
-    assert b.pad_spec["diameter"] == pytest.approx(1.53, abs=0.05)
+    assert b.pad_spec["drill"] == pytest.approx(0.93, abs=0.02)
+    assert b.pad_spec["diameter"] == pytest.approx(1.63, abs=0.05)
     assert b.pad_spec["mask_diameter"] > b.pad_spec["diameter"]
 
 
@@ -2629,13 +2634,15 @@ def test_glb_through_hole_extras_use_pad_spec(tmp_path):
     assert len(pads) == 16
     for num, pd in pads.items():
         assert pd["pinType"] == "ThroughHole"
-        assert pd["innerDiameter"] == pytest.approx(0.83, abs=0.01)
+        # DIP drill now derives from the JEDEC MS-001 max lead -> 0.93mm (was the
+        # 0.83 floor; see test_through_hole_pad_has_annular_ring).
+        assert pd["innerDiameter"] == pytest.approx(0.93, abs=0.01)
         if num == "1":
             assert pd["pinShape"] == "rectangle"
-            assert pd["length"] == pytest.approx(0.83 + 2 * 0.35, abs=0.01)
+            assert pd["length"] == pytest.approx(0.93 + 2 * 0.35, abs=0.01)
         else:
             assert pd["pinShape"] == "circle"
-            assert pd["outerDiameter"] == pytest.approx(0.83 + 2 * 0.35, abs=0.01)
+            assert pd["outerDiameter"] == pytest.approx(0.93 + 2 * 0.35, abs=0.01)
 
 
 def test_fab_outline_uses_body_width_not_lead_span():
@@ -3067,16 +3074,21 @@ def test_package_pin_column_requires_unambiguous_header():
 
 
 def test_through_hole_drill_follows_lead_width():
-    # IPC-2222: hole = lead diagonal + 0.25 clearance, floored at the
-    # standard 0.83mm drill. A fixed drill under-sizes holes for parts
-    # with heavy leads (power DIPs at b~1.0).
-    thin = PcbFootprintBuilder("DIP-16", 16, "X",
-                               extracted_dims={"e": 2.54, "b": 0.46})
-    assert thin.pad_spec["drill"] == pytest.approx(0.83)
+    # IPC-2222: hole = worst-case lead diagonal + 0.25 clearance, floored at the
+    # standard 0.83mm drill. DIP defaults carry the JEDEC MS-001 max lead
+    # (b_max 0.56 x c_max 0.38), so a standard DIP derives 0.93mm; a lead smaller
+    # than the floor stays at 0.83; heavier leads (power DIPs at b~1.0) go larger.
+    std = PcbFootprintBuilder("DIP-16", 16, "X")
+    assert std.pad_spec["drill"] == pytest.approx(0.93, abs=0.02)
+
+    tiny = PcbFootprintBuilder("DIP-16", 16, "X",
+                               extracted_dims={"e": 2.54, "b_max": 0.3, "c_max": 0.15})
+    assert tiny.pad_spec["drill"] == pytest.approx(0.83)  # derived < floor
 
     heavy = PcbFootprintBuilder("DIP-16", 16, "X",
                                 extracted_dims={"e": 2.54, "b": 0.9, "b_max": 1.04})
-    expected = round((1.04 ** 2 + 0.25 ** 2) ** 0.5 + 0.25, 2)
+    c_max = 0.38  # JEDEC MS-001 lead thickness carried by the DIP defaults
+    expected = round((1.04 ** 2 + c_max ** 2) ** 0.5 + 0.25, 2)
     assert heavy.pad_spec["drill"] == pytest.approx(expected)
     assert heavy.pad_spec["diameter"] == pytest.approx(expected + 0.7)
 
