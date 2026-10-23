@@ -296,6 +296,49 @@ def test_read_variant_column_fails_closed():
     assert read_variant_column([(3, _PIN_DESC)], _EXTRACTED, "SOT833-1", pin_count=16) is None
 
 
+# The newer NXP datasheet (Rev.13, 2024) consolidated the per-variant number
+# columns into a SINGLE "Symbol / Pin / Description" pin-description table; the
+# ordered variant (SOT833-1) numbering is the one printed column.
+_PIN_DESC_SINGLE = "\n".join([
+    "Table 3.", "Pin description", "Symbol", "Pin", "Description",
+    "OE", "1", "output enable input OE (active LOW)",
+    "A", "2", "data input",
+    "B", "3", "data input",
+    "GND", "4", "ground (0 V)",
+    "C", "5", "data input",
+    "D", "6", "data input",
+    "Y", "7", "data output",
+    "VCC", "8", "supply voltage",
+])
+
+
+def test_read_variant_column_reads_single_column_table():
+    # Rev.13: only one pin-number column, no per-variant header -> read it straight.
+    got = read_variant_column([(3, _PIN_DESC_SINGLE)], _EXTRACTED, "SOT833-1", pin_count=8)
+    assert got == {1: "OE", 2: "A", 3: "B", 4: "GND", 5: "C", 6: "D", 7: "Y", 8: "VCC"}
+
+
+def test_read_variant_column_single_column_fails_closed():
+    # name-set mismatch
+    bad = dict(_EXTRACTED); bad[1] = "ZZZ"
+    assert read_variant_column([(3, _PIN_DESC_SINGLE)], bad, "SOT833-1", pin_count=8) is None
+    # pin-count guard
+    assert read_variant_column([(3, _PIN_DESC_SINGLE)], _EXTRACTED, "SOT833-1", pin_count=16) is None
+
+
+def test_repair_fixes_rev13_single_column_datasheet():
+    """End-to-end: the service's Rev.13 datasheet (single-column pin table) must
+    correct the reversed extraction to the printed SOT833-1 numbering, no LLM."""
+    from pathlib import Path
+    from src.agentic.repair import repair_pins
+    pdf = Path(__file__).parent / "ground_truth" / "74LVC1G99_rev13.pdf"
+    assert pdf.is_file(), pdf
+    raw = [{"number": n, "name": x} for n, x in _EXTRACTED.items()]
+    rep = repair_pins(raw, pdf, "74LVC1G99GT", escalation_model="openai/gpt-6-luna")
+    got = {int(p["number"]): p["name"] for p in rep["pins"]}
+    assert got == {1: "OE", 2: "A", 3: "B", 4: "GND", 5: "C", 6: "D", 7: "Y", 8: "VCC"}
+
+
 # --- deterministic grouped variant pin-function table (ADV7180-style, #52) --------------------
 from src.agentic.repair import read_variant_pin_table
 
