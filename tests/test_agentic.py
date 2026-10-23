@@ -296,6 +296,49 @@ def test_read_variant_column_fails_closed():
     assert read_variant_column([(3, _PIN_DESC)], _EXTRACTED, "SOT833-1", pin_count=16) is None
 
 
+# The newer NXP datasheet (Rev.13, 2024) consolidated the per-variant number
+# columns into a SINGLE "Symbol / Pin / Description" pin-description table; the
+# ordered variant (SOT833-1) numbering is the one printed column.
+_PIN_DESC_SINGLE = "\n".join([
+    "Table 3.", "Pin description", "Symbol", "Pin", "Description",
+    "OE", "1", "output enable input OE (active LOW)",
+    "A", "2", "data input",
+    "B", "3", "data input",
+    "GND", "4", "ground (0 V)",
+    "C", "5", "data input",
+    "D", "6", "data input",
+    "Y", "7", "data output",
+    "VCC", "8", "supply voltage",
+])
+
+
+def test_read_variant_column_reads_single_column_table():
+    # Rev.13: only one pin-number column, no per-variant header -> read it straight.
+    got = read_variant_column([(3, _PIN_DESC_SINGLE)], _EXTRACTED, "SOT833-1", pin_count=8)
+    assert got == {1: "OE", 2: "A", 3: "B", 4: "GND", 5: "C", 6: "D", 7: "Y", 8: "VCC"}
+
+
+def test_read_variant_column_single_column_fails_closed():
+    # name-set mismatch
+    bad = dict(_EXTRACTED); bad[1] = "ZZZ"
+    assert read_variant_column([(3, _PIN_DESC_SINGLE)], bad, "SOT833-1", pin_count=8) is None
+    # pin-count guard
+    assert read_variant_column([(3, _PIN_DESC_SINGLE)], _EXTRACTED, "SOT833-1", pin_count=16) is None
+
+
+def test_repair_fixes_rev13_single_column_datasheet():
+    """End-to-end: the service's Rev.13 datasheet (single-column pin table) must
+    correct the reversed extraction to the printed SOT833-1 numbering, no LLM."""
+    from pathlib import Path
+    from src.agentic.repair import repair_pins
+    pdf = Path(__file__).parent / "ground_truth" / "74LVC1G99_rev13.pdf"
+    assert pdf.is_file(), pdf
+    raw = [{"number": n, "name": x} for n, x in _EXTRACTED.items()]
+    rep = repair_pins(raw, pdf, "74LVC1G99GT", escalation_model="openai/gpt-6-luna")
+    got = {int(p["number"]): p["name"] for p in rep["pins"]}
+    assert got == {1: "OE", 2: "A", 3: "B", 4: "GND", 5: "C", 6: "D", 7: "Y", 8: "VCC"}
+
+
 # --- deterministic grouped variant pin-function table (ADV7180-style, #52) --------------------
 from src.agentic.repair import read_variant_pin_table
 
@@ -422,3 +465,62 @@ def test_scattered_numeric_group_fails_closed_when_drawing_unreadable(tmp_path, 
     names = {p["number"]: p["name"] for p in rep["pins"]}
     assert all(names[n] == "GPO0 to GPO3" for n in (5, 6, 41, 42))
     assert set(rep["flags"]["unresolved"]) == {5, 6, 41, 42}
+
+
+# --- #54: the LLM package-column remap must never scatter a non-power signal name --------------
+def _drive_column_remap(tmp_path, monkeypatch, remap_pins):
+    """Run real repair_pins down the LLM package-column-check path (step 1): two
+    package families on the pin page trigger the check, the deterministic reads
+    no-op, and the stubbed model returns ``remap_pins`` as the "corrected" map.
+    Returns (rep, names)."""
+    import src.agentic.repair as R
+    import src.chat_bot as chat_bot
+    import src.pdf_extractor.ordering_table as ot
+    import json as _json
+
+    pdf = tmp_path / "d.pdf"; pdf.write_bytes(PDF_BYTES)
+    # Two DISTINCT package families on the pin page -> column-check fires.
+    page = ("PIN CONFIGURATION\n48-LEAD LQFP and 48-LEAD LFCSP\n"
+            + " ".join(str(i) for i in range(1, 49)) + "\n")
+    monkeypatch.setattr(R, "_page_texts", lambda p: [(1, page)])
+    monkeypatch.setattr(R, "_render_page_b64", lambda *a, **k: "")
+    monkeypatch.setattr(ot, "full_pdf_text", lambda p: "")
+    monkeypatch.setattr(ot, "find_ordering_match", lambda *a, **k: None)
+    monkeypatch.setattr(chat_bot, "get_completion_from_messages",
+                        lambda messages, *a, **k: _json.dumps(
+                            {"package": "LQFP", "column_ok": False, "pins": remap_pins}))
+
+    # Extraction: a clean per-pin pinout whose pin 45 is the shared compound VS/FIELD.
+    pins = [{"number": n, "name": ("VS/FIELD" if n == 45 else f"SIG{n}"), "type": "O", "nc": False}
+            for n in range(1, 49)]
+    rep = R.repair_pins(pins, pdf, "ADV7180KST48Z", repair_model="x", escalation_model="x",
+                        package="LQFP", pin_count=48)
+    return rep, {p["number"]: p["name"] for p in rep["pins"]}
+
+
+def test_column_remap_rejected_when_it_scatters_a_signal_name(tmp_path, monkeypatch):
+    # The model re-reads the WRONG column and confuses the shared VS/FIELD pin,
+    # putting "FIELD" on two scattered pins (the ADV7180KST48Z production defect:
+    # agentic flagged duplicates=['FIELD']). A real column fix only re-numbers; it
+    # never duplicates a non-power signal. The remap must be rejected (fail closed),
+    # VS/FIELD must stay one pin, and no "FIELD" scatter may reach the output.
+    base = {n: f"SIG{n}" for n in range(1, 49)}; base[45] = "VS/FIELD"
+    remap = {str(n): base[(n % 48) + 1] for n in range(1, 49)}   # rotate: many pins "move"
+    remap["45"] = "FIELD"; remap["20"] = "FIELD"                  # ...but scatter FIELD
+    rep, names = _drive_column_remap(tmp_path, monkeypatch, remap)
+
+    assert names[45] == "VS/FIELD"                               # shared compound pin kept whole
+    assert sum(1 for v in names.values() if v == "FIELD") == 0   # no scattered FIELD
+    assert "FIELD" not in rep["flags"]["duplicates"]
+    assert any("rejected" in r.lower() for r in rep["repairs"])
+
+
+def test_column_remap_still_accepted_when_it_only_renumbers(tmp_path, monkeypatch):
+    # A legitimate column fix (re-number the SAME distinct names, no new duplicates)
+    # must still be applied -- the guard rejects only remaps that scatter a name.
+    base = {n: f"SIG{n}" for n in range(1, 49)}; base[45] = "VS/FIELD"
+    remap = {str(n): base[(n % 48) + 1] for n in range(1, 49)}   # pure re-numbering
+    rep, names = _drive_column_remap(tmp_path, monkeypatch, remap)
+    assert names[44] == "VS/FIELD"                               # VS/FIELD moved 45 -> 44
+    assert rep["flags"]["duplicates"] == []
+    assert any("re-mapped" in r for r in rep["repairs"])

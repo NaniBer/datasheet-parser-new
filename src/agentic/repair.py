@@ -347,6 +347,17 @@ def resolve_from_row(texts, tokens: List[str], members: List[int]) -> Dict[int, 
     return {}
 
 
+def _scattered_dupes(mapping: Dict[int, str]) -> set:
+    """Non-power signal names carried by more than one pin (a per-pin pinout never
+    legitimately repeats one): the verification's duplicate rule, reused so the
+    package-column remap can be rejected *before* it scatters such a name rather
+    than only flagging the damage afterwards. Power/ground/no-connect names that
+    do repeat across pins are excluded (see :data:`SHARED_NAMES`)."""
+    vals = [str(v) for v in mapping.values()]
+    return {v for v in vals if vals.count(v) > 1 and v.upper() not in SHARED_NAMES
+            and not v.upper().startswith(("GND", "VCC", "VDD", "VS", "NC", "N.C"))}
+
+
 def _fix_matches_tokens(fix: Dict[int, str], tokens: List[str], prefix: Optional[str] = None) -> bool:
     """A comma-list group may only be resolved into a permutation of its own tokens.
 
@@ -501,7 +512,75 @@ def read_variant_column(
             if pin_count and len(result) != pin_count:
                 return None
             return result
-        return None  # header matched but the rows didn't -> fail closed
+        # Header matched but the rows didn't. This can be a real multi-variant
+        # table we couldn't parse OR a false positive (prose that happens to
+        # name two package versions on adjacent lines, e.g. per-package derating
+        # notes). Keep scanning rather than bailing: later headers, then the
+        # single-column read below, are all bijection-gated and fail closed.
+        continue
+
+    # No multi-variant number-column header found. Newer datasheets (e.g. NXP
+    # Rev.13, 2024) consolidate the per-variant columns into a SINGLE
+    # "Symbol / Pin / Description" pin-description table when the ordered
+    # numbering is variant-independent. Read that single column straight.
+    return _read_single_pin_column(lines, name_set, pin_count)
+
+
+# A pin-description table column header as PyMuPDF extracts it, one cell per line
+# ("Symbol" / "Pin" / "Description"). Anchors the single-column table read below.
+_SINGLE_COL_HEADER = ("SYMBOL", "PIN")
+
+
+def _read_single_pin_column(
+    lines: List[str],
+    name_set: set,
+    pin_count: Optional[int] = None,
+) -> Optional[Dict[int, str]]:
+    """Read a SINGLE-column ``Symbol / Pin / Description`` pin-description table.
+
+    The row layout (one cell per line, as PyMuPDF extracts it) is::
+
+        Symbol / Pin / Description
+        OE / 1 / output enable input ...
+        A  / 2 / data input
+        ...
+
+    i.e. each name is immediately followed by exactly ONE pin number. Only ACTS
+    when: a ``Symbol``+``Pin`` header with NO package-version token is found (a
+    version token means a multi-variant table, handled above), no row has a
+    SECOND bare number after the first (that would be a hidden multi-column
+    table), and the recovered name->number map is an exact bijection over the
+    whole extracted name-set (we only re-number, never rename). Any deviation ->
+    ``None`` (fail closed, caller keeps its pins).
+    """
+    n = len(lines)
+    for h in range(n - 1):
+        if lines[h].upper() != _SINGLE_COL_HEADER[0]:
+            continue
+        hdr = [lines[k].upper() for k in range(h, min(h + 4, n))]
+        if _SINGLE_COL_HEADER[1] not in hdr:
+            continue
+        if any(_VER_TOKEN.search(x) for x in hdr):
+            continue  # a per-variant header -> the multi-column path handles it
+
+        result: Dict[int, str] = {}
+        seen: set = set()
+        p = h + 1
+        while p < n and len(seen) < len(name_set):
+            up = lines[p].upper()
+            if up in name_set and up not in seen and p + 1 < n and re.fullmatch(r"\d{1,3}", lines[p + 1]):
+                if p + 2 < n and re.fullmatch(r"\d{1,3}", lines[p + 2]):
+                    return None  # a second number column -> ambiguous, fail closed
+                result[int(lines[p + 1])] = up
+                seen.add(up)
+                p += 2
+                continue
+            p += 1
+
+        if seen == name_set and len(result) == len(name_set):
+            if pin_count and len(result) != pin_count:
+                return None
+            return result
     return None
 
 
@@ -786,9 +865,18 @@ def repair_pins(
             old_set = {v.upper() for v in names.values()}
             moved = sum(1 for n, v in remap.items() if names.get(n, "").upper() != v.upper())
             kept = sum(1 for v in remap.values() if v.upper() in old_set) / max(len(remap), 1)
-            if moved >= 0.3 * len(names) and kept >= 0.7:
+            # A real column fix only RE-NUMBERS: it must not duplicate a non-power
+            # signal that the extraction had on a single pin. Rejecting a remap that
+            # introduces a new scattered name keeps a wrong-column read (which can
+            # confuse a shared compound pin like VS/FIELD into a scattered "FIELD")
+            # from shipping -- fail closed to the extraction instead.
+            new_dupes = _scattered_dupes(remap) - _scattered_dupes(names)
+            if moved >= 0.3 * len(names) and kept >= 0.7 and not new_dupes:
                 names = remap
                 log.append(f"column-check: package={ans.get('package')} column_ok=False -> re-mapped {len(names)} pins ({moved} moved)")
+            elif new_dupes and moved >= 0.3 * len(names) and kept >= 0.7:
+                log.append(f"column-check: package={ans.get('package')} column_ok=False but re-map rejected "
+                           f"(would scatter {sorted(new_dupes)} across pins); keeping extraction")
             else:
                 log.append(f"column-check: package={ans.get('package')} column_ok=False but re-map rejected "
                            f"(moved={moved}, names kept={kept:.0%}); keeping extraction")
@@ -1032,9 +1120,7 @@ def repair_pins(
                     log.append(f"duplicate re-read failed: {type(exc).__name__}: {exc}")
 
     # 6) verify -----------------------------------------------------------------------------
-    vals = list(names.values())
-    dups = sorted({v for v in vals if vals.count(v) > 1 and v.upper() not in SHARED_NAMES
-                   and not v.upper().startswith(("GND", "VCC", "VDD", "VS", "NC", "N.C"))})
+    dups = sorted(_scattered_dupes(names))
     leftover = sorted(n for n, v in names.items() if is_group(v) or is_suspicious(v))
     flags = {"duplicates": dups, "unresolved": leftover, "pin_count": len(names)}
 
