@@ -380,6 +380,19 @@ class PackageDetector:
         """
         pkg_upper = pkg_name.upper().strip()
 
+        # XSON8 / XSON-8 is the NXP/JEDEC SOT833-1 leadless outline (e.g.
+        # 74LVC1G99): a tiny 1.0 x 1.95 mm, 8-pin body with NO thermal pad.
+        # The generic "SON" alias below would swallow it ("SON" is a substring
+        # of "XSON8"), collapsing the outline identity BEFORE the footprint
+        # stage -- which regressed both the epad suppression (spurious pad "9")
+        # and the body size (generic ~3 mm SON body). Normalize to the outline
+        # name instead: it keeps a token the footprint builder's epad regex and
+        # get_footprint_defaults recognize, while _family('SOT833-1') still
+        # resolves to the SON pad grid. Only the 8-pin maps here; other XSON pin
+        # counts are different outlines (SOT886/SOT891...).
+        if re.search(r"XSON[\s-]*8(?!\d)", pkg_upper):
+            return "SOT833-1"
+
         # Common aliases mapping
         aliases = [
             ("DUAL INLINE", "DIP"),
@@ -459,5 +472,13 @@ class PackageDetector:
             "LGA": "BGA",
             "LCCC": "LCCC",
         }
+
+        # SOT833-1 / XSON is a leadless SON-family outline (see footprint_defaults
+        # _GEOMETRY_CANONICAL: XSON/SOT833 -> SON). It must share the SON loose-
+        # matching family (QFN) so an ordered 'XSON' still matches an extracted
+        # 'SOT833-1' variant — and so normalizing XSON8 -> SOT833-1 keeps the
+        # same family it had when it collapsed to bare 'SON'.
+        if normalized.startswith("SOT833") or normalized.startswith("XSON"):
+            return "QFN"
 
         return family_aliases.get(normalized, normalized)
