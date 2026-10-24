@@ -223,6 +223,75 @@ def _pinout_pages(texts, pins: List[int]) -> List[int]:
     return [p for s, p in scored[:2] if s > 0]
 
 
+def _beside(num_box, label_box) -> bool:
+    """True when a label sits right next to a pin number: on the same row (side
+    pins) or in the same column (top/bottom pins, rotated labels), separated by
+    at most ~1.5x the label's font size."""
+    nx0, ny0, nx1, ny1 = num_box
+    lx0, ly0, lx1, ly1 = label_box
+    limit = 1.5 * min(lx1 - lx0, ly1 - ly0)
+    row_overlap = min(ny1, ly1) - max(ny0, ly0)
+    if row_overlap >= 0.5 * min(ny1 - ny0, ly1 - ly0):
+        gap = max(lx0 - nx1, nx0 - lx1)
+        return -1 <= gap <= limit
+    col_overlap = min(nx1, lx1) - max(nx0, lx0)
+    if col_overlap >= 0.5 * min(nx1 - nx0, lx1 - lx0):
+        gap = max(ly0 - ny1, ny0 - ly1)
+        return -1 <= gap <= limit
+    return False
+
+
+_DRAWING_HEADINGS = ("TOP VIEW", "BOTTOM VIEW", "PIN CONFIGURATION", "PIN ASSIGNMENT", "PINOUT")
+
+
+def read_series_from_drawing(pdf: Path, members: List[int], series: List[str]) -> Dict[int, str]:
+    """Which series name sits on which pin, read from the pin drawing's words.
+
+    For a numeric group on scattered pins (ADV7180 "GPO0 to GPO3" on pins 5, 6,
+    41, 42, where pin 5 is GPO1) only the drawing gives the order. On a pin
+    drawing each label is printed right beside its numbered pin. A page counts
+    only if every member pin has exactly one series label beside it and the
+    labels are all distinct; every qualifying page must agree. Anything less
+    returns {} and the caller falls back to vision.
+
+    Only pin-drawing pages (TOP VIEW / PIN CONFIGURATION ...) are read: the
+    ADV7180 application circuit (p110) labels pins 5/6 the other way round,
+    and the pin configuration is the authority for the pinout.
+    """
+    if len(series) != len(members):
+        return {}
+    import fitz  # PyMuPDF
+
+    wanted = {name.upper(): name for name in series}
+    numbers = {str(n): n for n in members}
+    readings = []
+    try:
+        doc = fitz.open(str(pdf))
+    except Exception:  # noqa: BLE001 - unreadable PDF: no drawing evidence
+        return {}
+    with doc:
+        for page in doc:
+            if not any(h in page.get_text().upper() for h in _DRAWING_HEADINGS):
+                continue
+            words = page.get_text("words")
+            labels = [(w[:4], wanted[w[4].upper()]) for w in words if w[4].upper() in wanted]
+            if len({name for _, name in labels}) < len(series):
+                continue
+            pins = [(w[:4], numbers[w[4]]) for w in words if w[4] in numbers]
+            mapping: Dict[int, str] = {}
+            for pin in members:
+                beside = {name for box, n in pins if n == pin
+                          for label_box, name in labels if _beside(box, label_box)}
+                if len(beside) != 1:
+                    break
+                mapping[pin] = beside.pop()
+            if len(mapping) == len(members) and len(set(mapping.values())) == len(members):
+                readings.append(mapping)
+    if not readings or any(r != readings[0] for r in readings[1:]):
+        return {}
+    return readings[0]
+
+
 def _render_page_b64(pdf: Path, pno: int, zoom: float = 2.0, rotate: int = 0) -> str:
     import fitz  # PyMuPDF
 
@@ -947,8 +1016,15 @@ def repair_pins(
                 # printed order and emit a confident ascending map (the GPO-swap
                 # defect). Fall through to the drawing/vision escalation, which is
                 # gated to a valid series permutation below (fail closed otherwise).
-                log.append(f"non-contiguous numeric range {label!r} pins={members}: "
-                           "per-pin order only in the drawing, escalating to vision")
+                # First read the drawing's word positions (free, exact); vision
+                # only when that read is incomplete or ambiguous.
+                drawn = read_series_from_drawing(pdf_path, members, expand_numeric(label) or [])
+                if drawn:
+                    fix = {str(n): v for n, v in drawn.items()}
+                    log.append(f"drawing (deterministic) {label!r} pins={members} -> {drawn}")
+                else:
+                    log.append(f"non-contiguous numeric range {label!r} pins={members}: "
+                               "per-pin order only in the drawing, escalating to vision")
             elif tokens and (row := resolve_from_row(texts, tokens, members)):
                 fix = {str(n): v for n, v in row.items()}
                 log.append(f"row-order {label!r} -> {row}")
