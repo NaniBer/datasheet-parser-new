@@ -4,7 +4,7 @@ import io
 import json
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 try:
     import pdfplumber
@@ -21,6 +21,59 @@ from .pinout_filter import PinoutFilter
 from .overbar import overbarred_names
 
 
+def _page_glyphs(fitz_page) -> List[tuple]:
+    """Flat list of (char, x0, x1, top, bot) for a PyMuPDF page's glyphs."""
+    out = []
+    for block in fitz_page.get_text("rawdict").get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                for ch in span.get("chars", []):
+                    x0, top, x1, bot = ch["bbox"]
+                    if ch["c"].strip():
+                        out.append((ch["c"], x0, x1, top, bot))
+    return out
+
+
+def _reconstruct_single_line(glyphs: List[tuple], bbox) -> str:
+    """Rebuild a cell's text in x-order, but ONLY when its glyphs form a single
+    clean left-to-right line (no two glyphs overlap in x).
+
+    A subscript/superscript pin name (``VINR`` drawn as V, sub ``IN``, R) is one
+    such line, so sorting by x recovers it. Genuinely stacked rows -- two pin
+    names in one cell (``CTSA``/``CTSB``) or two dimension values
+    (``0.05``/``0.00``) -- have glyphs sharing the same x column, so they collide
+    and this returns "" (caller leaves the cell untouched). This is what keeps
+    the reorder from interleaving separate lines into garbage.
+    """
+    x0, y0, x1, y1 = bbox
+    inside = sorted(
+        (g for g in glyphs
+         if x0 <= (g[1] + g[2]) / 2 <= x1 and y0 <= (g[3] + g[4]) / 2 <= y1),
+        key=lambda g: g[1],
+    )
+    if not inside:
+        return ""
+    for a, b in zip(inside, inside[1:]):
+        overlap = min(a[2], b[2]) - max(a[1], b[1])
+        if overlap > 0.35 * min(a[2] - a[1], b[2] - b[1]):
+            return ""  # glyphs stacked in x -> multiple lines, not a single name
+    return "".join(g[0] for g in inside)
+
+
+def _descramble_candidate(original: str, rebuilt: str) -> bool:
+    """A rebuilt cell is a trustworthy de-scrambled name only if it re-orders the
+    SAME non-whitespace characters, is a short single token, and carries real
+    letters (so numeric spec cells are never rewritten)."""
+    a = re.sub(r"\s", "", original)
+    b = re.sub(r"\s", "", rebuilt)
+    return (
+        bool(a) and a != b and sorted(a) == sorted(b)
+        and not re.search(r"\s", rebuilt)
+        and len(rebuilt) <= 12
+        and sum(ch.isalpha() for ch in rebuilt) >= 2
+    )
+
+
 @dataclass
 class ExtractedContent:
     """Content extracted from relevant pages."""
@@ -32,6 +85,10 @@ class ExtractedContent:
     # recovered from glyph geometry because the overbar is otherwise lost in text
     # extraction. Used to flag active_low on pins whose only marking is the bar.
     overbar_names: Set[str] = field(default_factory=set)
+    # Map {whitespace-stripped scrambled cell text -> reading-order name} for pin
+    # names drawn with subscripts/superscripts (``V R IN`` -> ``VINR``). Applied
+    # ONLY to the deterministic parser's pin name, never to the table text itself.
+    descrambled_names: Dict[str, str] = field(default_factory=dict)
 
 
 class ContentExtractor:
@@ -48,6 +105,7 @@ class ContentExtractor:
         self.pdf = None
         self._open_pdf()
         self.fitz_doc = None  # Lazy-opened PyMuPDF document
+        self._descramble_map: Dict[str, str] = {}  # scrambled -> reading-order name
 
     def _open_pdf(self) -> None:
         """Open the PDF file."""
@@ -76,6 +134,8 @@ class ContentExtractor:
             images=[],
             tables=[],
         )
+        # Accumulates {scrambled -> reading-order name} as tables are parsed.
+        self._descramble_map: Dict[str, str] = {}
 
         # Sort candidates by page number
         sorted_candidates = sorted(candidates, key=lambda x: x.page_number)
@@ -126,6 +186,7 @@ class ContentExtractor:
             tables=filtered.tables,
             images=filtered.images,
             overbar_names=extracted.overbar_names,
+            descrambled_names=self._descramble_map,
         )
 
     # A pinout drawn as a "Connection Diagram" / "Pin Configuration Diagram"
@@ -262,12 +323,24 @@ class ContentExtractor:
                 self.fitz_doc = fitz.open(self.pdf_path)
 
             page = self.fitz_doc[page_num - 1]
+            glyphs = _page_glyphs(page)
             tab_finder = page.find_tables()
 
             for tab in tab_finder.tables:
                 rows = tab.extract()
                 if not rows or len(rows) < 2:
                     continue
+                # Build the de-scramble map from cell glyph geometry WITHOUT
+                # altering the table text (only the deterministic parser's pin
+                # name consults it later -- keeps the blast radius to pin names).
+                for ri, row in enumerate(tab.rows):
+                    for ci, bbox in enumerate(row.cells):
+                        if bbox is None or ri >= len(rows) or ci >= len(rows[ri]):
+                            continue
+                        original = rows[ri][ci] or ""
+                        rebuilt = _reconstruct_single_line(glyphs, bbox)
+                        if rebuilt and _descramble_candidate(original, rebuilt):
+                            self._descramble_map[re.sub(r"\s", "", original)] = rebuilt
                 # Normalise: replace None with empty string
                 table_data = [
                     [cell if cell is not None else "" for cell in row]

@@ -739,6 +739,35 @@ def _mark_overbar_active_low(pin_data: "PinData", content) -> "PinData":
     return pin_data
 
 
+def _apply_descrambled_names(pin_data: "PinData", content) -> "PinData":
+    """Rename pins whose datasheet name was scrambled by subscript/superscript
+    layout (``V R IN`` -> ``VINR``), using ``content.descrambled_names``.
+
+    Applied AFTER grounding/validation so those steps still match the pin against
+    the datasheet's own (scrambled) text; only the final output name is cleaned.
+    """
+    mapping = getattr(content, "descrambled_names", None)
+    if not mapping:
+        return pin_data
+
+    def _fix(name):
+        return mapping.get(re.sub(r"\s", "", name or ""), name)
+
+    def _rename(pin) -> None:
+        if isinstance(pin, dict):
+            if pin.get("name"):
+                pin["name"] = _fix(pin["name"])
+        elif getattr(pin, "name", None):
+            pin.name = _fix(pin.name)
+
+    for pin in pin_data.pins or []:
+        _rename(pin)
+    for pkg in pin_data.packages or []:
+        for pin in (pkg.get("pins") or []) if isinstance(pkg, dict) else []:
+            _rename(pin)
+    return pin_data
+
+
 def extract_pin_data(
     content,
     model: str,
@@ -810,7 +839,7 @@ def extract_pin_data(
             if verbose:
                 print("Using deterministic table parser")
                 _print_pin_data_summary(deterministic_pin_data, deterministic_validation)
-            return _mark_overbar_active_low(deterministic_pin_data, content)
+            return _apply_descrambled_names(_mark_overbar_active_low(deterministic_pin_data, content), content)
 
         if verbose:
             print("Deterministic table parser candidate failed validation; falling back to LLM.")
@@ -889,7 +918,7 @@ def extract_pin_data(
             if verbose:
                 _print_pin_data_summary(pin_data, validation)
 
-            return _mark_overbar_active_low(pin_data, content)
+            return _apply_descrambled_names(_mark_overbar_active_low(pin_data, content), content)
 
         validation_feedback = validation.feedback
 
@@ -920,7 +949,7 @@ def extract_pin_data(
             f"Issues: {'; '.join(errors)}"
         )
         last_pin_data.validation_errors = errors
-        return _mark_overbar_active_low(last_pin_data, content)
+        return _apply_descrambled_names(_mark_overbar_active_low(last_pin_data, content), content)
 
     raise ValidationError(
         f"Pin data failed validation after {max_attempts} attempts: "
