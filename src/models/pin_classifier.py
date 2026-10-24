@@ -18,6 +18,21 @@ from typing import Optional, Tuple
 _OVERBAR = ("̅", "̄")  # combining overline / macron
 _SUPPLY = ("VCC", "VDD", "AVCC", "AVDD", "VDDA", "VBAT", "VDDIO")
 _GROUND = ("GND", "VSS", "AGND", "DGND", "VSSA")
+_ACTIVE_LOW_DESC = re.compile(r"active[\s_-]*low", re.IGNORECASE)
+
+
+def description_marks_active_low(text) -> bool:
+    """True if a pin's description/function text explicitly says "(active low)"
+    / "active-low".
+
+    This is the one active-low signal that survives PDF text extraction when the
+    printed overbar is lost (e.g. TI "chip-select input (active low)" arriving as
+    a bare name "CS" with no marker). It is explicit printed evidence, not a
+    convention guess, so flagging from it stays within the "never infer" rule.
+    """
+    if not text:
+        return False
+    return bool(_ACTIVE_LOW_DESC.search(str(text)))
 
 
 def _compact(name: str) -> str:

@@ -8,12 +8,14 @@ import time
 try:
     from ..models.pin_data import PinData, Pin, PackageInfo
     from ..models.component_record import normalize_electrical_type, normalize_role
+    from ..models.pin_classifier import description_marks_active_low
     from ..pdf_extractor.non_pin_features import is_non_pin_feature_name
     from ..chat_bot import get_completion_from_messages, build_pin_extraction_prompt
     from ..exceptions import LLMExtractionError, ValidationError, APICredentialsError, ErrorCodes
 except ImportError:  # pragma: no cover - compatibility for top-level imports in legacy scripts
     from src.models.pin_data import PinData, Pin, PackageInfo
     from src.models.component_record import normalize_electrical_type, normalize_role
+    from src.models.pin_classifier import description_marks_active_low
     from src.pdf_extractor.non_pin_features import is_non_pin_feature_name
     from src.chat_bot import get_completion_from_messages, build_pin_extraction_prompt
     from src.exceptions import LLMExtractionError, ValidationError, APICredentialsError, ErrorCodes
@@ -137,7 +139,11 @@ def _pin_semantics(pin_json: dict, name: str) -> dict:
     return {
         "electrical_type": etype,
         "role": role,
-        "active_low": bool(pin_json.get("active_low")) or _has_active_low_marker(name),
+        "active_low": (
+            bool(pin_json.get("active_low"))
+            or _has_active_low_marker(name)
+            or description_marks_active_low(pin_json.get("description"))
+        ),
         "nc": nc,
         "nc_instruction": pin_json.get("nc_instruction"),
         "function": role,

@@ -14,10 +14,12 @@ from typing import Dict, List, Optional, Tuple
 
 try:
     from ..models.pin_data import Pin, PinData, PackageInfo
+    from ..models.pin_classifier import detect_active_low, description_marks_active_low
     from .part_number_hint import infer_part_number_hint, family_from_page_designators
     from ..utils.package_detector import PackageDetector
 except ImportError:  # pragma: no cover - compatibility for top-level imports
     from src.models.pin_data import Pin, PinData, PackageInfo
+    from src.models.pin_classifier import detect_active_low, description_marks_active_low
     from src.pdf_extractor.part_number_hint import infer_part_number_hint, family_from_page_designators
     from src.utils.package_detector import PackageDetector
 
@@ -524,9 +526,16 @@ def _parse_table_rows(
         # Treat it as a real electrical pin — do not skip.
 
         function = _extract_function(pin_name)
+        # Active-low: a printed marker on the name (overbar/slash/#/_N), or an
+        # explicit "(active low)" anywhere in this pin's row (the description
+        # cell), which survives extraction when the overbar is lost. Convention
+        # alone (a bare "CS"/"RESET") is never enough — see pin_classifier.
+        active_low = detect_active_low(pin_name) or description_marks_active_low(
+            " ".join(cell for cell in row if cell)
+        )
         for number in pin_numbers:
             pin_candidates.setdefault(number, []).append(
-                Pin(number=number, name=pin_name, function=function)
+                Pin(number=number, name=pin_name, function=function, active_low=active_low)
             )
 
     pin_map: Dict[int, Pin] = {}

@@ -14,16 +14,16 @@ from src.conformance.model import CheckStatus
 
 # --- the one canonical ASCII marker, no double-marking ------------------------
 def test_active_low_display_marker():
-    assert _active_low_display("RESET", True) == "/RESET"
-    assert _active_low_display("/CS", True) == "/CS"        # no double '/'
-    assert _active_low_display("OE#", True) == "/OE"        # strip trailing '#'
-    assert _active_low_display("RESET_N", True) == "/RESET"  # strip _N suffix
+    assert _active_low_display("RESET", True) == "RESET#"
+    assert _active_low_display("/CS", True) == "CS#"        # strip leading '/', no double mark
+    assert _active_low_display("OE#", True) == "OE#"        # already '#', no double mark
+    assert _active_low_display("RESET_N", True) == "RESET#"  # strip _N suffix
     assert _active_low_display("VCC", False) == "VCC"       # inactive -> unchanged
     # P1-2b: the extra notations the detector now recognises must also be
     # stripped so the displayName never double-marks.
-    assert _active_low_display("RESET*", True) == "/RESET"  # strip trailing '*'
-    assert _active_low_display("~CS", True) == "/CS"        # strip leading '~'
-    assert _active_low_display("CS~", True) == "/CS"        # strip trailing '~'
+    assert _active_low_display("RESET*", True) == "RESET#"  # strip trailing '*'
+    assert _active_low_display("~CS", True) == "CS#"        # strip leading '~'
+    assert _active_low_display("CS~", True) == "CS#"        # strip trailing '~'
 
 
 def _pd():
@@ -49,8 +49,8 @@ def test_active_low_extras_written():
     build_schematic_from_pin_data(pin_data=pd, output_path=out,
                                   record=ComponentRecord.from_pin_data(pd))
     ex = _legs_extras(out)
-    assert ex["1"]["activeLow"] is True and ex["1"]["displayName"] == "/RESET"
-    assert ex["2"]["activeLow"] is True and ex["2"]["displayName"] == "/CS"
+    assert ex["1"]["activeLow"] is True and ex["1"]["displayName"] == "RESET#"
+    assert ex["2"]["activeLow"] is True and ex["2"]["displayName"] == "CS#"
     assert ex["3"]["activeLow"] is False and ex["3"]["displayName"] == "VCC"
 
 
@@ -66,7 +66,7 @@ def test_conformance_sym08_passes():
 # --- P1-2b: the flag is set from the *, ~ markers (as well as #, /, _N) --------
 def test_active_low_flag_set_from_extra_markers():
     """A pin whose name carries a '*' or '~' printed marker must come out
-    activeLow=True with a single '/'-prefixed displayName, end-to-end."""
+    activeLow=True with a single '#'-suffixed displayName, end-to-end."""
     pd = PinData(
         component_name="X",
         package=PackageInfo(type="SOIC-8", pin_count=8, width=0, height=0),
@@ -78,9 +78,9 @@ def test_active_low_flag_set_from_extra_markers():
     build_schematic_from_pin_data(pin_data=pd, output_path=out,
                                   record=ComponentRecord.from_pin_data(pd))
     ex = _legs_extras(out)
-    assert ex["1"]["activeLow"] is True and ex["1"]["displayName"] == "/RESET"
-    assert ex["2"]["activeLow"] is True and ex["2"]["displayName"] == "/TRIGGER"
-    assert ex["3"]["activeLow"] is True and ex["3"]["displayName"] == "/INTRQ"
+    assert ex["1"]["activeLow"] is True and ex["1"]["displayName"] == "RESET#"
+    assert ex["2"]["activeLow"] is True and ex["2"]["displayName"] == "TRIGGER#"
+    assert ex["3"]["activeLow"] is True and ex["3"]["displayName"] == "INTRQ#"
 
 
 # --- P1-3: the drawn label is sourced from the PER-PIN name, not a grouped row -

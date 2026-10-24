@@ -3,8 +3,8 @@
 import io
 import json
 import re
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Set, Tuple
 
 try:
     import pdfplumber
@@ -18,6 +18,7 @@ except ImportError:
 
 from .page_detector import PageCandidate
 from .pinout_filter import PinoutFilter
+from .overbar import overbarred_names
 
 
 @dataclass
@@ -27,6 +28,10 @@ class ExtractedContent:
     text_content: str  # Combined text from all pages
     images: List[Tuple[int, bytes]]  # (page_number, image_data)
     tables: List[Tuple[int, List]]  # (page_number, table_data)
+    # Pin names printed with an active-low overbar (ZWAdobeF overline font),
+    # recovered from glyph geometry because the overbar is otherwise lost in text
+    # extraction. Used to flag active_low on pins whose only marking is the bar.
+    overbar_names: Set[str] = field(default_factory=set)
 
 
 class ContentExtractor:
@@ -82,6 +87,9 @@ class ContentExtractor:
             text = self._extract_text_from_page(page, candidate.page_number)
             extracted.text_content += text + "\n\n"
 
+            # Recover active-low overbars (lost in plain text extraction)
+            extracted.overbar_names |= overbarred_names(page)
+
             # Extract images if page has diagrams
             if candidate.has_diagram:
                 images = self._extract_images_from_page(page, candidate.page_number)
@@ -116,7 +124,8 @@ class ContentExtractor:
             pages=filtered.pages,
             text_content=filtered.text_content,
             tables=filtered.tables,
-            images=filtered.images
+            images=filtered.images,
+            overbar_names=extracted.overbar_names,
         )
 
     # A pinout drawn as a "Connection Diagram" / "Pin Configuration Diagram"

@@ -144,22 +144,23 @@ def _annotate_bodyline(gltf: "GLTF2", container_index: int) -> None:
         _set_extras(gltf, child_index, extras)
 
 
-ACTIVE_LOW_MARKER = "/"  # SYM-08: one consistent ASCII active-low notation
+ACTIVE_LOW_MARKER = "#"  # SYM-08: one consistent ASCII active-low notation (trailing '#', matches the EasyEDA standard symbol)
 
 
 def _active_low_display(pin_name: str, active_low: bool) -> str:
-    """Name with a single leading active-low marker, no double-marking.
+    """Name with a single trailing active-low marker, no double-marking.
 
     Strips any inversion marker already in the extracted name (leading '/' or
     '~', trailing '#', '*' or '~', '_N' suffix) before applying the one
-    canonical prefix, so the displayName never carries two markers.
+    canonical trailing marker, so the displayName never carries two markers
+    (e.g. "/CS", "CS_N" and a lost-overbar "CS" all render as "CS#").
     """
     if not active_low:
         return pin_name
     base = (pin_name or "").strip().lstrip("/~").rstrip("#*~")
     if base.upper().endswith("_N"):
         base = base[:-2]
-    return f"{ACTIVE_LOW_MARKER}{base}"
+    return f"{base}{ACTIVE_LOW_MARKER}"
 
 
 def _annotate_pin_group(

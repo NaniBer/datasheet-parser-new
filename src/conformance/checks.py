@@ -936,7 +936,7 @@ def check_active_low_notation(ctx: PartContext) -> _Outcome:
     """SYM-08: active-low pins carry a flag + one consistent ASCII marker.
 
     Every pin has an ``activeLow`` flag; every active-low pin's ``displayName``
-    carries the single leading '/' marker (frontend renders a true overbar).
+    carries the single trailing '#' marker (frontend renders a true overbar).
     """
     miss = _need_glb(ctx, "symbol")
     if miss:
@@ -953,12 +953,12 @@ def check_active_low_notation(ctx: PartContext) -> _Outcome:
         if "activeLow" not in ex:
             missing.append(g.nodes[p].name)
             continue
-        if ex.get("activeLow") and not str(ex.get("displayName", "")).startswith("/"):
+        if ex.get("activeLow") and not str(ex.get("displayName", "")).endswith("#"):
             unmarked.append(g.nodes[p].name)
     if missing:
         return _Outcome(CheckStatus.FAIL, f"{len(missing)} pin(s) missing activeLow flag")
     if unmarked:
-        return _Outcome(CheckStatus.FAIL, f"active-low pins missing '/' marker: {unmarked[:5]}")
+        return _Outcome(CheckStatus.FAIL, f"active-low pins missing '#' marker: {unmarked[:5]}")
     al = sum(1 for p in pins if (g.nodes[p].extras or {}).get("activeLow"))
     return _Outcome(CheckStatus.PASS, f"{len(pins)} pins flagged ({al} active-low)",
                     measured=f"{al} active_low")

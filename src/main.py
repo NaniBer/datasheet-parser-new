@@ -17,6 +17,7 @@ from typing import List, Optional, Tuple
 from .pdf_extractor import PageDetector, PageCandidate, ContentExtractor
 from .pdf_extractor import infer_part_number_hint
 from .pdf_extractor.deterministic_table_parser import parse_pin_data_from_tables
+from .pdf_extractor.overbar import matches_overbarred
 from .pdf_extractor.pin_grounding import build_pin_number_index, drop_ungrounded_pins
 from .pdf_extractor.extraction_validator import validate_pin_data_extraction
 from .llm import LLMClient, PageVerifier
@@ -710,6 +711,34 @@ def _replace_pins_with_vision(pin_data, vision_pins):
     pin_data.extraction_method = "Vision"
 
 
+def _mark_overbar_active_low(pin_data: "PinData", content) -> "PinData":
+    """Flag pins whose printed overbar was recovered from glyph geometry
+    (``content.overbar_names``) as active_low, regardless of which extraction
+    path produced them. The overbar is lost in plain text, so a pin like
+    AD9106's TRIGGER -- active-low only by its bar, with no "(active low)" prose
+    -- is otherwise missed. Never clears an already-set flag."""
+    names = getattr(content, "overbar_names", None)
+    if not names:
+        return pin_data
+
+    def _mark(pin) -> None:
+        if isinstance(pin, dict):
+            if not pin.get("active_low") and matches_overbarred(pin.get("name", ""), names):
+                pin["active_low"] = True
+        else:
+            if not getattr(pin, "active_low", False) and matches_overbarred(
+                getattr(pin, "name", ""), names
+            ):
+                pin.active_low = True
+
+    for pin in pin_data.pins or []:
+        _mark(pin)
+    for pkg in pin_data.packages or []:
+        for pin in (pkg.get("pins") or []) if isinstance(pkg, dict) else []:
+            _mark(pin)
+    return pin_data
+
+
 def extract_pin_data(
     content,
     model: str,
@@ -781,7 +810,7 @@ def extract_pin_data(
             if verbose:
                 print("Using deterministic table parser")
                 _print_pin_data_summary(deterministic_pin_data, deterministic_validation)
-            return deterministic_pin_data
+            return _mark_overbar_active_low(deterministic_pin_data, content)
 
         if verbose:
             print("Deterministic table parser candidate failed validation; falling back to LLM.")
@@ -860,7 +889,7 @@ def extract_pin_data(
             if verbose:
                 _print_pin_data_summary(pin_data, validation)
 
-            return pin_data
+            return _mark_overbar_active_low(pin_data, content)
 
         validation_feedback = validation.feedback
 
@@ -891,7 +920,7 @@ def extract_pin_data(
             f"Issues: {'; '.join(errors)}"
         )
         last_pin_data.validation_errors = errors
-        return last_pin_data
+        return _mark_overbar_active_low(last_pin_data, content)
 
     raise ValidationError(
         f"Pin data failed validation after {max_attempts} attempts: "
