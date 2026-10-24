@@ -89,6 +89,9 @@ class ExtractedContent:
     # names drawn with subscripts/superscripts (``V R IN`` -> ``VINR``). Applied
     # ONLY to the deterministic parser's pin name, never to the table text itself.
     descrambled_names: Dict[str, str] = field(default_factory=dict)
+    # Source PDF path, so a failure-only fallback (geometry pin-table reader) can
+    # lazily re-open the pages without re-plumbing them through the pipeline.
+    pdf_path: Optional[str] = None
 
 
 class ContentExtractor:
@@ -187,6 +190,7 @@ class ContentExtractor:
             images=filtered.images,
             overbar_names=extracted.overbar_names,
             descrambled_names=self._descramble_map,
+            pdf_path=self.pdf_path,
         )
 
     # A pinout drawn as a "Connection Diagram" / "Pin Configuration Diagram"

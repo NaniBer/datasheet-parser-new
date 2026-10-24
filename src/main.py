@@ -768,6 +768,63 @@ def _apply_descrambled_names(pin_data: "PinData", content) -> "PinData":
     return pin_data
 
 
+def _geometry_fallback_pin_data(content, part_number, force_best_effort, verbose):
+    """Recover pins from a collapsed pin table the row parser can't read (e.g.
+    AD9106, whose whole columns land in one cell each). Reads (number, name) pairs
+    from glyph geometry, feeds them back through the deterministic parser as a
+    clean table, and keeps the result only if it validates. Returns PinData or
+    None. Runs only after the normal parse fails, so it never affects datasheets
+    that already parse cleanly."""
+    pdf_path = getattr(content, "pdf_path", None)
+    if not pdf_path:
+        return None
+    try:
+        import pdfplumber
+        from dataclasses import replace
+        from .pdf_extractor.geometry_pin_table import extract_geometry_pin_table
+        with pdfplumber.open(pdf_path) as pdf:
+            # Scan the whole document: the pin table may span pages that page
+            # detection did not keep as candidates (e.g. AD9106 pins 28-32).
+            pairs = extract_geometry_pin_table(pdf.pages)
+            full_text = "\n".join((pg.extract_text() or "") for pg in pdf.pages)
+    except Exception:
+        return None
+    if not pairs:
+        return None
+
+    pins = [Pin(number=n, name=nm) for n, nm in pairs]
+    # Package type from the datasheet's "<N>-Lead <FAMILY>" phrasing; downstream
+    # package normalization/ordering-table correction refines it.
+    m = re.search(
+        r"(\d+)\s*[- ]?\s*(?:Lead|Pin|Ball)\s+"
+        r"(LFCSP|LQFP|TQFP|QFP|WQFN|TQFN|QFN|SOIC|TSSOP|VSSOP|SSOP|MSOP|WLCSP|BGA|"
+        r"CSP|PDIP|CDIP|DIP|SOT-?23|SOP|WSON|SON|DFN)",
+        full_text, re.IGNORECASE,
+    )
+    pkg_type = f"{m.group(2).upper().rstrip('.')}-{m.group(1)}" if m else f"PKG-{len(pins)}"
+    pin_data = PinData(
+        component_name=part_number or infer_part_number_hint(full_text) or "Unknown",
+        package=PackageInfo(type=pkg_type, pin_count=len(pins), width=0.0, height=0.0),
+        pins=pins,
+        extraction_method="Table",
+    )
+    pin_data = normalize_package(pin_data, verbose=False)
+    # Ground against the full document (not just candidate pages) so pins on
+    # non-candidate pages still validate.
+    geo_content = replace(content, text_content=full_text)
+    validation = validate_pin_data_extraction(
+        pin_data, part_number=part_number, source_text=_grounding_source_text(geo_content)
+    )
+    if not validation.is_valid:
+        if verbose:
+            print("Geometry pin-table fallback failed validation; falling back to LLM.")
+        return None
+    _apply_grounding_gate(pin_data, geo_content, force_best_effort, verbose)
+    if verbose:
+        print(f"Using geometry pin-table fallback ({len(pairs)} pins)")
+    return pin_data
+
+
 def extract_pin_data(
     content,
     model: str,
@@ -849,6 +906,15 @@ def extract_pin_data(
                 print("  Validation warnings:")
                 for warning in deterministic_validation.warnings:
                     print(f"    - {warning}")
+
+    # Geometry fallback for collapsed pin tables before paying for the LLM.
+    geo_pin_data = _geometry_fallback_pin_data(
+        content, part_number, force_best_effort, verbose
+    )
+    if geo_pin_data is not None:
+        return _apply_descrambled_names(
+            _mark_overbar_active_low(geo_pin_data, content), content
+        )
 
     if verbose:
         print("Using LLM fallback for extraction")
