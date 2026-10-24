@@ -179,17 +179,20 @@ def test_xson_sot833_has_no_exposed_pad():
         assert b._has_exposed_pad, f"{pkg} should keep its exposed pad"
 
 
-def test_through_hole_pin1_pad_is_square():
+@pytest.mark.parametrize("layer", ["CopperCirclePad", "CopperCirclePin"])
+def test_through_hole_pin1_pad_is_square(layer):
     # QC (PGA2311P / DIP): pin 1 should be a square pad (DIP pin-1 marker); the
     # rest stay round. Verify pin 1's copper pad face area ~= d^2 (square) and
-    # noticeably larger than pin 2's circular pad (pi*r^2).
+    # noticeably larger than pin 2's circular pad (pi*r^2). A through-hole pad
+    # has one shape on every copper layer (KLC F7.3), so this holds for both the
+    # top (CopperCirclePad) and bottom (CopperCirclePin) copper.
     b = PcbFootprintBuilder("DIP-16", 16, "PGA2311P")
     p1 = [pp for pp in b.pin_positions if str(pp.pin_number) == "1"][0]
     p2 = [pp for pp in b.pin_positions if str(pp.pin_number) == "2"][0]
 
     def copper_top_area(assy):
         for ch in assy.children:
-            if ch.name == "CopperCirclePad":
+            if ch.name == layer:
                 wp = ch.children[0].obj  # shape sits one level down
                 return max(f.Area() for f in wp.val().Faces())
         return None
