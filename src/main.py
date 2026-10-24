@@ -601,7 +601,12 @@ def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=F
     # that they sit on the right pin number — so a scrambled-but-grounded mapping
     # (e.g. AD712) sails through the gate. For that graphical class we cross-check
     # the number->name mapping against the rendered diagram via the vision path.
-    has_pin_table = bool(getattr(content, "tables", None))
+    # A validated geometry pin-table read is table-backed too, even though
+    # pdfplumber found no ruled table (AD9106: vision overwrote a correct read).
+    has_pin_table = (
+        bool(getattr(content, "tables", None))
+        or getattr(pin_data, "extraction_method", None) == GEOMETRY_TABLE_METHOD
+    )
     well_grounded = tally["grounded"] / signal >= _GROUNDING_TRUST
     if well_grounded and has_pin_table:
         return  # well-grounded and table-backed — trust text, skip vision
@@ -768,6 +773,11 @@ def _apply_descrambled_names(pin_data: "PinData", content) -> "PinData":
     return pin_data
 
 
+# extraction_method for pins read by the geometry pin-table fallback; the vision
+# fallback treats it as table-backed.
+GEOMETRY_TABLE_METHOD = "Geometry table"
+
+
 def _geometry_fallback_pin_data(content, part_number, force_best_effort, verbose):
     """Recover pins from a collapsed pin table the row parser can't read (e.g.
     AD9106, whose whole columns land in one cell each). Reads (number, name) pairs
@@ -806,7 +816,7 @@ def _geometry_fallback_pin_data(content, part_number, force_best_effort, verbose
         component_name=part_number or infer_part_number_hint(full_text) or "Unknown",
         package=PackageInfo(type=pkg_type, pin_count=len(pins), width=0.0, height=0.0),
         pins=pins,
-        extraction_method="Table",
+        extraction_method=GEOMETRY_TABLE_METHOD,
     )
     pin_data = normalize_package(pin_data, verbose=False)
     # Ground against the full document (not just candidate pages) so pins on

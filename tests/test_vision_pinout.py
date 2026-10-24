@@ -112,6 +112,28 @@ def test_vision_fallback_skips_when_well_grounded_and_table_backed(monkeypatch):
     assert [p.name for p in pd.pins] == ["VCC", "GND", "OUT"]  # unchanged
 
 
+def test_vision_fallback_skips_geometry_table_read(monkeypatch):
+    import src.main as m
+    import src.llm.vision_pinout as vp
+    from src.models.pin_data import PinData, Pin
+
+    # No pdfplumber table, but the pins came from the geometry pin-table reader:
+    # that is a real table read, so vision must not overwrite it (AD9106).
+    content = _Content("--- Page 1 ---\n1 VCC\n2 GND\n3 OUT", tables=[])
+    pd = PinData(component_name="X", pins=[Pin(1, "VCC"), Pin(2, "GND"), Pin(3, "OUT")],
+                 extraction_method=m.GEOMETRY_TABLE_METHOD)
+    calls = {"n": 0}
+
+    def _spy(*a, **k):
+        calls["n"] += 1
+        return [{"number": 1, "name": "GND"}, {"number": 2, "name": "VCC"},
+                {"number": 3, "name": "OUT"}]
+    monkeypatch.setattr(vp, "extract_pinout_best_page", _spy)
+    m._apply_vision_fallback(pd, content, "x.pdf", "X")
+    assert calls["n"] == 0
+    assert [p.name for p in pd.pins] == ["VCC", "GND", "OUT"]
+
+
 def test_vision_crosschecks_grounded_when_no_pin_table(monkeypatch):
     import src.main as m
     import src.llm.vision_pinout as vp
