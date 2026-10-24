@@ -102,3 +102,24 @@ def test_long_mpn_renders_narrow():
     bb = shape.val().BoundingBox()
     assert bb.xlen < 10.0, f"rendered value width {bb.xlen:.2f} mm too wide"
     assert bb.ylen < 1.2, f"rendered value height {bb.ylen:.2f} mm too tall"
+
+
+@pytest.mark.parametrize("pkg", ["XSON-8", "XSON8 (SOT833-1)", "SOT833-1"])
+def test_xson_symbol_has_no_epad_pin(pkg):
+    # QC re-check LVC SCH-07: the 74LVC1G99 (XSON8 / SOT833-1) has no exposed
+    # pad, so the symbol must not add an EPAD pin 9 the footprint never has.
+    from src.schematic_generator.pinout_diagram_builder import PinoutDiagramBuilder
+
+    sym = PinoutDiagramBuilder(pkg, 8, "74LVC1G99")
+    assert not sym._has_exposed_pad
+    assert all(str(p.pin_number) != "9" for p in sym.pin_positions)
+
+
+@pytest.mark.parametrize("pkg,n", [("QFN-16", 16), ("LFCSP-32", 32), ("SON-8", 8),
+                                   ("XSON-8", 8), ("SOIC-8", 8)])
+def test_symbol_and_footprint_agree_on_exposed_pad(pkg, n):
+    from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+    from src.schematic_generator.pinout_diagram_builder import PinoutDiagramBuilder
+
+    assert (PinoutDiagramBuilder(pkg, n, "IC")._has_exposed_pad
+            == PcbFootprintBuilder(pkg, n, "IC")._has_exposed_pad)

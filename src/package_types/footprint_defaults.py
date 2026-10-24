@@ -85,6 +85,19 @@ _SOT833_1_XSON8 = {
 }
 
 
+def has_thermal_pad_outline(package_type: str) -> bool:
+    """True when the package outline carries an exposed thermal pad.
+
+    Leadless families (QFN/LFCSP/DFN/WSON/SON) do, except XSON / SOT833: these
+    small-signal leadless outlines (74LVC1G99 in SOT833-1) have NO thermal pad,
+    though they canonicalise to SON. The footprint and the symbol both use this
+    so the symbol never carries an EPAD pin the footprint has no pad for.
+    """
+    if _family(package_type) not in ("QFN", "DFN", "WSON", "SON"):
+        return False
+    return not re.search(r"XSON|SOT\s*-?\s*833", package_type or "", re.I)
+
+
 def _family(package_type: str) -> Optional[str]:
     """
     Resolve the package *family string* (e.g. "SSOP"), not the PackageType

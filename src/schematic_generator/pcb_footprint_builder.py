@@ -17,7 +17,6 @@ Hierarchy follows KiCad KLC standards documented in docs/PCB_FOOTPRINT_HIERARCHY
 
 import logging
 import os
-import re
 from typing import List, Dict, Any, Optional
 
 import cadquery as cq
@@ -183,16 +182,12 @@ class PcbFootprintBuilder:
         # thermal pad under the body that must be soldered to ground. Add it as
         # one extra Legs child (numbered pin_count+1, pinName EPAD) when the
         # family is leadless and an exposed-pad dimension is available.
-        from ..package_types.footprint_defaults import _family as _fp_family
-        leadless = _fp_family(package_type) in ("QFN", "DFN", "WSON", "SON")
-        # XSON / SOT833 are small-signal leadless outlines with NO thermal pad
-        # (e.g. 74LVC1G99 in SOT833-1). Extraction can report a bogus D2/E2 for
-        # them; don't let it add a phantom centre pad (QC: spurious pad "9").
-        no_epad_outline = bool(re.search(r"XSON|SOT\s*-?\s*833", package_type or "", re.I))
+        # XSON / SOT833 have no thermal pad even though they are leadless;
+        # extraction can report a bogus D2/E2 for them (QC: spurious pad "9").
+        from ..package_types.footprint_defaults import has_thermal_pad_outline
         self._has_exposed_pad = bool(
-            leadless and not self.is_through_hole()
+            has_thermal_pad_outline(package_type) and not self.is_through_hole()
             and self._epad_w and self._epad_l
-            and not no_epad_outline
         )
         self._exposed_pad_number = str(pin_count + 1) if self._has_exposed_pad else None
 
