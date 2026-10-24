@@ -1051,11 +1051,12 @@ class PcbFootprintBuilder:
             pin_assy.add(copper_cylinder_assy)
 
             # CopperCirclePin (B.Cu layer) - bottom layer copper pad
-            # This is the copper pad on the BOTTOM side of the PCB
+            # This is the copper pad on the BOTTOM side of the PCB. Pin 1 is
+            # square here too: a THT pad has one shape on every copper layer.
             copper_circle_pin_radius = self.pad_spec["diameter"] / 2
-            copper_circle_pin = cq.Workplane("XY").workplane(offset=-self.PIN_CYLINDER_HEIGHT/2).center(
-                x, y
-            ).circle(copper_circle_pin_radius).extrude(self.PAD_HEIGHT)
+            _cb = cq.Workplane("XY").workplane(offset=-self.PIN_CYLINDER_HEIGHT/2).center(x, y)
+            copper_circle_pin = (_cb.rect(2 * copper_circle_pin_radius, 2 * copper_circle_pin_radius)
+                                 if is_pin1 else _cb.circle(copper_circle_pin_radius)).extrude(self.PAD_HEIGHT)
             copper_circle_pin_assy = cq.Assembly(name="CopperCirclePin")
             copper_circle_pin_assy.add(copper_circle_pin, color=self.RED_COLOR)
             pin_assy.add(copper_circle_pin_assy)
