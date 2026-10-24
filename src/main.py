@@ -895,6 +895,7 @@ def extract_pin_data(
             deterministic_pin_data,
             part_number=part_number,
             source_text=grounding_text,
+            allow_printed_ranges=True,
         )
 
         if deterministic_validation.is_valid:

@@ -274,7 +274,35 @@ def _designator_family_conflict(
     )
 
 
-def _ungrounded_pin_names(packages: List[Dict[str, Any]], source_text: str) -> List[str]:
+# A printed name range: "D0-D4", "D5–D7", "AIN1 to AIN6", "P7:P0".
+_PRINTED_RANGE_RE = re.compile(
+    r"\b([A-Z][A-Z_]*?)(\d+)\s*(?:-|–|—|to|TO|:)\s*([A-Z][A-Z_]*?)?(\d+)\b"
+)
+_MAX_RANGE_SPAN = 64
+
+
+def printed_range_members(source_text: str) -> set:
+    """Normalized names covered by name ranges printed in the text.
+
+    A pin table may print only "D0-D4" / "D5-D7", so "D2" never appears on its
+    own yet is exactly what the datasheet names pin 46.
+    """
+    members = set()
+    for prefix, start, other_prefix, end in _PRINTED_RANGE_RE.findall(source_text or ""):
+        if other_prefix and other_prefix != prefix:
+            continue
+        lo, hi = sorted((int(start), int(end)))
+        if hi - lo > _MAX_RANGE_SPAN:
+            continue
+        members.update(_normalize_identifier(f"{prefix}{n}") for n in range(lo, hi + 1))
+    return members
+
+
+def _ungrounded_pin_names(
+    packages: List[Dict[str, Any]],
+    source_text: str,
+    allow_printed_ranges: bool = False,
+) -> List[str]:
     """
     Pin names that appear nowhere in the source text.
 
@@ -284,10 +312,16 @@ def _ungrounded_pin_names(packages: List[Dict[str, Any]], source_text: str) -> L
     the extractor joined itself (e.g. "GND/PAD") stays grounded when every
     segment is found. Names that normalize to fewer than two characters
     ("+", "-", "K") carry too little signal to check.
+
+    With ``allow_printed_ranges`` a name printed only inside a range ("D2" in
+    "D0-D4") also counts. Only the deterministic parser sets it: it expands a
+    range solely when the row's numbers line up item for item, whereas an LLM
+    expanding a range is guessing the order.
     """
     normalized_source = _normalize_identifier(source_text)
     if not normalized_source:
         return []
+    range_members = printed_range_members(source_text) if allow_printed_ranges else set()
 
     ungrounded: List[str] = []
     for package in packages:
@@ -296,7 +330,7 @@ def _ungrounded_pin_names(packages: List[Dict[str, Any]], source_text: str) -> L
             normalized_name = _normalize_identifier(name)
             if len(normalized_name) < 2:
                 continue
-            if normalized_name in normalized_source:
+            if normalized_name in normalized_source or normalized_name in range_members:
                 continue
             segments = [
                 _normalize_identifier(segment)
@@ -315,6 +349,7 @@ def validate_pin_data_extraction(
     pin_data: PinData,
     part_number: Optional[str] = None,
     source_text: Optional[str] = None,
+    allow_printed_ranges: bool = False,
 ) -> ExtractionValidationResult:
     """
     Validate structural correctness of extracted pin data.
@@ -396,7 +431,9 @@ def validate_pin_data_extraction(
             errors.append(designator_conflict)
 
         if source_text:
-            ungrounded = _ungrounded_pin_names(packages, source_text)
+            ungrounded = _ungrounded_pin_names(
+                packages, source_text, allow_printed_ranges
+            )
             if ungrounded:
                 shown = ", ".join(repr(name) for name in ungrounded[:8])
                 if len(ungrounded) > 8:

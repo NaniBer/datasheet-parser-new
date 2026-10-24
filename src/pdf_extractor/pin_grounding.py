@@ -33,12 +33,14 @@ try:
         _extract_pin_name,
         _extract_pin_numbers,
         _normalize_table,
+        grouped_row_pairs,
     )
 except ImportError:  # pragma: no cover - compatibility for top-level imports
     from src.pdf_extractor.deterministic_table_parser import (
         _extract_pin_name,
         _extract_pin_numbers,
         _normalize_table,
+        grouped_row_pairs,
     )
 
 
@@ -117,15 +119,39 @@ def _source_lines(content) -> List[tuple]:
     return lines
 
 
+def _structural_pairs(content) -> Dict[tuple, tuple]:
+    """(number, normalized name) -> (page, row text) for every pin a grouped
+    table row pairs explicitly ("CTSA, CTSB | 38, 23"; "D0-D4 | 44 - 48").
+
+    Such pins never share a line with their own number ("D2" is printed only
+    as "D0-D4"), so the line test below cannot ground them; this grounds the
+    exact pairing the row states and nothing looser.
+    """
+    pairs: Dict[tuple, tuple] = {}
+    for page_number, table in getattr(content, "tables", None) or []:
+        for row in table or []:
+            for number, name in grouped_row_pairs(row):
+                evidence = " ".join(str(cell) for cell in row if cell).strip()[:160]
+                pairs.setdefault((number, _normalize(name)), (page_number, evidence))
+    return pairs
+
+
 def _line_has_number(raw_line: str, number: int) -> bool:
     """True if the pin number appears as a standalone token on the line."""
     return re.search(rf"(?<!\d){number}(?!\d)", raw_line) is not None
 
 
-def _grade_pin(number, name, lines: List[tuple]):
+def _grade_pin(number, name, lines: List[tuple], pairs: Optional[Dict[tuple, tuple]] = None):
     """Return (status, source_page, evidence) for one pin against the source."""
     if _is_no_connect(name):
         return "nc", None, None
+    if pairs and number is not None:
+        try:
+            stated = pairs.get((int(number), _normalize(name)))
+        except (TypeError, ValueError):
+            stated = None
+        if stated:
+            return "grounded", stated[0], stated[1]
 
     segments = _name_segments(name)
     raw_name = str(name or "").strip()
@@ -212,12 +238,13 @@ def assess_pin_grounding(pin_data, content) -> Dict[str, int]:
     added, dropped, or renamed. The abstention gate reads this tally.
     """
     lines = _source_lines(content)
+    pairs = _structural_pairs(content)
     tally = {"grounded": 0, "weak": 0, "unsupported": 0, "nc": 0, "total": 0}
 
     for pin in _pins_of(pin_data):
         number = _pin_get(pin, "number")
         name = _pin_get(pin, "name")
-        status, page, evidence = _grade_pin(number, name, lines)
+        status, page, evidence = _grade_pin(number, name, lines, pairs)
         _pin_set(pin, "grounding", status)
         _pin_set(pin, "source_page", page)
         _pin_set(pin, "source_evidence", evidence)

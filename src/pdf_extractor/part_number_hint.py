@@ -258,7 +258,7 @@ def infer_part_number_hint(text_content: str, source_name: Optional[str] = None)
 _PACKAGE_DESIGNATORS = {
     "D", "DW", "DB", "DBQ", "DBV", "DCK", "DCN", "DCT", "DDC", "DGK",
     "DGV", "DRC", "DRL", "DSC", "DSG",
-    "N", "NE", "NS", "P", "PS", "PW", "PWP",
+    "N", "NE", "NS", "P", "PFB", "PS", "PW", "PWP",
     "RGE", "RGR", "RGT", "RGY", "RGZ", "RHA", "RHB", "RHL", "RTE", "RUM",
 }
 
@@ -271,6 +271,7 @@ TI_DESIGNATOR_FAMILIES = {
     # PWP is PowerPAD HTSSOP: TSSOP body/grid with an exposed pad.
     "PW": "TSSOP", "PWP": "TSSOP", "DGV": "TSSOP",
     "DGK": "MSOP",
+    "PFB": "TQFP",
     "DBV": "SOT23", "DCN": "SOT23", "DDC": "SOT23",
     "DSC": "WSON", "DSG": "WSON", "DRC": "WSON",
     "RGE": "QFN", "RGR": "QFN", "RGT": "QFN", "RGY": "QFN", "RGZ": "QFN",
