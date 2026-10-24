@@ -699,6 +699,64 @@ def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=F
 
 
 
+def _apply_deterministic_repair(pin_data, input_path, part_number, verbose=False):
+    """Run the repair layer's deterministic steps on the extracted pins.
+
+    The GLB pipeline never ran the repair layer, so a grouped datasheet row
+    ("5, 6, 41, 42 | GPO0 to GPO3") reached the symbol as a group label or in
+    printed order (QC ADV SCH-01/02). This applies only the free steps: the
+    ordered variant's own pin table, group expansion and the pin-drawing read;
+    no LLM calls. Names change only when the repaired pin set matches the
+    extracted one, and a group label never replaces a per-pin name (without
+    the LLM, "P7 to P2, P1, P0" stays a group); any failure leaves the
+    extraction untouched.
+    """
+    from .agentic import repair_pins
+    from .agentic.repair import is_group
+
+    pins_list, container = _active_pins(pin_data)
+    if not pins_list or input_path is None:
+        return
+    current = {}
+    for pin in pins_list:
+        try:
+            current[int(_pin_field(pin, "number"))] = pin
+        except (TypeError, ValueError):
+            return
+    package = (container.get("type") if isinstance(container, dict)
+               else getattr(getattr(pin_data, "package", None), "type", None))
+    try:
+        rep = repair_pins(
+            [{"number": n, "name": _pin_name(p)} for n, p in sorted(current.items())],
+            Path(input_path), part_number, package=package,
+            pin_count=len(current), use_llm=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - never lose the extraction to a repair bug
+        if verbose:
+            print(f"  Deterministic pin repair skipped: {type(exc).__name__}: {exc}")
+        return
+    repaired = {int(p["number"]): p["name"] for p in rep["pins"]}
+    if set(repaired) != set(current):
+        if verbose:
+            print("  Deterministic pin repair changed the pin set; keeping the extraction.")
+        return
+    changed = 0
+    for n, pin in current.items():
+        name = repaired[n]
+        if is_group(name) and not is_group(_pin_name(pin)):
+            continue
+        if name and name != _pin_name(pin):
+            if isinstance(pin, dict):
+                pin["name"] = name
+            else:
+                pin.name = name
+            changed += 1
+    if verbose and changed:
+        print(f"  Deterministic pin repair: {changed} pin name(s) corrected")
+        for line in rep["repairs"]:
+            print(f"    - {line}")
+
+
 def _replace_pins_with_vision(pin_data, vision_pins):
     """Swap the active package's pins for the vision-read pinout (both shapes)."""
     pins_list, container = _active_pins(pin_data)
@@ -2317,6 +2375,7 @@ def process_datasheet(
             force_best_effort=force_best_effort,
             content=content,
         )
+        _apply_deterministic_repair(pin_data, input_path, resolved_part_number, verbose)
 
         # Modules/SiPs/grid-array parts: emit schematic only (no chip footprint).
         flag_module_footprint(pin_data, input_path, verbose=verbose)
@@ -2831,6 +2890,7 @@ def _emit_pins_only(input_path, output_path, args, effective_best_effort):
             pin_data, input_path, resolved_part_number, args.model,
             verbose=args.verbose, force_best_effort=effective_best_effort,
         )
+        _apply_deterministic_repair(pin_data, input_path, resolved_part_number, args.verbose)
     except DatasheetParserError as e:
         print(f"Error: {e}")
         sys.exit(EXIT_DOMAIN_FAILURE)
@@ -2950,6 +3010,9 @@ def _run_cli():
                 args.model,
                 verbose=args.verbose,
                 force_best_effort=effective_best_effort,
+            )
+            _apply_deterministic_repair(
+                pin_data, input_path, resolved_part_number, args.verbose
             )
             # Modules/SiPs/grid-array parts -> schematic only (no chip footprint).
             flag_module_footprint(pin_data, input_path, verbose=args.verbose)

@@ -30,6 +30,7 @@ fail softly and the affected pins keep their extracted names.
 from __future__ import annotations
 
 import base64
+import contextvars
 import json
 import os
 import re
@@ -350,13 +351,22 @@ def _tidy(name: str) -> str:
     return n
 
 
+# False while repair_pins runs with use_llm=False: every text/vision ask answers
+# {} without a call, which each step already treats as "no answer" (fail closed).
+_LLM_ENABLED: contextvars.ContextVar = contextvars.ContextVar("repair_llm_enabled", default=True)
+
+
 def _ask_text(model: str, prompt: str) -> dict:
+    if not _LLM_ENABLED.get():
+        return {}
     return _parse_json(chat_bot.get_completion_from_messages([{"role": "user", "content": prompt}], model=model))
 
 
 def _ask_vision(model: str, prompt: str, pdf: Path, pages: List[int], rotations: Tuple[int, ...] = (0,)) -> dict:
     """Send the rendered page(s) with the prompt. ``rotations`` adds turned copies of
     each page (pinout drawings are often printed sideways)."""
+    if not _LLM_ENABLED.get():
+        return {}
     content = [{"type": "text", "text": prompt}]
     for p in pages:
         for r in rotations:
@@ -807,6 +817,31 @@ def repair_pins(
     escalation_model: Optional[str] = None,
     package: Optional[str] = None,
     pin_count: Optional[int] = None,
+    use_llm: bool = True,
+) -> dict:
+    """Repair an extracted pin list; see :func:`_repair_pins`.
+
+    ``use_llm=False`` runs only the deterministic steps (ordered variant's pin
+    table, group expansion, pin-drawing read): no model calls and no reset of
+    the caller's LLM usage counter. The GLB pipeline uses this mode.
+    """
+    token = _LLM_ENABLED.set(use_llm)
+    try:
+        return _repair_pins(pins, pdf_path, part_number, repair_model,
+                            escalation_model, package, pin_count, use_llm)
+    finally:
+        _LLM_ENABLED.reset(token)
+
+
+def _repair_pins(
+    pins: List[dict],
+    pdf_path: Path,
+    part_number: Optional[str],
+    repair_model: Optional[str],
+    escalation_model: Optional[str],
+    package: Optional[str],
+    pin_count: Optional[int],
+    use_llm: bool,
 ) -> dict:
     """Repair an extracted pin list in place of the caller's judgement.
 
@@ -844,7 +879,8 @@ def repair_pins(
         names[n] = rebuilt or _tidy(raw)
     original = {n: str(p.get("name") or "") for n, p in by_num.items()}
     log: List[str] = [f"rebuild {original[n]!r} -> {names[n]!r}" for n in names if names[n] != _tidy(original[n])]
-    chat_bot.reset_usage()
+    if use_llm:
+        chat_bot.reset_usage()
     pin_count = pin_count or len(names) or None
     variant = f"{pin_count}-pin {package}" if package and pin_count else (package or (f"{pin_count}-pin" if pin_count else ""))
     variant_note = (f" The ordered part is {part_number} in the {variant} package: use ONLY that variant's pin "
