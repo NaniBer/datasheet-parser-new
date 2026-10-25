@@ -13,7 +13,7 @@ For PCB manufacturing layouts, use pcb_footprint_builder.py.
 
 import logging
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 import cadquery as cq
 
@@ -320,29 +320,39 @@ class PinoutDiagramBuilder:
         pin_point = cq.Workplane("XY").center(pt_x, pt_y).circle(dot_r).extrude(leg_thickness)
         pin_assy.add(pin_point, name="pinPoint", color=self.PIN_COLOR)
 
-        # 3. text — pin number label
+        # 3. text — pin number label, just above the pin line and centred
+        #    between the body edge and the connection end (KiCad / SnapEDA). QC
+        #    SCH-09: it used to sit past the connection dot, where wires attach.
+        #    On top/bottom pins the number runs along the leg, on its left.
         num_size = self.params.pin_geometry.pin_num_size
         num_height = self.params.pin_geometry.pin_num_height
+        num_gap = leg_width / 2 + self.PIN_NUMBER_GAP
         num_assy = cq.Assembly(name="text")
-        if pin_pos.side in ["top", "bottom"]:
-            direction = -1 if pin_pos.side == "top" else 1
-            char_spacing = num_size * 1.2
-            for i, char in enumerate(pin_number):
-                if not char.strip():
-                    continue
-                char_y = pin_pos.num_y + (i * char_spacing * direction)
-                try:
-                    char_wp = cq.Workplane("XY").center(
-                        pin_pos.num_x, char_y
-                    ).text(char, num_size, num_height, halign="center")
-                    num_assy.add(char_wp, color=self.BLACK_COLOR)
-                except (IndexError, Exception):
-                    pass
-        else:
-            num_text = cq.Workplane("XY").center(
-                pin_pos.num_x, pin_pos.num_y
-            ).text(pin_number, num_size, num_height, halign=pin_pos.num_halign)
+        try:
+            num_text = cq.Workplane("XY").text(
+                pin_number, num_size, num_height, halign="center", valign="bottom",
+            )
+            # Fit inside the leg's length and the free space up to the next pin
+            # (fine-pitch symbols, e.g. BGA at 1.0 mm); never enlarged.
+            bb = num_text.val().BoundingBox()
+            fit = min(1.0,
+                      (leg_length - 2 * self.PIN_NUMBER_GAP) / max(bb.xlen, 1e-6),
+                      (self.params.pin_pitch - num_gap - self.PIN_NUMBER_GAP) / max(bb.ylen, 1e-6))
+            if fit < 1.0:
+                num_text = cq.Workplane("XY").text(
+                    pin_number, num_size * fit, num_height, halign="center", valign="bottom",
+                )
+            if pin_pos.side in ("left", "right"):
+                sign = -1 if pin_pos.side == "left" else 1
+                num_text = num_text.translate((pin_pos.x + sign * leg_length / 2,
+                                               pin_pos.y + num_gap, 0))
+            else:
+                sign = 1 if pin_pos.side == "top" else -1
+                num_text = num_text.rotate((0, 0, 0), (0, 0, 1), 90).translate(
+                    (pin_pos.x - num_gap, pin_pos.y + sign * leg_length / 2, 0))
             num_assy.add(num_text, color=self.BLACK_COLOR)
+        except Exception:
+            logger.warning("Could not render pin number %r", pin_number)
         pin_assy.add(num_assy, name="text")
 
         # 4. boundingBox — invisible selection area covering the leg region
@@ -494,75 +504,80 @@ class PinoutDiagramBuilder:
 
         return legs_assy
 
+    # Clearance between a label and the symbol outline (or its pin ends).
+    LABEL_GAP = 1.27
+    # Clearance between a pin number and its pin line.
+    PIN_NUMBER_GAP = 0.25
+
+    def _label_anchor(self, above: bool, text_size: float) -> Tuple[float, float]:
+        """Bottom-left anchor of the designator (above) / value (below) label.
+
+        Both sit at the body's left edge, outside the symbol: above the top edge
+        (or the top pins' connection ends) and below the bottom edge (or the
+        bottom pins' ends), like the platform reference / EasyEDA standard.
+        """
+        bw, bh = self.params.body_width, self.params.body_height
+        leg = self.params.pin_geometry.leg_length
+        sides = {p.side for p in self.pin_positions}
+        if above:
+            return -bw / 2, bh / 2 + (leg if "top" in sides else 0.0) + self.LABEL_GAP
+        y = -bh / 2 - (leg if "bottom" in sides else 0.0) - self.LABEL_GAP - text_size
+        return -bw / 2, y
+
+    def _label_group(self, name: str, text: str, size: float, height: float,
+                     above: bool) -> cq.Assembly:
+        """Label group positioned by its node, glyphs at the node's origin.
+
+        QC SCH-05: the platform re-renders the designator glyph ("U" -> "U1") at
+        the DesignatorName node's own position, so a position baked into the mesh
+        was lost and "U1" landed at the symbol origin, inside the body. The node
+        now carries the anchor and the text starts at its local (0, 0), as in the
+        reference schematic.glb.
+        """
+        ax, ay = self._label_anchor(above, size)
+        group = cq.Assembly(name=name, loc=cq.Location(cq.Vector(ax, ay, 0)))
+
+        text_shape = cq.Workplane("XY").text(
+            text, size, height, halign="left", valign="bottom",
+        )
+        body_assy = cq.Assembly(name="Body")
+        body_assy.add(text_shape, color=self.BLACK_COLOR)
+        group.add(body_assy, name="Body")
+
+        bbox_w = max(len(text) * size * 0.6, size * 2.0)
+        bbox = cq.Workplane("XY").center(bbox_w / 2, size / 2).rect(
+            bbox_w, size * 1.5
+        ).extrude(0.001)
+        bbox_assy = cq.Assembly(name="BoundingBox")
+        bbox_assy.add(bbox, color=cq.Color(1, 1, 1, 0))
+        group.add(bbox_assy, name="BoundingBox")
+        return group
+
     def build_designator(self) -> cq.Assembly:
         """
-        Build designator label ("U").
+        Build designator label ("U"), above the body at the top-left.
 
         Hierarchy:
         DesignatorName
         ├── Body [mesh]
         └── BoundingBox [mesh]
-
-        Returns:
-            Assembly with "U" text above body
         """
-        size = self.params.body_geometry.designator_size
-        height = self.params.body_geometry.designator_height
-        offset = self.params.body_geometry.designator_offset
-        text_y = self.params.body_height / 2 + offset
-
-        designator_assy = cq.Assembly(name="DesignatorName")
-
-        text_shape = cq.Workplane("XY").center(0, text_y).text(
-            self.params.body_geometry.designator_name, size, height,
-        )
-        body_assy = cq.Assembly(name="Body")
-        body_assy.add(text_shape, color=self.BLACK_COLOR)
-        designator_assy.add(body_assy, name="Body")
-
-        bbox = cq.Workplane("XY").center(0, text_y).rect(
-            size * 2.0, size * 1.5
-        ).extrude(0.001)
-        bbox_assy = cq.Assembly(name="BoundingBox")
-        bbox_assy.add(bbox, color=cq.Color(1, 1, 1, 0))
-        designator_assy.add(bbox_assy, name="BoundingBox")
-
-        return designator_assy
+        g = self.params.body_geometry
+        return self._label_group("DesignatorName", g.designator_name,
+                                 g.designator_size, g.designator_height, above=True)
 
     def build_package_value(self) -> cq.Assembly:
         """
-        Build package value label (component name).
+        Build package value label (component name), below the body at the left.
 
         Hierarchy:
         PackageValue
         ├── Body [mesh]
         └── BoundingBox [mesh]
-
-        Returns:
-            Assembly with component name text above body
         """
-        size = self.params.body_geometry.value_size
-        height = self.params.body_geometry.value_height
-        offset = self.params.body_geometry.value_offset
-        name = self.component_name[:30]
-        # Value/name is centered BELOW the body's bottom edge (designator sits
-        # above the top edge). Body spans -body_height/2 .. +body_height/2.
-        text_y = -(self.params.body_height / 2 + offset)
-
-        value_assy = cq.Assembly(name="PackageValue")
-
-        text_shape = cq.Workplane("XY").center(0, text_y).text(name, size, height)
-        body_assy = cq.Assembly(name="Body")
-        body_assy.add(text_shape, color=self.BLACK_COLOR)
-        value_assy.add(body_assy, name="Body")
-
-        bbox_w = max(len(name) * size * 0.6, size * 2)
-        bbox = cq.Workplane("XY").center(0, text_y).rect(bbox_w, size * 1.5).extrude(0.001)
-        bbox_assy = cq.Assembly(name="BoundingBox")
-        bbox_assy.add(bbox, color=cq.Color(1, 1, 1, 0))
-        value_assy.add(bbox_assy, name="BoundingBox")
-
-        return value_assy
+        g = self.params.body_geometry
+        return self._label_group("PackageValue", self.component_name[:30],
+                                 g.value_size, g.value_height, above=False)
 
     def build_schematic(self, pin_data: List[Dict[str, Any]]) -> cq.Assembly:
         """
