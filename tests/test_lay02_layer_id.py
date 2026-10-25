@@ -38,11 +38,29 @@ def test_lay02_copper_and_silk_nodes_carry_expected_layers():
         lid = (node.extras or {}).get("layerId")
         by_layer.setdefault(node.name, set()).add(lid)
     assert by_layer["CopperCirclePad"] == {"F.Cu"}
-    assert by_layer["SolderMask"] == {"F.Mask"}
+    assert by_layer["SolderMask"] == {"*.Mask"}       # multi-layer THT mask opening
     assert by_layer["HoleCylinderPin"] == {"drill"}
     assert by_layer["CopperCylinderPin"] == {"*.Cu"}
+    assert by_layer["CopperCirclePin"] == {"B.Cu"}    # bottom land (QC PGA FP-07)
     # BoundingBox (UI helper) is intentionally exempt
     assert by_layer.get("BoundingBox") == {None}
+
+
+def test_lay02_smd_mask_stays_top_side():
+    g = GLTF2().load_binary(_build_footprint())
+    masks = {(n.extras or {}).get("layerId") for n in g.nodes if n.name == "SolderMask"}
+    assert masks == {"F.Mask"}
+    assert not any(n.name == "CopperCirclePin" for n in g.nodes)
+
+
+def test_lay02_label_nodes_carry_their_layer():
+    # QC FP-08 (all 5 parts): the platform swaps the designator glyph mesh and
+    # loses the child's layerId, so the DesignatorName node itself must own it.
+    for pkg, n in (("SOIC-8", 8), ("DIP-8", 8)):
+        g = GLTF2().load_binary(_build_footprint(pkg, n))
+        by_name = {nd.name: (nd.extras or {}).get("layerId") for nd in g.nodes
+                   if nd.name in ("DesignatorName", "PackageValue")}
+        assert by_name == {"DesignatorName": "F.SilkS", "PackageValue": "F.Fab"}
 
 
 def test_lay02_skips_without_footprint():

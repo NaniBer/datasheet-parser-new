@@ -281,15 +281,20 @@ def _build_pin_extras(
 # LAY-02: KiCad-style layer for every drawn footprint object, derived
 # deterministically from the node name (+ its parent layer / pin). Copper spans
 # layers on through-hole barrels ("*.Cu"); SMD pads are top copper ("F.Cu").
-def _footprint_layer_id(name: str, par_name: str) -> Optional[str]:
+# A through-hole pad's bottom land (CopperCirclePin, drawn at the board's
+# underside) is bottom copper, and its single mask opening is multi-layer
+# ("*.Mask"), so the side a DIP is soldered on reaches the B.Cu/B.Mask layers.
+def _footprint_layer_id(name: str, par_name: str, through_hole: bool = False) -> Optional[str]:
     if name == "CopperCirclePad":
         return "F.Cu"
-    if name in ("CopperCirclePin", "CopperCylinderPin"):
+    if name == "CopperCylinderPin":
         return "*.Cu"                              # through-hole barrel: all copper
+    if name == "CopperCirclePin":
+        return "B.Cu"                              # through-hole bottom land
     if name == "PasteMask":
         return "F.Paste"                           # solder-paste stencil aperture (SMD only)
     if name == "SolderMask":
-        return "F.Mask"
+        return "*.Mask" if through_hole else "F.Mask"
     if name == "HoleCylinderPin":
         return "drill"
     if name == "silk_firstPinMarker":
@@ -301,9 +306,9 @@ def _footprint_layer_id(name: str, par_name: str) -> Optional[str]:
     if name == "BodyLine":
         return {"fab_layer": "F.Fab", "silk_layer": "F.SilkS",
                 "crtyd_layer": "F.CrtYd"}.get(par_name)
-    if name == "Body" and par_name == "DesignatorName":
+    if name == "DesignatorName" or (name == "Body" and par_name == "DesignatorName"):
         return "F.SilkS"                           # reference designator on silk
-    if name == "Body" and par_name == "PackageValue":
+    if name == "PackageValue" or (name == "Body" and par_name == "PackageValue"):
         return "F.Fab"
     return None
 
@@ -668,9 +673,16 @@ def inject_pcb_footprint_extras(
         # BoundingBox is a transparent selection helper, not a fab object, so it
         # is intentionally left without one.
         if extras is not None and node.mesh is not None and name != "BoundingBox":
-            lid = _footprint_layer_id(name, par_name)
+            siblings = nodes[parent_map[i]].children or [] if i in parent_map else []
+            through_hole = any((nodes[c].name or "") == "HoleCylinderPin" for c in siblings)
+            lid = _footprint_layer_id(name, par_name, through_hole)
             if lid:
                 extras["layerId"] = lid
+        # FP-08: the text labels also carry their layer on the label node itself.
+        # The platform re-renders the designator glyph ("REF**" -> "U1") and drops
+        # the mesh child's tags, but it keeps the DesignatorName node's extras.
+        elif extras is not None and name in ("DesignatorName", "PackageValue"):
+            extras["layerId"] = _footprint_layer_id(name, par_name)
 
         if extras is not None:
             node.extras = extras
