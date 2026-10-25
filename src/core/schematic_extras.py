@@ -29,17 +29,30 @@ _LABEL_TEXT_SIZE = 1.27
 def _mesh_bounds(
     gltf: "GLTF2", node_index: int
 ) -> Optional[Tuple[List[float], List[float]]]:
-    """(min, max) POSITION bounds of the node's own mesh, or None."""
+    """(min, max) POSITION bounds of the node's own mesh, or None.
+
+    Spans every primitive: CadQuery exports one primitive per face, and the
+    first is often a flat end cap (a vertical leg read 0.15 mm long that way).
+    """
     node = gltf.nodes[node_index]
     if node.mesh is None:
         return None
-    primitives = gltf.meshes[node.mesh].primitives
-    if not primitives or primitives[0].attributes.POSITION is None:
+    lo: Optional[List[float]] = None
+    hi: Optional[List[float]] = None
+    for prim in gltf.meshes[node.mesh].primitives or []:
+        if prim.attributes.POSITION is None:
+            continue
+        accessor = gltf.accessors[prim.attributes.POSITION]
+        if accessor.min is None or accessor.max is None:
+            continue
+        if lo is None:
+            lo, hi = list(accessor.min), list(accessor.max)
+        else:
+            lo = [min(a, b) for a, b in zip(lo, accessor.min)]
+            hi = [max(a, b) for a, b in zip(hi, accessor.max)]
+    if lo is None or hi is None:
         return None
-    accessor = gltf.accessors[primitives[0].attributes.POSITION]
-    if accessor.min is None or accessor.max is None:
-        return None
-    return list(accessor.min), list(accessor.max)
+    return lo, hi
 
 
 def _subtree_bounds(
@@ -202,7 +215,16 @@ def _annotate_pin_group(
     if anchor_bounds:
         lo, hi = anchor_bounds
         center = [(a + b) / 2.0 for a, b in zip(lo, hi)]
-        side = _pin_side(center, body_center)
+        # The side is the way the leg points: from the leg's middle out to the
+        # connection dot. Robust for any body shape (a tall, narrow body put the
+        # extreme left/right pins further from the centre vertically than
+        # horizontally, and the centre-offset guess called them top/bottom).
+        leg_bounds = _subtree_bounds(gltf, leg_index) if leg_index is not None else None
+        if leg_bounds and pin_point_index is not None:
+            leg_center = [(a + b) / 2.0 for a, b in zip(*leg_bounds)]
+            side = _pin_side(center, leg_center)
+        else:
+            side = _pin_side(center, body_center)
 
     if leg_index is not None:
         leg_bounds = _subtree_bounds(gltf, leg_index)

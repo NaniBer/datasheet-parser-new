@@ -77,7 +77,48 @@ class PinLayout:
             # Default to a dual-row package (DIP/SOIC/DFN/WSON/SON/TSSOP)
             positions = self._layout_dual_row_pins()
 
+        # Bodies sized by size_symbol_body draw every name the same inset inside
+        # its edge, on all four sides; the per-package extra_*_name_offset tweaks
+        # are for the legacy layout (QC AD9106 SCH-10: 2.65 mm left vs 0.6 mm
+        # right, and the body was sized assuming the inset).
+        if getattr(self.params, "body_center", None) is not None:
+            inset = -self.params.pin_geometry.pin_name_offset
+            for p in positions:
+                if p.side == "left":
+                    p.text_x, p.text_halign = p.x + inset, "left"
+                elif p.side == "right":
+                    p.text_x, p.text_halign = p.x - inset, "right"
+                elif p.side == "top":
+                    p.text_y = p.y - inset
+                elif p.side == "bottom":
+                    p.text_y = p.y + inset
+
+        # The body may sit half a grid step off the origin (odd grid-step size,
+        # see size_symbol_body) so every pin end stays on the 2.54 mm lattice.
+        cx, cy = getattr(self.params, "body_center", None) or (0.0, 0.0)
+        if cx or cy:
+            for p in positions:
+                p.x += cx; p.text_x += cx; p.num_x += cx
+                p.y += cy; p.text_y += cy; p.num_y += cy
         return positions
+
+    def _centre_steps(self, n: int, side_length: float, from_far_end: bool = False) -> int:
+        """Grid steps to indent a run of ``n`` pins so it sits centred on a side.
+
+        Only for bodies sized by size_symbol_body (``body_center`` set), whose
+        dimensions are whole grid steps; legacy package defaults keep the run
+        anchored at ``top_margin`` as before. Returned relative to
+        ``top_margin`` (callers add it), so it may be negative when a side's
+        corner clearance differs from ``top_margin``. An odd spare step always
+        goes to the bottom/right end, so a run laid out from that end
+        (``from_far_end``) rounds up and opposite sides stay level.
+        """
+        if getattr(self.params, "body_center", None) is None or n <= 0:
+            return 0
+        g = self.params.pin_pitch
+        spare = round(side_length / g) - (n - 1)        # free steps on this side
+        lead = (spare + 1) // 2 if from_far_end else spare // 2
+        return lead - round(self.params.body_geometry.top_margin / g)
 
     def _layout_dual_row_pins(self) -> List[PinPosition]:
         """
@@ -186,8 +227,9 @@ class PinLayout:
         top_margin = self.params.body_geometry.top_margin
 
         # LEFT SIDE: pins 0 to pins_per_side-1 (top to bottom)
+        k = self._centre_steps(left_count, self.params.body_height)
         for i in range(left_count):
-            y = (self.params.body_height / 2) - top_margin - (i * self.params.pin_pitch)
+            y = (self.params.body_height / 2) - top_margin - ((k + i) * self.params.pin_pitch)
             x = -self.params.body_width / 2
 
             text_x = x + self.params.pin_geometry.pin_name_offset + self.params.pin_geometry.extra_left_name_offset
@@ -209,8 +251,9 @@ class PinLayout:
             ))
 
         # BOTTOM SIDE: pins left_count to left_count+bottom_count-1 (left to right)
+        k = self._centre_steps(bottom_count, self.params.body_width)
         for i in range(bottom_count):
-            x = -(self.params.body_width / 2) + top_margin + (i * self.params.pin_pitch)
+            x = -(self.params.body_width / 2) + top_margin + ((k + i) * self.params.pin_pitch)
             y = -self.params.body_height / 2
             pin_idx = left_count + i
 
@@ -235,8 +278,9 @@ class PinLayout:
             ))
 
         # RIGHT SIDE: pins left_count+bottom_count to left_count+bottom_count+right_count-1 (bottom to top)
+        k = self._centre_steps(right_count, self.params.body_height, from_far_end=True)
         for i in range(right_count):
-            y = -(self.params.body_height / 2) + top_margin + (i * self.params.pin_pitch)
+            y = -(self.params.body_height / 2) + top_margin + ((k + i) * self.params.pin_pitch)
             x = self.params.body_width / 2
             pin_idx = left_count + bottom_count + i
 
@@ -259,8 +303,9 @@ class PinLayout:
             ))
 
         # TOP SIDE: pins left_count+bottom_count+right_count to total-1 (right to left)
+        k = self._centre_steps(top_count, self.params.body_width, from_far_end=True)
         for i in range(top_count):
-            x = (self.params.body_width / 2) - top_margin - (i * self.params.pin_pitch)
+            x = (self.params.body_width / 2) - top_margin - ((k + i) * self.params.pin_pitch)
             y = self.params.body_height / 2
             pin_idx = left_count + bottom_count + right_count + i
 
@@ -486,11 +531,12 @@ class PinLayout:
                     pin_index += 1
 
             elif side == "bottom":
-                # Bottom side: left to right
+                # Bottom side: left to right, centred along the body
+                k = self._centre_steps(len(pin_numbers), body_width)
                 for i, pin_num in enumerate(pin_numbers):
                     if pin_num is None:
                         continue  # blank slot: consume a grid step, draw no pin
-                    x = -(body_width / 2) + top_margin + (i * pin_pitch)
+                    x = -(body_width / 2) + top_margin + ((k + i) * pin_pitch)
                     y = -body_height / 2
 
                     positions.append(PinPosition(
@@ -510,11 +556,12 @@ class PinLayout:
                     pin_index += 1
 
             elif side == "top":
-                # Top side: left to right
+                # Top side: left to right, centred along the body
+                k = self._centre_steps(len(pin_numbers), body_width)
                 for i, pin_num in enumerate(pin_numbers):
                     if pin_num is None:
                         continue  # blank slot: consume a grid step, draw no pin
-                    x = -(body_width / 2) + top_margin + (i * pin_pitch)
+                    x = -(body_width / 2) + top_margin + ((k + i) * pin_pitch)
                     y = body_height / 2
 
                     positions.append(PinPosition(

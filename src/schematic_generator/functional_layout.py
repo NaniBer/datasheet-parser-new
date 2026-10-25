@@ -15,11 +15,12 @@ and the Sub-step 4 decision doc for the design rationale (Decisions A2 and B).
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Dict, List, Optional
 
 from ..models import normalize_role, role_side
-from ..package_types.package_geometry import SCHEMATIC_GRID_MM, _snap_up_even
+from ..package_types.package_geometry import SCHEMATIC_GRID_MM
 
 # Canonical within-side role-block order (Decision A2). Pins are emitted in this
 # block order, one blank grid slot between consecutive non-empty blocks, and
@@ -37,6 +38,7 @@ _NAME_CHAR_W = 0.6                     # ~char width per font unit (matches labe
 _CENTRE_GAP_SLOTS = 2                  # grid cols kept clear between inside-drawn L/R names
 _INSIDE_NAME_INSET = 0.6               # mm the name text is inset INSIDE the body edge (QC H3)
 _END_MARGIN = SCHEMATIC_GRID_MM        # clearance beyond the extreme pin, each end (QC S2 height trim)
+_CORNER_GAP = 0.3                      # mm kept between names meeting at a quad corner
 
 
 def _num(pin: Dict[str, Any]) -> str:
@@ -140,7 +142,15 @@ def _centre_pair(layout: Dict[str, List[Optional[str]]], a: str, b: str) -> None
             layout[side] = [None] * pad + layout[side]
 
 
-def size_symbol_body(params, side_names: Dict[str, List[str]]) -> None:
+def _grid_steps(length: float, grid: float, parity: Optional[int] = None) -> int:
+    """Whole grid steps covering ``length``; bumped by one to match ``parity``."""
+    steps = max(1, math.ceil(length / grid - 1e-6))
+    if parity is not None and (steps - parity) % 2:
+        steps += 1
+    return steps
+
+
+def size_symbol_body(params, side_names: Dict[str, List[str]], extra_left_slots: int = 0) -> None:
     """Universal schematic-body sizing for BOTH the functional and physical paths.
 
     ``side_names`` maps ``side -> [name-or-"" per slot]`` (blanks = "" keep the
@@ -149,15 +159,19 @@ def size_symbol_body(params, side_names: Dict[str, List[str]]) -> None:
     * forces pin NAMES inside the body (negative offset) so they never sit on the
       leg (QC H3);
     * sizes ``body_width`` to fit the longest left + right names drawn inside,
-      plus a centre gap and the two insets — floored by ``column_floor`` (so a
-      tall column can't be geometrically misread as top/bottom), any top/bottom
-      pin span, and a minimum body;
-    * sizes ``body_height`` to the tallest vertical column with one grid step of
-      clearance at each end, trimming the old tall-and-narrow "tower" (QC S2);
+      plus a centre gap and the two insets — floored by any top/bottom pin span
+      and a minimum body;
+    * sizes ``body_height`` to the tallest vertical column with exactly one grid
+      step of clearance at each end (QC S2 / SCH-06: the old even-multiple snap
+      left an extra empty grid step at the bottom);
     * keeps ``top_margin`` equal to that end clearance so pins stay centred.
 
-    Both dims are snapped to an even grid multiple so the symmetric-about-origin
-    geometry stays on the grid. Mutates ``params`` + ``pin_geometry`` in place.
+    Both dims are whole grid steps whose parity lets the pin rows sit centred
+    with every pin end on the 2.54 mm lattice (SYM-02). An odd step count can't
+    be centred on the origin, so ``params.body_center`` records the half-step
+    offset that the layout and the drawing apply. ``extra_left_slots`` reserves
+    room below the left column (the EPAD pin drawn after the real pins).
+    Mutates ``params`` + ``pin_geometry`` in place.
     """
     grid = params.pin_pitch                         # 2.54 after grid normalization
     size = params.pin_geometry.pin_name_size
@@ -171,25 +185,44 @@ def size_symbol_body(params, side_names: Dict[str, List[str]]) -> None:
         names = [s for s in slots(side) if s]
         return max((len(s) for s in names), default=0) * size * _NAME_CHAR_W
 
-    # Height: tallest vertical column (slots incl. blanks) + one grid step each end.
-    v = max(len(slots("left")), len(slots("right")), 1)
-    end_margin = _END_MARGIN
-    params.body_geometry.top_margin = end_margin
-    params.body_height = _snap_up_even((v - 1) * grid + 2 * end_margin)
+    v = max(len(slots("left")) + extra_left_slots, len(slots("right")), 1)
+    h = max(len(slots("top")), len(slots("bottom")))
+    has_columns = bool(slots("left") or slots("right") or extra_left_slots)
+
+    # End clearance: one grid step, unless a quad's corner must also fit the
+    # other sides' names drawn inside the body (top/bottom names run down from
+    # the edge, left/right names run in from the side), as KiCad QFP symbols do.
+    def corner(name_extent: float) -> float:
+        need = inset + name_extent + size / 2 + _CORNER_GAP
+        return max(_END_MARGIN, _grid_steps(need, grid) * grid)
+
+    end_v = corner(max(name_w("top"), name_w("bottom"))) if h > 0 and has_columns else _END_MARGIN
+    end_h = corner(max(name_w("left"), name_w("right"))) if h > 0 and has_columns else _END_MARGIN
+    params.body_geometry.top_margin = end_v
+
+    # Height: tallest vertical column (slots incl. blanks) + the end clearance,
+    # and room for facing top/bottom names to clear each other.
+    names_tb = name_w("top") + name_w("bottom") + 2 * inset + grid if h > 0 else 0.0
+    rows = _grid_steps(max((v - 1) * grid + 2 * end_v, names_tb), grid, parity=v - 1)
+    params.body_height = rows * grid
 
     # Width: fit inside-drawn L/R names (+ centre gap + insets), never narrower
-    # than the tall column (column_floor), the top/bottom pin span, or the floor.
-    h = max(len(slots("top")), len(slots("bottom")))
-    top_span = (h - 1) * grid + 2 * end_margin if h > 0 else 0.0
-    column_floor = (v - 1) * grid
+    # than the top/bottom pin span or the floor. (No longer floored at the
+    # column height: that made tall symbols square — AD9106 61 x 66 mm, ADV7180
+    # 86 x 91 mm, QC B4 — and only served a side guess now read off the leg.)
+    top_span = (h - 1) * grid + 2 * end_h if h > 0 else 0.0
     text_w = name_w("left") + name_w("right") + _CENTRE_GAP_SLOTS * grid + 2 * inset
-    params.body_width = _snap_up_even(max(top_span, text_w, _MIN_BODY_MM, column_floor))
+    cols = _grid_steps(max(top_span, text_w, _MIN_BODY_MM), grid,
+                       parity=(h - 1) if h > 0 else None)
+    params.body_width = cols * grid
+    params.body_center = ((cols % 2) * grid / 2, (rows % 2) * grid / 2)
 
 
 def size_functional_body(
     layout: Dict[str, List[Optional[str]]],
     pins: List[Dict[str, Any]],
     params,
+    extra_left_slots: int = 0,
 ) -> None:
     """Resize ``params`` from the grouped functional layout (Decision B).
 
@@ -201,10 +234,11 @@ def size_functional_body(
         side: [name_by_num.get(n, "") if n else "" for n in slots]
         for side, slots in layout.items()
     }
-    size_symbol_body(params, side_names)
+    size_symbol_body(params, side_names, extra_left_slots)
 
 
-def apply_functional_layout(pins: List[Dict[str, Any]], params) -> Dict[str, List[Optional[str]]]:
+def apply_functional_layout(pins: List[Dict[str, Any]], params,
+                            extra_left_slots: int = 0) -> Dict[str, List[Optional[str]]]:
     """Compute the functional layout and resize ``params`` to fit it.
 
     Sizing (via :func:`size_symbol_body`) forces pin NAMES inside the body
@@ -212,5 +246,5 @@ def apply_functional_layout(pins: List[Dict[str, Any]], params) -> Dict[str, Lis
     would push names onto the leg. Numbers stay on the leg (unchanged).
     """
     layout = functional_side_layout(pins)
-    size_functional_body(layout, pins, params)
+    size_functional_body(layout, pins, params, extra_left_slots)
     return layout
