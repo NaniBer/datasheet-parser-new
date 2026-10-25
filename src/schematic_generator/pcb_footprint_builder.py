@@ -274,7 +274,13 @@ class PcbFootprintBuilder:
         # the corners. Shorten those corner pads' inner (heel) end so the
         # copper-to-copper clearance meets CORNER_CLEARANCE.
         self._pad_length_override: Dict[str, float] = {}
+        self._row_gap_trimmed: set = set()
         self._relieve_corner_pads()
+
+        # On a narrow body the land length can reach past the centre, so the
+        # two opposite rows overlap and short (74LVC1G99 SOT833-1: 0.8 mm pads
+        # on a 1.0 mm body). Retract the heels to keep a copper + mask gap.
+        self._enforce_opposite_row_gap()
 
         logger.info(
             "Initialized 2D PCB schematic builder for %s (%d pins)" % (package_type, pin_count)
@@ -449,6 +455,42 @@ class PcbFootprintBuilder:
                 new_len = max(width, y1 - y0)
                 self._pad_length_override[p.pin_number] = new_len
                 p.y = (y0 + y1) / 2.0
+
+    def _enforce_opposite_row_gap(self) -> None:
+        """Keep opposite pad rows (left/right, top/bottom) apart across the centre.
+
+        The land is L + toe/heel centred on the terminal, which on a narrow
+        body pushes the heel past the centreline: left and right pads then
+        overlap and every opposite pair shorts. Retract each offending pad's
+        inner (heel) end -- toe fixed, as in the corner relief -- so the rows
+        keep a gap wide enough for the copper clearance AND a solder-mask dam
+        between the full-margin mask openings. Pads already clear are untouched.
+        """
+        spec = self.pad_spec
+        if spec.get("shape") != "rect":
+            return
+        gap = max(self.PAD_MIN_GAP, 2 * self.MASK_MARGIN + self.MASK_MIN_DAM)
+        for sides, axis in ((("left", "right"), "x"), (("top", "bottom"), "y")):
+            rows = [p for p in self.pin_positions if p.side in sides]
+            if not any(p.side == sides[0] for p in rows) or not any(
+                    p.side == sides[1] for p in rows):
+                continue
+            for p in rows:
+                length = self._pad_length_override.get(p.pin_number, spec["length"])
+                centre = getattr(p, axis)
+                if abs(centre) - length / 2.0 >= gap / 2.0:
+                    continue
+                outer = abs(centre) + length / 2.0
+                new_len = outer - gap / 2.0
+                if new_len <= 0:
+                    logger.warning(
+                        "Pad %s: no room for an opposite-row gap; left as is",
+                        p.pin_number)
+                    continue
+                self._pad_length_override[p.pin_number] = new_len
+                self._row_gap_trimmed.add(p.pin_number)
+                sign = 1.0 if centre >= 0 else -1.0
+                setattr(p, axis, sign * (gap / 2.0 + new_len / 2.0))
 
     def _pad_bbox(self, p) -> tuple:
         """(x0, x1, y0, y1) copper extent of one pad, honouring corner relief."""
@@ -633,10 +675,13 @@ class PcbFootprintBuilder:
         max_x = max_y = 0.0
         for pos in self.pin_positions:
             if spec["shape"] == "rect":
+                length = (self._pad_length_override[pos.pin_number]
+                          if pos.pin_number in self._row_gap_trimmed
+                          else spec["length"])
                 if pos.side in ("top", "bottom"):
-                    xd, yd = spec["width"], spec["length"]
+                    xd, yd = spec["width"], length
                 else:
-                    xd, yd = spec["length"], spec["width"]
+                    xd, yd = length, spec["width"]
             else:
                 xd = yd = spec["diameter"]
             max_x = max(max_x, abs(pos.x) + xd / 2)
@@ -655,10 +700,13 @@ class PcbFootprintBuilder:
         inner_x = inner_y = float("inf")
         for pos in self.pin_positions:
             if spec["shape"] == "rect":
+                length = (self._pad_length_override[pos.pin_number]
+                          if pos.pin_number in self._row_gap_trimmed
+                          else spec["length"])
                 if pos.side in ("top", "bottom"):
-                    xd, yd = spec["width"], spec["length"]
+                    xd, yd = spec["width"], length
                 else:
-                    xd, yd = spec["length"], spec["width"]
+                    xd, yd = length, spec["width"]
             elif self.is_through_hole() and spec.get("drill"):
                 # Through-hole (DIP): the molded body legitimately overlaps the
                 # copper annular ring between the two pin rows; it must only clear

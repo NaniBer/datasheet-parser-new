@@ -123,3 +123,53 @@ def test_symbol_and_footprint_agree_on_exposed_pad(pkg, n):
 
     assert (PinoutDiagramBuilder(pkg, n, "IC")._has_exposed_pad
             == PcbFootprintBuilder(pkg, n, "IC")._has_exposed_pad)
+
+
+# --------------------------------------------------------------------------- #
+# Defect 3 — opposite pad rows overlapping on a narrow leadless body (D3)
+# --------------------------------------------------------------------------- #
+
+def _min_opposite_gap(b):
+    """Smallest copper gap between the left and right pad columns."""
+    left = [b._pad_bbox(p) for p in b.pin_positions if p.side == "left"]
+    right = [b._pad_bbox(p) for p in b.pin_positions if p.side == "right"]
+    return min(r[0] for r in right) - max(l[1] for l in left)
+
+
+@pytest.mark.parametrize("pkg", ["XSON8", "SOT833-1"])
+def test_sot833_opposite_rows_do_not_short(pkg):
+    # 0.8 mm leadless lands on the 1.0 mm SOT833-1 body overlapped 0.2 mm
+    # across the centre, shorting 1-8, 2-7, 3-6, 4-5.
+    from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+
+    b = PcbFootprintBuilder(pkg, 8, "74LVC1G99GT")
+    gap = _min_opposite_gap(b)
+    # Copper gap leaves room for both full-margin mask openings plus a dam.
+    assert gap >= 2 * b.MASK_MARGIN + b.MASK_MIN_DAM - 1e-9, f"gap {gap:.3f}"
+    # Every terminal (body edge at E/2, inner end at E/2 - L_max) still lands
+    # fully on its pad.
+    for p in b.pin_positions:
+        x0, x1, _, _ = b._pad_bbox(p)
+        lo, hi = sorted((abs(x0), abs(x1)))
+        assert lo <= 0.5 - 0.35 + 1e-9 and hi >= 0.5, (p.pin_number, x0, x1)
+    assert b.params.pin_pitch == pytest.approx(0.5)
+
+
+def test_row_gap_guard_is_generic_not_sot833_keyed():
+    # Any narrow two-row leadless body gets the guard, from extracted dims.
+    from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+
+    dims = {"e": 0.5, "E": 1.0, "E1": 1.0, "D": 1.95, "D1": 1.95,
+            "b": 0.2, "L": 0.4}
+    b = PcbFootprintBuilder("SON-8", 8, "X", extracted_dims=dims)
+    assert _min_opposite_gap(b) >= 2 * b.MASK_MARGIN + b.MASK_MIN_DAM - 1e-9
+
+
+@pytest.mark.parametrize("pkg,n", [("SON-8", 8), ("DFN-8", 8), ("WSON-8", 8),
+                                   ("QFN-32", 32), ("LFCSP-32", 32),
+                                   ("SOIC-8", 8), ("TQFP-48", 48)])
+def test_row_gap_guard_leaves_normal_packages_alone(pkg, n):
+    from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+
+    b = PcbFootprintBuilder(pkg, n, "X")
+    assert b._row_gap_trimmed == set()

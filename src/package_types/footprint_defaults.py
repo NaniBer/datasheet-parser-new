@@ -70,8 +70,9 @@ _GEOMETRY_CANONICAL = {"LFCSP": "QFN", "XSON": "SON", "SOT833": "SON"}
 # small leadless SON (body 1.0 x 1.95 mm, 0.5 mm pitch, 2 rows of 4), so it must
 # NOT inherit the generic SON-8 grid (~3.0 x 3.35 mm, 0.65 mm pitch) which
 # oversizes the body and courtyard ~3x. Values are the published SOT833-1
-# outline; b/L reuse the 0.5 mm-pitch leadless lead dims shared with QFN/HVSSOP
-# (not invented). Leadless => body edge is the terminal span (E = E1, D = D1).
+# outline (NXP/Nexperia package drawing: b 0.17-0.25, L 0.27-0.35), with the
+# maxima as b_max/L_max so the land covers the largest terminal (IPC-7351).
+# Leadless => body edge is the terminal span (E = E1, D = D1).
 # There is no exposed thermal pad on this logic package, so D2/E2 are omitted
 # (a real EP would only ever come from the datasheet via extracted_dims).
 _SOT833_1_XSON8 = {
@@ -80,8 +81,10 @@ _SOT833_1_XSON8 = {
     "E1": 1.0,
     "D": 1.95,
     "D1": 1.95,
-    "b": 0.25,
-    "L": 0.4,
+    "b": 0.21,
+    "b_max": 0.25,
+    "L": 0.31,
+    "L_max": 0.35,
 }
 
 
