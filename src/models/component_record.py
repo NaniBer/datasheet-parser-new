@@ -113,6 +113,16 @@ def normalize_role(value) -> Optional[str]:
     return v if v in PIN_ROLES else None
 
 
+# A pin whose name gives no role still has a side once its direction is known
+# (datasheet I/O column / description, or the LLM's type): outputs right,
+# inputs and bidirectional pins left (SnapEDA, QC B1). Power types stay
+# unassigned here — supply vs ground needs the name or the datasheet's role.
+_ROLE_FROM_TYPE = {
+    "output": "output", "tri_state": "output", "open_collector": "output",
+    "open_emitter": "output", "input": "input", "bidirectional": "io",
+}
+
+
 def role_side(role: Optional[str]) -> str:
     """Symbol side a role places on (SYM-04); defaults left for unknown roles."""
     return ROLE_SIDE.get(role or "other", "left")
@@ -504,7 +514,7 @@ class ComponentRecord:
                 # resolve to None -> stay unspecified/other (no guessing).
                 c_type, c_role, c_active = classify_pin_name(name)
                 etype = etype or c_type
-                role = role or c_role
+                role = role or c_role or _ROLE_FROM_TYPE.get(etype)
                 active_low = active_low or c_active
                 # fill-only: a no-connect name/role sets the nc flag (never unsets).
                 nc = bool(g("nc")) or c_role == "nc" or c_type == "no_connect"

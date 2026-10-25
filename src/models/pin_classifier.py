@@ -101,7 +101,8 @@ def classify_pin_name(name: str) -> Tuple[Optional[str], Optional[str], bool]:
     ):
         return "power_in", "supply", active_low
     # Grounds / negative rails: GND families with channel suffix (AGNDR/AGNDL),
-    # VSS families, and negative rails V-/VA-/VD-.
+    # VSS families, and negative rails V-/VA-/VD- (a datasheet that calls one a
+    # supply overrides this via pin_direction).
     if (
         _family(c, _GROUND)
         or re.match(r"^[ADP]?GND[A-Z0-9]*$", c)
@@ -113,6 +114,12 @@ def classify_pin_name(name: str) -> Tuple[Optional[str], Optional[str], bool]:
     # Regulator / LDO outputs the part sources (CLDO, DLDO1, AVDD_LDO): power_out.
     if re.match(r"^[A-Z]{0,4}LDO\d*$", c):
         return "power_out", "supply", active_low
+    # A domain-prefixed rail or ground (CLKVDD, PVDD, CLKGND): the rail decides,
+    # before the CLK/clock rule below would claim it.
+    if re.search(r"V(DD|CC)", c):
+        return "power_in", "supply", active_low
+    if "GND" in c:
+        return "power_in", "ground", active_low
     # Adjust/set and sense pins (FSADJ, VADJ, CAL_SENSE, ISENSE): high-impedance
     # analog terminals, not driven signals -> passive/analog.
     if "ADJ" in c or "SENSE" in c:
@@ -133,6 +140,14 @@ def classify_pin_name(name: str) -> Tuple[Optional[str], Optional[str], bool]:
         return "output", "data", active_low
     if re.match(r"^(OUT|DOUT|DO)(\d|[_/].*)?$", c):
         return "output", "output", active_low
+    # Signal outputs/inputs named as such: VOUTL, IOUTP1, AOUT, SDO / VINR,
+    # AIN1, SDI. A bare VIN / IN is a regulator's supply input and IN1+ an
+    # op-amp input left to the datasheet, so only V/A-prefixed inputs with a
+    # suffix (channel, index, polarity) are read here.
+    if re.match(r"^[A-Z]{0,2}OUT[A-Z0-9+\-]*$", c) or c in ("SDO", "MISO"):
+        return "output", "output", active_low
+    if re.match(r"^[AV]IN[A-Z0-9+\-]+$", c) or c in ("AIN", "SDI", "MOSI"):
+        return "input", "input", active_low
     if re.match(r"^(DIN|SER|DATA)(\d|[_/].*)?$", c):
         return "input", "data", active_low
     # SD/MMC/SDIO data lines (DAT0..DAT3, CD/DAT3) and command line drive both

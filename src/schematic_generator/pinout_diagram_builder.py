@@ -144,11 +144,15 @@ class PinoutDiagramBuilder:
         # (concrete power+ground, >=50% concrete roles), lay them out by function
         # and resize the body to fit. Below the gate, layout_arg stays the
         # original custom_layout (usually None) => byte-identical physical layout.
-        # Leadless parts get an EPAD pin below the left column (added after the
-        # layout); reserve its slot so it doesn't land on the body's corner.
+        # Leadless parts get an EPAD pin: with the grounds on a functional
+        # symbol, else below the left column (added after the layout, with its
+        # slot reserved so it doesn't land on the body's corner).
         from ..package_types.footprint_defaults import has_thermal_pad_outline
         self._has_exposed_pad = has_thermal_pad_outline(package_type)
         epad_slots = 1 if self._has_exposed_pad else 0
+
+        self._exposed_pad_number = str(pin_count + 1) if self._has_exposed_pad else None
+        self._epad_in_layout = False
 
         layout_arg: Optional[Dict[str, List]] = custom_layout
         _functional = False
@@ -156,7 +160,11 @@ class PinoutDiagramBuilder:
             from ..models import functional_layout_applicable
             if functional_layout_applicable([p.get("role") for p in pin_data]):
                 from .functional_layout import apply_functional_layout
-                layout_arg = apply_functional_layout(pin_data, self.params, epad_slots)
+                # SnapEDA puts the exposed (thermal/ground) pad with the grounds
+                # at the lower right: lay it out as a thermal-role pin there.
+                layout_pins_in = self._augment_pin_data(pin_data)
+                self._epad_in_layout = self._has_exposed_pad
+                layout_arg = apply_functional_layout(layout_pins_in, self.params)
                 _functional = True
                 logger.info(
                     "SYM-04 functional layout: %s",
@@ -189,8 +197,7 @@ class PinoutDiagramBuilder:
         # netlist can connect it. Appended as one extra pin below the left
         # column, leaving the real pins' positions untouched.
         # Same outline rule as the footprint: XSON/SOT833 get no EPAD pin.
-        self._exposed_pad_number = str(pin_count + 1) if self._has_exposed_pad else None
-        if self._has_exposed_pad:
+        if self._has_exposed_pad and not self._epad_in_layout:
             epad_pos = self._exposed_pad_position()
             if epad_pos is not None:
                 self.pin_positions.append(epad_pos)

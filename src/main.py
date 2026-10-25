@@ -699,6 +699,28 @@ def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=F
 
 
 
+def _apply_pin_directions(pin_data, content, verbose=False):
+    """Fill each pin's direction from the datasheet's pin table (QC B1).
+
+    The symbol puts pins on a side by role, and most names alone give none
+    (VOUTL, IOUTP1, SDO, VINR, ...), so they all fell to the left. The pin table
+    states the direction in an I/O / TYPE column or the description; this reads
+    it (pdf_extractor.pin_direction). Fill-only, no LLM; any failure is ignored.
+    """
+    try:
+        from .pdf_extractor.pin_direction import apply_pin_directions
+        filled = apply_pin_directions(
+            getattr(pin_data, "pins", None) or [],
+            getattr(content, "text_content", "") or "",
+            getattr(content, "tables", None),
+        )
+        if verbose and filled:
+            print(f"  Pin directions: {filled} read from the datasheet pin table")
+    except Exception as exc:  # pragma: no cover - never block the build
+        if verbose:
+            print(f"  Pin directions skipped: {exc}")
+
+
 def _apply_deterministic_repair(pin_data, input_path, part_number, verbose=False):
     """Run the repair layer's deterministic steps on the extracted pins.
 
@@ -2376,6 +2398,7 @@ def process_datasheet(
             content=content,
         )
         _apply_deterministic_repair(pin_data, input_path, resolved_part_number, verbose)
+        _apply_pin_directions(pin_data, content, verbose)
 
         # Modules/SiPs/grid-array parts: emit schematic only (no chip footprint).
         flag_module_footprint(pin_data, input_path, verbose=verbose)
@@ -2891,6 +2914,7 @@ def _emit_pins_only(input_path, output_path, args, effective_best_effort):
             verbose=args.verbose, force_best_effort=effective_best_effort,
         )
         _apply_deterministic_repair(pin_data, input_path, resolved_part_number, args.verbose)
+        _apply_pin_directions(pin_data, content, args.verbose)
     except DatasheetParserError as e:
         print(f"Error: {e}")
         sys.exit(EXIT_DOMAIN_FAILURE)
@@ -3016,6 +3040,7 @@ def _run_cli():
             )
             # Modules/SiPs/grid-array parts -> schematic only (no chip footprint).
             flag_module_footprint(pin_data, input_path, verbose=args.verbose)
+            _apply_pin_directions(pin_data, content, args.verbose)
         except DatasheetParserError as e:
             print(f"Error: {e}")
             sys.exit(EXIT_DOMAIN_FAILURE)
