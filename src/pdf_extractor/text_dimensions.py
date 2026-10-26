@@ -40,6 +40,8 @@ _PAGE_SIGNATURES = (
     "COMMON DIMENSIONS",
     "DIMENSION LIMITS",
     "PACKAGING INFORMATION",
+    # Analog Devices: stacked max/nom/min values beside the drawing.
+    "OUTLINE DIMENSIONS",
 )
 
 # Headings/markers that identify a lettered dimension-limits TABLE (as opposed
@@ -102,6 +104,10 @@ def page_package_name(text: str) -> str:
     m = re.search(r"\b([A-Z]{2,6})\s*-\s*[\d.]+\s*mm max height", text)
     if m:
         return m.group(1)
+    # ADI caption: "32-Lead Lead Frame Chip Scale Package [LFCSP]"
+    m = re.search(r"(\d+)-Lead\b[^\[\n]*\[([A-Z_]{2,8})\]", text)
+    if m:
+        return f"{m.group(2)}-{m.group(1)}"
     # Generic: "SSOP-28 Package Dimensions"
     m = re.search(r"\b([A-Z]{2,6}-\d+)\s+Package Dimensions", text, re.IGNORECASE)
     if m:
@@ -185,6 +191,69 @@ def parse_ti_outline(text: str, pin_count: int) -> Dict[str, float]:
             if abs(float(m.group(1)) - expected_span) > 0.06:
                 del dims["e"]
 
+    return dims
+
+
+_STACK_VALUE = re.compile(rf"^({_FLOAT})(\s+SQ)?$")
+
+
+def parse_adi_outline(text: str) -> Dict[str, float]:
+    """
+    Parse an Analog Devices "OUTLINE DIMENSIONS" page (e.g. LFCSP CP-32-12).
+
+    ADI drawings carry no dimension letters: each value is a stacked
+    max / nom / min triplet beside the drawing, ``SQ`` marks a square size and
+    ``BSC`` the basic pitch::
+
+        5.10 / 5.00 SQ / 4.90   -> body D = E (= D1 = E1)
+        3.75 / 3.60 SQ / 3.55   -> exposed pad D2 = E2 (the smaller SQ)
+        0.50 / BSC              -> e
+        0.30 / 0.25 / 0.18      -> b    (the three plain triplets, read by
+        0.50 / 0.40 / 0.30      -> L     size: lead width < lead length <
+        0.80 / 0.75 / 0.70      -> A     package height)
+
+    Maxima are kept (``b_max``, ``L_max``, ``D2_max``/``E2_max``): an IPC land
+    covers the largest terminal. Ambiguous plain triplets are left out rather
+    than guessed.
+    """
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    dims: Dict[str, float] = {}
+
+    for i, line in enumerate(lines[:-1]):
+        if lines[i + 1] == "BSC" and re.fullmatch(_FLOAT, line):
+            dims["e"] = float(line)
+            break
+        m = re.fullmatch(rf"({_FLOAT})\s+BSC", line)
+        if m:
+            dims["e"] = float(m.group(1))
+            break
+    if "e" not in dims:
+        return {}
+
+    square, plain = [], []
+    i = 0
+    while i + 2 < len(lines):
+        ms = [_STACK_VALUE.match(lines[i + k]) for k in range(3)]
+        if all(ms) and not ms[0].group(2) and not ms[2].group(2):
+            hi, nom, lo = (float(m.group(1)) for m in ms)
+            if hi >= nom >= lo and hi > lo:
+                (square if ms[1].group(2) else plain).append((hi, nom, lo))
+                i += 3
+                continue
+        i += 1
+
+    square.sort(key=lambda t: -t[1])
+    if square:
+        body = square[0][1]
+        dims.update(D=body, E=body, D1=body, E1=body)
+    if len(square) >= 2 and square[1][1] < square[0][1]:
+        hi, nom, _ = square[1]
+        dims.update(D2=nom, E2=nom, D2_max=hi, E2_max=hi)
+
+    if len(plain) == 3:
+        b, lead, height = sorted(plain, key=lambda t: t[1])
+        if b[0] < dims["e"] and lead[1] <= 1.0 and 0.3 <= height[1] <= 6.0:
+            dims.update(b=b[1], b_max=b[0], L=lead[1], L_max=lead[0], A=height[0])
     return dims
 
 
@@ -471,8 +540,16 @@ def extract_text_dimensions(
             if page_family != family:
                 continue
 
+        # The caption's lead count must match the target (ADI pages often
+        # show several package options).
+        m = re.search(r"-(\d+)$", page_pkg)
+        if pin_count and m and int(m.group(1)) != pin_count:
+            continue
+
         dims: Dict[str, float] = {}
-        if pin_count:
+        if "OUTLINE DIMENSIONS" in text.upper():
+            dims = parse_adi_outline(text)
+        if not dims and pin_count:
             dims = parse_ti_outline(text, pin_count)
         if not dims:
             dims = parse_prose(text)

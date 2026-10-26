@@ -16,6 +16,7 @@ Hierarchy follows KiCad KLC standards documented in docs/PCB_FOOTPRINT_HIERARCHY
 """
 
 import logging
+import math
 import os
 from typing import List, Dict, Any, Optional
 
@@ -62,11 +63,16 @@ class PcbFootprintBuilder:
     # Pad sizing (IPC-7351 nominal density)
     ANNULAR_RING = 0.35     # mm per side, through-hole pad = drill + 2x ring
     PAD_TOE_HEEL = 0.70     # mm, gull-wing pad length = L + toe + heel
-    PAD_TOE_HEEL_LEADLESS = 0.40  # mm, leadless land (QFN/DFN/SON/LFCSP): the
+    PAD_TOE_HEEL_LEADLESS = 0.30  # mm, leadless land (QFN/DFN/SON/LFCSP): the
                             # terminal sits flush under the body, so the land needs
                             # far less toe/heel than a gull-wing foot. Gull-wing's
                             # 0.70 over-extends a leadless pad (AD9106 LFCSP-32:
                             # L~0.4 -> 1.1mm instead of the correct ~0.8mm land).
+    LEADLESS_TOE = 0.35     # mm, leadless land reach past the body edge; with the
+                            # 0.30 above the land runs E/2-L_max+0.05 .. E/2+0.35
+                            # (ADI CP-32-12: 2.05 .. 2.85 mm, QC AD9106 FP-09).
+    EP_PASTE_COVERAGE = 0.75  # exposed-pad paste area (IPC: 50-80 %), QC FP-11
+    EP_PASTE_CELL = 2.0     # mm, max exposed-pad paste window cell (2x2 on 3.75)
     PAD_SIDE_MARGIN = 0.06  # mm, gull-wing pad width = b + side margins
     PAD_MIN_GAP = 0.20      # mm, minimum copper gap between adjacent pads
     CORNER_CLEARANCE = 0.15  # mm, min copper-copper at quad corners (FP-14/IPC-2221B)
@@ -260,6 +266,10 @@ class PcbFootprintBuilder:
         )
         if lead_length_known and not self.is_through_hole():
             inset = self.params.pin_geometry.leg_length / 2.0
+            if self.is_leadless() and self.pad_spec.get("shape") == "rect":
+                # A leadless land runs out past the body edge (toe), not centred
+                # on the terminal: outer end at E/2 + LEADLESS_TOE.
+                inset = self.pad_spec["length"] / 2.0 - self.LEADLESS_TOE
             for pos in self.pin_positions:
                 if pos.side == "left":
                     pos.x += inset
@@ -281,6 +291,8 @@ class PcbFootprintBuilder:
         # two opposite rows overlap and short (74LVC1G99 SOT833-1: 0.8 mm pads
         # on a 1.0 mm body). Retract the heels to keep a copper + mask gap.
         self._enforce_opposite_row_gap()
+        if self.pad_spec.get("shape") == "rect":
+            self.pad_spec["solder_mask_margin"] = self.mask_margin  # declared == drawn
 
         logger.info(
             "Initialized 2D PCB schematic builder for %s (%d pins)" % (package_type, pin_count)
@@ -288,6 +300,12 @@ class PcbFootprintBuilder:
 
     def is_through_hole(self) -> bool:
         return self.package_type.upper().startswith(("DIP", "PDIP", "CDIP"))
+
+    def is_leadless(self) -> bool:
+        """QFN / LFCSP / DFN / WSON / SON (incl. XSON, SOT833): terminals flush
+        under the body edge."""
+        from ..package_types.footprint_defaults import _family as _fp_family
+        return _fp_family(self.package_type) in ("QFN", "DFN", "WSON", "SON")
 
     def _recenter_pins(self) -> None:
         """Center each side's column (Y) or row (X) on the origin.
@@ -413,9 +431,12 @@ class PcbFootprintBuilder:
             for h in horiz:
                 hx0, hx1 = h.x - x_half(h), h.x + x_half(h)
                 hy0, hy1 = h.y - y_half(h), h.y + y_half(h)
-                # Overlap (or within clearance) on both axes => a corner clash.
-                if not (min(vx1, hx1) - max(vx0, hx0) > -clr and
-                        min(vy1, hy1) - max(vy0, hy0) > -clr):
+                # A corner clash only when the copper is really closer than the
+                # clearance (corner-to-corner distance, not a box test: pads
+                # 0.15 mm apart on both axes are 0.21 mm apart, QC AD9106 FP-10).
+                gap_x = max(0.0, max(vx0, hx0) - min(vx1, hx1))
+                gap_y = max(0.0, max(vy0, hy0) - min(vy1, hy1))
+                if (gap_x ** 2 + gap_y ** 2) ** 0.5 >= clr - 1e-9:
                     continue
                 # Retract the vertical pad's inner X-edge clear of h's X-band.
                 if v.side == "left":
@@ -560,10 +581,12 @@ class PcbFootprintBuilder:
         if dims.get("D1"):
             self._body_outline_l = float(dims["D1"])
         # Exposed thermal pad (QFN/DFN/SON). D2 = length (Y), E2 = width (X).
-        if dims.get("E2"):
-            self._epad_w = float(dims["E2"])
-        if dims.get("D2"):
-            self._epad_l = float(dims["D2"])
+        # The land covers the largest pad the datasheet allows (IPC), like the
+        # b_max / L_max leads (QC AD9106 FP-09: 3.75 max, not 3.60 nominal).
+        if dims.get("E2_max") or dims.get("E2"):
+            self._epad_w = float(dims.get("E2_max") or dims["E2"])
+        if dims.get("D2_max") or dims.get("D2"):
+            self._epad_l = float(dims.get("D2_max") or dims["D2"])
 
     @property
     def fab_outline_width(self) -> float:
@@ -644,11 +667,8 @@ class PcbFootprintBuilder:
             # Leadless terminals (QFN/DFN/SON/LFCSP) sit flush under the body, so
             # their land needs far less toe/heel than a gull-wing foot — using the
             # gull-wing 0.70 makes the pad ~0.3mm too long (AD9106 LFCSP-32).
-            from ..package_types.footprint_defaults import _family as _fp_family
             toe_heel = (
-                self.PAD_TOE_HEEL_LEADLESS
-                if _fp_family(self.package_type) in ("QFN", "DFN", "WSON", "SON")
-                else self.PAD_TOE_HEEL
+                self.PAD_TOE_HEEL_LEADLESS if self.is_leadless() else self.PAD_TOE_HEEL
             )
             return {
                 "shape": "rect",
@@ -741,6 +761,10 @@ class PcbFootprintBuilder:
         # the perpendicular edge (see _pad_inner_extents).
         half_line = self.LINE_THICKNESS / 2.0
         inner_x, inner_y = self._pad_inner_extents()
+        if self.is_leadless():
+            # Leadless lands sit under the body edge by design: the assembly
+            # outline is the real package (QC AD9106 FP-03, 74LVC1G99 D1).
+            inner_x = inner_y = float("inf")
         if inner_x != float("inf") and fab_hw + half_line > inner_x:
             fab_hw = max(inner_x - half_line - self.FAB_PAD_CLEARANCE, self._MIN_FAB_HALF)
         if inner_y != float("inf") and fab_hh + half_line > inner_y:
@@ -758,8 +782,9 @@ class PcbFootprintBuilder:
         t = self.LINE_THICKNESS
         crtyd_hw = max(fab_hw, pad_x) + self.CRTYD_MARGIN_Y
         crtyd_hh = max(fab_hh, pad_y) + self.CRTYD_MARGIN_Y
-        if self.pin_positions and not any(
-                self._silk_line_segments(y, -silk_hw, silk_hw, t) for y in (silk_hh, -silk_hh)):
+        quad = any(p.side in ("top", "bottom") for p in self.pin_positions)
+        if self.pin_positions and ((quad and self.is_leadless()) or not any(
+                self._silk_line_segments(y, -silk_hw, silk_hw, t) for y in (silk_hh, -silk_hh))):
             silk_hh = pad_y + self.SILK_PAD_CLEARANCE + 0.03 + t / 2.0
             silk_hw = max(silk_hw, pad_x)
             # The courtyard only has to ENCLOSE the relocated silk line, not add
@@ -1112,13 +1137,9 @@ class PcbFootprintBuilder:
                 # Corner pads may carry a shortened length (FP-14 relief).
                 length = self._pad_length_override.get(pin_number, spec["length"])
                 width = spec["width"]
-                # Clamp the mask margin in the PITCH direction so adjacent
-                # apertures keep a solder-mask dam (full 0.102 margin overruns a
-                # fine pitch and the openings merge -> "no gap between solder mask
-                # of pads"). The length direction has no neighbour, so it keeps the
-                # full margin.
-                m_len = self.MASK_MARGIN
-                m_pitch = self._mask_margin_pitch(width)
+                # One mask margin on every edge (see mask_margin): clamped so
+                # adjacent apertures, and the exposed pad, keep a solder-mask dam.
+                m_len = m_pitch = self.mask_margin
                 if pin_pos.side in ("top", "bottom"):
                     pad_x, pad_y = width, length
                     mask_x, mask_y = pad_x + 2 * m_pitch, pad_y + 2 * m_len
@@ -1216,7 +1237,7 @@ class PcbFootprintBuilder:
 
         solder_mask = cq.Workplane("XY").workplane(offset=-self.PAD_HEIGHT / 2).center(
             0.0, 0.0
-        ).rect(pad_x + 2 * self.MASK_MARGIN, pad_y + 2 * self.MASK_MARGIN).extrude(self.PAD_HEIGHT)
+        ).rect(pad_x + 2 * self.mask_margin, pad_y + 2 * self.mask_margin).extrude(self.PAD_HEIGHT)
         solder_mask_assy = cq.Assembly(name="SolderMask")
         solder_mask_assy.add(solder_mask, color=self.BROWN_COLOR)
         pin_assy.add(solder_mask_assy)
@@ -1228,6 +1249,15 @@ class PcbFootprintBuilder:
         copper_pad_assy.add(copper_pad, color=self.RED_COLOR)
         pin_assy.add(copper_pad_assy)
 
+        # Paste through a window array (~75 %), not one full-size block: full
+        # coverage floats the part and voids (QC AD9106 FP-11).
+        paste = cq.Workplane("XY").pushPoints(
+            [(cx, cy) for cx, cy, _, _ in self.ep_paste_windows()]
+        ).rect(*self.ep_paste_windows()[0][2:]).extrude(self.PAD_HEIGHT)
+        paste_assy = cq.Assembly(name="PasteMask")
+        paste_assy.add(paste, color=self.RED_COLOR)
+        pin_assy.add(paste_assy)
+
         pin_text = cq.Workplane("XY").center(0.0, 0.0).text(
             pin_number, 0.8, 0.2, halign="center"
         )
@@ -1236,6 +1266,34 @@ class PcbFootprintBuilder:
         pin_assy.add(pin_text_assy)
 
         return pin_assy
+
+    def ep_paste_windows(self) -> List[tuple]:
+        """Exposed-pad paste windows ``(cx, cy, w, h)``: an n x m grid of cells
+        no larger than EP_PASTE_CELL, each printed at EP_PASTE_COVERAGE."""
+        pad_x, pad_y = float(self._epad_w), float(self._epad_l)
+        nx = max(1, math.ceil(pad_x / self.EP_PASTE_CELL - 1e-9))
+        ny = max(1, math.ceil(pad_y / self.EP_PASTE_CELL - 1e-9))
+        k = math.sqrt(self.EP_PASTE_COVERAGE)
+        cw, ch = pad_x / nx, pad_y / ny
+        return [(-pad_x / 2 + cw * (i + 0.5), -pad_y / 2 + ch * (j + 0.5), cw * k, ch * k)
+                for i in range(nx) for j in range(ny)]
+
+    @property
+    def mask_margin(self) -> float:
+        """Solder-mask margin per side, the same on every edge of every pad.
+
+        The full MASK_MARGIN is clamped so adjacent openings keep a
+        MASK_MIN_DAM web at fine pitch, and so the exposed-pad opening keeps one
+        to the signal pads (QC AD9106 FP-08: 0.102 merged all 33 openings).
+        Declared (pinData) == drawn."""
+        m = self.MASK_MARGIN
+        if self.pad_spec.get("shape") == "rect":
+            m = min(m, self._mask_margin_pitch(self.pad_spec["width"]))
+        if self._has_exposed_pad:
+            inner_x, inner_y = self._pad_inner_extents()
+            gap = min(inner_x - self._epad_w / 2, inner_y - self._epad_l / 2)
+            m = min(m, max(0.0, (gap - self.MASK_MIN_DAM) / 2))
+        return round(m, 4)
 
     def build_schematic(self, pin_data: List[Dict[str, Any]]) -> cq.Assembly:
         """
@@ -1368,6 +1426,7 @@ class PcbFootprintBuilder:
                         "shape": "rect",
                         "width": float(self._epad_w),
                         "length": float(self._epad_l),
+                        "solder_mask_margin": self.mask_margin,
                     }
                 fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh = self._layer_half_dims()
                 extras_nodes = inject_pcb_footprint_extras(
@@ -1378,7 +1437,8 @@ class PcbFootprintBuilder:
                     fab_dims=(fab_hw, fab_hh),
                     silk_dims=(silk_hw, silk_hh),
                     crtyd_dims=(crtyd_hw, crtyd_hh),
-                    pad_spec=self.pad_spec,
+                    pad_spec=dict(self.pad_spec, solder_mask_margin=self.mask_margin),
+                    pad_length_override=self._pad_length_override,
                     pin_side_map=pin_side_map,
                     dims_source=self.dims_source,
                     component_height=self.component_height,

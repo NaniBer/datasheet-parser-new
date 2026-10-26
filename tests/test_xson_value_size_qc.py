@@ -151,7 +151,8 @@ def test_sot833_opposite_rows_do_not_short(pkg):
     for p in b.pin_positions:
         x0, x1, _, _ = b._pad_bbox(p)
         lo, hi = sorted((abs(x0), abs(x1)))
-        assert lo <= 0.5 - 0.35 + 1e-9 and hi >= 0.5, (p.pin_number, x0, x1)
+        # (the heel may sit 0.05 mm short of it, as in the IPC/ADI land)
+        assert lo <= 0.5 - 0.35 + 0.05 + 1e-9 and hi >= 0.5, (p.pin_number, x0, x1)
     assert b.params.pin_pitch == pytest.approx(0.5)
 
 

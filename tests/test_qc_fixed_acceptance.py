@@ -130,7 +130,8 @@ def test_solder_mask_margin_per_side(pkg, n):
         return acc.max[0] - acc.min[0]
     copper = next(nd for nd in g.nodes if (nd.name or "") == "CopperCirclePad" and nd.mesh is not None)
     mask = next(nd for nd in g.nodes if (nd.name or "") == "SolderMask" and nd.mesh is not None)
-    assert round((xw(mask) - xw(copper)) / 2.0, 4) == 0.102
+    from src.schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+    assert round((xw(mask) - xw(copper)) / 2.0, 4) == PcbFootprintBuilder(pkg, n).mask_margin
 
 
 # ============================ PAD-NUMBER FIT (#15,#64) =======================

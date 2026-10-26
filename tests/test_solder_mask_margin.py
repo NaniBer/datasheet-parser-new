@@ -41,7 +41,8 @@ def test_mask_margin_constant_is_per_side():
 def test_rect_pad_mask_drawn_at_full_margin_per_side():
     # SOIC-8 (rect pads) and TQFP-48 (rect pads) must draw mask = pad + 0.102/side.
     assert _per_side_margin("SOIC-8", 8) == MARGIN
-    assert _per_side_margin("TQFP-48", 48) == MARGIN
+    # 0.5 mm pitch: one clamped margin on every edge (QC AD9106 FP-08).
+    assert _per_side_margin("TQFP-48", 48) == PcbFootprintBuilder("TQFP-48", 48).mask_margin < MARGIN
 
 
 def test_circle_pad_spec_mask_diameter_grows_both_sides():

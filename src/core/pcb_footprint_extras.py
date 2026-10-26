@@ -360,6 +360,12 @@ def _add_paste_masks(gltf, parent_map: Dict[int, int]) -> int:
         if lid:
             paste_extras["layerId"] = lid
 
+        # The builder drew its own aperture (exposed-pad window array): keep
+        # that geometry, only give it the copper's extras.
+        if "PasteMask" in child_names:
+            nodes[child_indices[child_names.index("PasteMask")]].extras = paste_extras
+            continue
+
         paste_node = Node(
             name="PasteMask",
             mesh=copper_node.mesh,
@@ -388,6 +394,7 @@ def inject_pcb_footprint_extras(
     silk_dims: Optional[Tuple[float, float]] = None,
     crtyd_dims: Optional[Tuple[float, float]] = None,
     pad_spec: Optional[dict] = None,
+    pad_length_override: Optional[Dict[str, float]] = None,
     pin_side_map: Optional[Dict[str, str]] = None,
     dims_source: Optional[str] = None,
     component_height: Optional[float] = None,
@@ -481,6 +488,11 @@ def inject_pcb_footprint_extras(
                 # placement datum. Deterministic; no datasheet input needed.
                 "zeroOrientation": {"angle": 0.0, "unit": "deg", "reference": "pin1"},
             }
+            from ..package_types.footprint_defaults import _family as _fp_family
+            if _fp_family(package_type) in ("QFN", "DFN", "WSON", "SON"):
+                # Leadless lands run under the body edge by design; checks that
+                # keep the body outline off the pads read this (FP-19).
+                extras["terminationStyle"] = "leadless"
             if dims_source:
                 # Dimension provenance: "text" (deterministic datasheet
                 # text), "vision"/"text+vision" (model-read drawing),
@@ -570,8 +582,12 @@ def inject_pcb_footprint_extras(
                 extras["pinName"] = "EPAD"
                 extras["role"] = "thermal"
             else:
+                # A corner-relieved pad stores its drawn length (QC AD9106 FP-10).
+                pin_spec = spec
+                if spec and name in (pad_length_override or {}):
+                    pin_spec = dict(spec, length=pad_length_override[name])
                 extras = _build_pin_extras(
-                    name, x, y, is_through_hole, pad_spec=spec, side=sides.get(name)
+                    name, x, y, is_through_hole, pad_spec=pin_spec, side=sides.get(name)
                 )
 
         # ── Pin sub-components ────────────────────────────────────────────────

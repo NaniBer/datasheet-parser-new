@@ -1473,6 +1473,23 @@ def check_fab_pad_clearance(ctx: PartContext) -> _Outcome:
     if not pads or not fab:
         return _Outcome(CheckStatus.UNRUN, f"no {'pads' if not pads else 'fab'} geometry")
     axes = _board_axes(list(pads.values()) + fab)
+    # Leadless exemption: a QFN/DFN land runs from under the body out past its
+    # edge (the terminal is flush with the body), so the real body outline
+    # crosses it by design. Such a pad must still reach OUT past the outline;
+    # one wholly inside the body is still a failure.
+    root = _root(g)
+    if root is not None and (g.nodes[root].extras or {}).get("terminationStyle") == "leadless":
+        # Outline = the body lines (long, thin boxes), not the pin-1 marker.
+        lines = [fb for fb in fab
+                 if max(fb[1][ax] - fb[0][ax] for ax in axes)
+                 > 3 * min(fb[1][ax] - fb[0][ax] for ax in axes)] or fab
+        lo = [min(fb[0][ax] for fb in lines) for ax in axes]
+        hi = [max(fb[1][ax] for fb in lines) for ax in axes]
+        pads = {pin: pad for pin, pad in pads.items()
+                if not any(pad[0][ax] < lo[k] - 1e-6 or pad[1][ax] > hi[k] + 1e-6
+                           for k, ax in enumerate(axes))}
+        if not pads:
+            return _Outcome(CheckStatus.PASS, "leadless: every land reaches past the body outline")
     worst = math.inf
     worst_desc = ""
     for pin, pad in pads.items():

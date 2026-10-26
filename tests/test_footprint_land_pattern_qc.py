@@ -124,14 +124,15 @@ def test_silk_segments_stay_clear_of_every_pad(pkg):
     assert worst >= 0.2 - 1e-6, f"{pkg} silk-to-pad clearance {worst:.3f} < 0.2"
 
 
-def test_qfn_body_still_clamped_inside_pad_ring():
-    # Regression: the leadless path (AD9106 QFN-32) must keep clamping the body
-    # inside the pad ring; the QFP/DIP changes above must not disturb it.
+def test_qfn_body_drawn_at_real_size_lands_reach_past_it():
+    # QC re-check AD9106 FP-03: the body was pulled inside the pad ring (3.28 mm
+    # for a 5 mm LFCSP). Leadless lands sit under the body edge by design, so
+    # the outline is the real body and the lands run out past it (toe).
     b = PcbFootprintBuilder("QFN-32", 32, "AD9106")
     fab_hw, *_ = b._layer_half_dims()
-    inner_x, _ = b._pad_inner_extents()
-    assert 2 * fab_hw < 5.0          # pulled inside the 5 mm body
-    assert fab_hw + b.LINE_THICKNESS / 2 <= inner_x + 1e-6
+    pad_x, _ = b._pad_extents()
+    assert 2 * fab_hw == 5.0
+    assert pad_x == fab_hw + b.LEADLESS_TOE
 
 
 def test_leadless_land_shorter_than_gullwing():
@@ -144,7 +145,8 @@ def test_leadless_land_shorter_than_gullwing():
     gull = PcbFootprintBuilder("TQFP-48", 48, "X", extracted_dims=dims)
     l_len = leadless._compute_pad_spec(None, dims)["length"]
     g_len = gull._compute_pad_spec(None, dims)["length"]
-    assert abs(l_len - 0.80) < 1e-6, f"LFCSP land {l_len} != 0.80"
+    # L_max + 0.30: 0.80 on ADI CP-32-12 (L_max 0.50), 0.70 here.
+    assert abs(l_len - 0.70) < 1e-6, f"LFCSP land {l_len} != 0.70"
     assert abs(g_len - 1.10) < 1e-6, f"TQFP land {g_len} != 1.10 (gull-wing unchanged)"
     assert l_len < g_len
 
