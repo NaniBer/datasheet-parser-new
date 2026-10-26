@@ -287,12 +287,14 @@ def check_footprint_layers_present(ctx: PartContext) -> _Outcome:
 
 
 def check_pin1_marker_present(ctx: PartContext) -> _Outcome:
-    """FP-08 / QC F3: pin-1 marker on both silk + fab, and BOTH clear of copper.
+    """FP-08 / QC F3: pin-1 marker on both silk + fab, clear of copper, inside the courtyard.
 
-    Presence on silk and fab, plus a position guard: neither marker may overlap a
-    solderable pad (the pointer belongs outside the body, in pin 1's corner). The
-    off-copper check is what QC F3 requires — it keeps a future change from
-    dropping a marker back onto a pad.
+    Presence on silk and fab, plus position guards: neither marker may overlap a
+    solderable pad (QC F3 — keeps a future change from dropping a marker back
+    onto a pad), and the silk mark must lie INSIDE the courtyard. QC re-check
+    2026-10-23 (FP-03/FP-06/FP-07 on all 5 parts) rejected the earlier
+    convention of a dot outside the courtyard corner: the pin-1 mark belongs
+    on F.SilkS beside pad 1, within the part's own courtyard.
     """
     miss = _need_glb(ctx, "footprint")
     if miss:
@@ -321,7 +323,22 @@ def check_pin1_marker_present(ctx: PartContext) -> _Outcome:
                 return _Outcome(CheckStatus.FAIL,
                                 f"{name} pin-1 marker overlaps a pad (depth {abs(worst):.3f} mm)",
                                 measured=f"{worst:.3f} mm")
-    return _Outcome(CheckStatus.PASS, "pin-1 marker on silk + fab, both clear of copper")
+    # Courtyard guard (QC re-check 2026-10-23): the silk mark sits inside the
+    # courtyard outline, not past it.
+    body = _find_child(g, root, "Body")
+    crt = _find_child(g, body, "crtyd_layer") if body is not None else None
+    crt_box = _subtree_aabb3(g, crt, world) if crt is not None else None
+    silk_box = _subtree_aabb3(g, silk, world)
+    if crt_box is not None and silk_box is not None:
+        axes = _board_axes([crt_box])
+        overrun = max(max(crt_box[0][ax] - silk_box[0][ax], silk_box[1][ax] - crt_box[1][ax])
+                      for ax in axes)
+        if overrun > 1e-6:
+            return _Outcome(CheckStatus.FAIL,
+                            f"silk pin-1 marker lies outside the courtyard by {overrun:.3f} mm",
+                            measured=f"{overrun:.3f} mm", threshold="inside courtyard")
+    return _Outcome(CheckStatus.PASS,
+                    "pin-1 marker on silk + fab, clear of copper, inside the courtyard")
 
 
 def _copper_pad_boxes(g, world) -> Dict[str, Box]:
