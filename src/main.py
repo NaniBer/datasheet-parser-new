@@ -67,6 +67,69 @@ EXIT_INTERNAL_ERROR = 2
 EXIT_DEGRADED = 3
 
 
+def _resolve_identity(input_path, pin_data, part_number, package_index=None,
+                      extracted_dims=None, model=None, verbose=False):
+    """Manufacturer / one-line description / footprint name for the part record
+    (QC C1). Best-effort: returns None on any failure, never breaks a run."""
+    try:
+        from .pdf_extractor.part_identity import resolve_part_identity, footprint_names
+        try:
+            from . import chat_bot
+        except ImportError:  # pragma: no cover - script-style import
+            import src.chat_bot as chat_bot
+
+        footprint = None
+        try:
+            from .schematic_generator.pcb_footprint_builder import PcbFootprintBuilder
+            package_type, pin_count, _, _ = pin_data_to_builder_format(
+                pin_data, part_number=part_number, package_index=package_index,
+            )
+            fb = PcbFootprintBuilder(
+                package_type, pin_count, pin_data.component_name, None, extracted_dims,
+            )
+            through_hole = fb.is_through_hole()
+            footprint = footprint_names(
+                package_type, pin_count,
+                body_w=fb.fab_outline_width, body_l=fb.fab_outline_length,
+                pitch=fb.params.pin_pitch,
+                row_spacing=fb.params.body_width if through_hole else None,
+                epad=(fb._epad_w, fb._epad_l) if fb._has_exposed_pad else None,
+                through_hole=through_hole,
+            )
+        except Exception:
+            footprint = None  # no footprint geometry (e.g. BGA refusal)
+
+        def complete(messages):
+            return chat_bot.get_completion_from_messages(messages, model=model)
+
+        identity = resolve_part_identity(
+            str(input_path), part_number or pin_data.component_name,
+            complete=complete, footprint=footprint,
+        )
+        if verbose:
+            print(f"Part identity: {identity.to_extras()}")
+        return identity
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"Part identity skipped: {e}")
+        return None
+
+
+def _inject_identity(glb_paths, identity) -> None:
+    """Write the identity into each GLB's Package node (best-effort)."""
+    if identity is None:
+        return
+    fields = identity.to_extras()
+    if not fields:
+        return
+    from .core.part_identity_extras import inject_part_identity
+    for path in glb_paths:
+        try:
+            if Path(path).exists():
+                inject_part_identity(str(path), fields)
+        except Exception as e:  # pragma: no cover - defensive
+            print(f"Part identity not written to {path}: {e}")
+
+
 def _record_degraded(pin_data, reasons) -> None:
     """Merge best-effort/approximation reasons into pin_data.validation_errors.
 
@@ -2536,6 +2599,15 @@ def process_datasheet(
                 print("Error: Failed to generate 3D schematic")
             return False
 
+        _inject_identity(
+            [output_path],
+            _resolve_identity(
+                input_path, pin_data, part_number, package_index=package_index,
+                extracted_dims=extracted_dims if pcb_2d_mode else None,
+                model=model, verbose=verbose,
+            ),
+        )
+
         # Watermark output that is unvalidated (forced best-effort, or a
         # lossy/unverified footprint approximation recorded above).
         if pin_data.validation_errors and output_path.exists():
@@ -2950,6 +3022,12 @@ def _emit_pins_only(input_path, output_path, args, effective_best_effort):
         ],
     }
 
+    identity = _resolve_identity(
+        input_path, pin_data, args.part_number,
+        package_index=args.package_index, model=args.model, verbose=args.verbose,
+    )
+    result["identity"] = identity.to_extras() if identity is not None else {}
+
     # Token + cost accounting for this run's LLM calls.
     u = chat_bot.get_usage()
     result["usage"] = {
@@ -3103,6 +3181,15 @@ def _run_cli():
             emit_body_3d=args.body_3d,
             record=component_record,
         )
+        if success:
+            _inject_identity(
+                _both_output_paths(str(output_path)),
+                _resolve_identity(
+                    input_path, pin_data, args.part_number,
+                    package_index=args.package_index, extracted_dims=extracted_dims,
+                    model=args.model, verbose=args.verbose,
+                ),
+            )
         if not success:
             sys.exit(EXIT_DOMAIN_FAILURE)
 
