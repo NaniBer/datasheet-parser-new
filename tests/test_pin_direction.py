@@ -193,3 +193,20 @@ def test_exposed_pad_is_typed_as_power():
     epad = b._augment_pin_data(pins)[-1]
     assert (epad["electrical_type"], epad["role"]) == ("power_in", "thermal")
     assert classify_pin_name("EPAD")[:2] == ("power_in", "thermal")
+
+
+def test_output_pins_go_right_whatever_the_llm_role():
+    # Real-pipeline run 26 Oct: the LLM's function roles ("analog", "data",
+    # "clock", "oscillator") put output pins on the input side.
+    pins = [Pin(number=1, name="VOUTL", electrical_type="output", role="analog"),
+            Pin(number=2, name="P7", electrical_type="output", role="data"),
+            Pin(number=3, name="XTAL2", electrical_type="output", role="oscillator"),
+            Pin(number=4, name="SDO", electrical_type="tri_state", role="data"),
+            Pin(number=5, name="D0", electrical_type="bidirectional", role="data"),
+            Pin(number=6, name="VREFP", electrical_type="output", role="supply"),
+            Pin(number=7, name="GND", electrical_type="power_in", role="ground")]
+    pd = PinData(component_name="X", pins=pins,
+                 package=PackageInfo(type="SOIC-8", pin_count=7, width=0.0, height=0.0))
+    sides = {p.name: role_side(p.role) for p in ComponentRecord.from_pin_data(pd).selected().pins}
+    assert sides == {"VOUTL": "right", "P7": "right", "XTAL2": "right", "SDO": "right",
+                     "D0": "left", "VREFP": "right", "GND": "right"}

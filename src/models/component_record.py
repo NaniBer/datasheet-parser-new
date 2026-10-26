@@ -127,6 +127,12 @@ _ROLE_FROM_TYPE = {
     "open_emitter": "output", "input": "input", "bidirectional": "io",
 }
 
+# Roles that only describe a signal's function (not where it flows). An output
+# pin keeps its side by direction whatever the LLM called it: PGA2311P VOUTL
+# came as "analog", ADV7180 P0-P7 as "data", LLC "clock", XTAL2 "oscillator",
+# and all sat on the input side (QC B1, real-pipeline run 26 Oct).
+_FUNCTION_ONLY_ROLES = {None, "data", "analog", "clock", "oscillator", "io", "other"}
+
 
 def role_side(role: Optional[str]) -> str:
     """Symbol side a role places on (SYM-04); defaults left for unknown roles."""
@@ -520,6 +526,8 @@ class ComponentRecord:
                 c_type, c_role, c_active = classify_pin_name(name)
                 etype = etype or c_type
                 role = role or c_role or _ROLE_FROM_TYPE.get(etype)
+                if _ROLE_FROM_TYPE.get(etype) == "output" and role in _FUNCTION_ONLY_ROLES:
+                    role = "output"
                 active_low = active_low or c_active
                 # fill-only: a no-connect name/role sets the nc flag (never unsets).
                 nc = bool(g("nc")) or c_role == "nc" or c_type == "no_connect"
