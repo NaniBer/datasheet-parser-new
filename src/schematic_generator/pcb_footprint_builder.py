@@ -86,7 +86,7 @@ class PcbFootprintBuilder:
     TINY_HEIGHT = 0.001  # mm (minimum height for extrusion)
     SILK_MARKER_RADIUS = 0.100  # mm (first pin marker size)
     SILK_MARKER_HEIGHT = 0.200  # mm (first pin marker thickness)
-    SILK_MARKER_CLEARANCE = 0.10  # mm (gap beyond courtyard for the silk pin-1 dot)
+    SILK_MARKER_CLEARANCE = 0.10  # mm (legacy: last-resort gap beyond the pin-1 corner)
 
     # Body line parameters (from reference 2d.glb)
     BODY_HALF_WIDTH = 3.6195  # mm
@@ -742,11 +742,14 @@ class PcbFootprintBuilder:
                 inner_y = min(inner_y, abs(pos.y) - yd / 2)
         return inner_x, inner_y
 
-    def _layer_half_dims(self) -> tuple:
+    def _layer_half_dims(self, include_pin1_marker: bool = True) -> tuple:
         """Half-dimensions of fab, silk and courtyard layers.
 
         The courtyard must enclose both the body and the pads, whichever
-        reaches further, plus clearance.
+        reaches further, plus clearance — and the pin-1 marker (QC re-check
+        2026-10-23: the pin-1 mark belongs INSIDE the courtyard). The marker is
+        placed against the pad/body courtyard first (``include_pin1_marker=False``)
+        and the courtyard only grows when no spot beside pad 1 fits inside it.
         """
         # PRIMARY source: the real molded body (E1/D1). See fab_outline_width.
         fab_hw = self.fab_outline_width / 2
@@ -798,7 +801,106 @@ class PcbFootprintBuilder:
         # the larger half (still the tight enclosure, just symmetric).
         if self.is_square_quad():
             crtyd_hw = crtyd_hh = max(crtyd_hw, crtyd_hh)
+        if include_pin1_marker:
+            marker = self._pin1_marker_xy(crtyd_hw, crtyd_hh)
+            if marker is not None:
+                # Enclose the dot with the courtyard line's inner edge.
+                reach = self.SILK_MARKER_RADIUS + t / 2.0
+                crtyd_hw = max(crtyd_hw, abs(marker[0]) + reach)
+                crtyd_hh = max(crtyd_hh, abs(marker[1]) + reach)
+                if self.is_square_quad():
+                    crtyd_hw = crtyd_hh = max(crtyd_hw, crtyd_hh)
         return fab_hw, fab_hh, silk_hw, silk_hh, crtyd_hw, crtyd_hh
+
+    def _copper_bboxes(self) -> List[tuple]:
+        """(x0, x1, y0, y1) of every copper land, including the exposed pad."""
+        boxes = [self._pad_bbox(p) for p in self.pin_positions]
+        if self._has_exposed_pad:
+            hx, hy = float(self._epad_w) / 2.0, float(self._epad_l) / 2.0
+            boxes.append((-hx, hx, -hy, hy))
+        return boxes
+
+    def _pin1_marker_xy(self, crtyd_hw: float, crtyd_hh: float) -> Optional[tuple]:
+        """Centre of the pin-1 dot: beside pad 1, off copper, inside the courtyard.
+
+        QC re-check 2026-10-23 (FP-03/FP-06/FP-07 on PGA2311P, AD9106,
+        TL16C2550, 74LVC1G99, ADV7180): the pin-1 mark must be on the silkscreen
+        next to pad 1 and INSIDE the courtyard (Ultra Librarian / KiCad put a
+        dot or "*" beside pad 1). This replaces the 14 Oct convention of a dot
+        outside the courtyard corner.
+
+        Candidates, in order of preference:
+          1. past pad 1's end along the pad row, away from pin 2 (the pin-1 end
+             of the row / pin-1 corner of a quad),
+          2. past pad 1's outer end (toe), level with pad 1,
+          3. the inside corner of the courtyard in pin 1's quadrant.
+        Every candidate must keep SILK_PAD_CLEARANCE (+0.03 margin, as for the
+        silk outline) from ALL copper, exposed pad included. The first one that
+        already fits inside the given courtyard wins; when none fits (tiny
+        packages such as SOT833-1/XSON8 whose courtyard hugs the pads) the
+        clear candidate needing the least courtyard growth is used and
+        ``_layer_half_dims`` grows the courtyard to enclose it.
+        """
+        pins = {p.pin_number: p for p in self.pin_positions}
+        p1 = pins.get("1")
+        if p1 is None:
+            return None
+        r = self.SILK_MARKER_RADIUS
+        clr = self.SILK_PAD_CLEARANCE + 0.03
+        t = self.LINE_THICKNESS
+        x0, x1, y0, y1 = self._pad_bbox(p1)
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+
+        # Row (pitch) axis and outward (toe) axis of pad 1.
+        if p1.side in ("top", "bottom"):
+            row_axis = "x"
+        elif p1.side in ("left", "right"):
+            row_axis = "y"
+        else:
+            row_axis = "y" if abs(p1.x) >= abs(p1.y) else "x"
+        p2 = pins.get("2")
+
+        def _sign(v: float, default: float = 1.0) -> float:
+            return 1.0 if v > 1e-9 else (-1.0 if v < -1e-9 else default)
+
+        if row_axis == "y":
+            away = _sign(p1.y - p2.y if p2 is not None else 0.0, _sign(p1.y))
+            out = _sign(p1.x, -1.0)
+            beyond_row = (cx, (y1 if away > 0 else y0) + away * (clr + r))
+            beyond_toe = ((x1 if out > 0 else x0) + out * (clr + r), cy)
+            qx, qy = out, away
+        else:
+            away = _sign(p1.x - p2.x if p2 is not None else 0.0, _sign(p1.x))
+            out = _sign(p1.y, 1.0)
+            beyond_row = ((x1 if away > 0 else x0) + away * (clr + r), cy)
+            beyond_toe = (cx, (y1 if out > 0 else y0) + out * (clr + r))
+            qx, qy = away, out
+        inner_hw, inner_hh = crtyd_hw - t / 2.0 - r, crtyd_hh - t / 2.0 - r
+        corner = (qx * inner_hw, qy * inner_hh)
+
+        copper = self._copper_bboxes()
+
+        def _clear(c) -> bool:
+            for bx0, bx1, by0, by1 in copper:
+                dx = max(bx0 - (c[0] + r), (c[0] - r) - bx1, 0.0)
+                dy = max(by0 - (c[1] + r), (c[1] - r) - by1, 0.0)
+                if (dx * dx + dy * dy) ** 0.5 < clr - 1e-9:
+                    return False
+            return True
+
+        def _growth(c) -> float:
+            return (max(0.0, abs(c[0]) - inner_hw) + max(0.0, abs(c[1]) - inner_hh))
+
+        cands = [c for c in (beyond_row, beyond_toe, corner) if _clear(c)]
+        if not cands:
+            # Last resort (never seen on a real package): just past the pin-1
+            # courtyard corner; the courtyard then grows to enclose it.
+            gap = self.SILK_MARKER_CLEARANCE + r
+            return (qx * (crtyd_hw + gap), qy * (crtyd_hh + gap))
+        for c in cands:
+            if _growth(c) <= 1e-9:
+                return c
+        return min(cands, key=_growth)
 
     def calculate_pin_positions_footprint(self) -> List[PinPosition]:
         """
@@ -996,19 +1098,16 @@ class PcbFootprintBuilder:
 
         markers_assy = cq.Assembly(name="FirstPinMarker")
 
-        x, y = pin1_pos.x, pin1_pos.y
+        # QC re-check 2026-10-23 (supersedes the 14 Oct "outside the courtyard"
+        # convention): the pin-1 dot sits on F.SilkS right beside pad 1, INSIDE
+        # the courtyard, >= SILK_PAD_CLEARANCE off every copper land (QC F3 /
+        # FP-08 still hold: never on copper). The courtyard is placed first
+        # without the marker, the dot is fitted to it, and _layer_half_dims
+        # grows the courtyard only if the dot cannot fit (tiny packages).
+        _, _, _, _, crtyd_hw, crtyd_hh = self._layer_half_dims(include_pin1_marker=False)
+        marker_x, marker_y = self._pin1_marker_xy(crtyd_hw, crtyd_hh)
 
-        # QC F3 / FP-08: BOTH pin-1 markers (silk and fab) sit OUTSIDE the
-        # courtyard in pin 1's corner (top-left for a standard part), clear of
-        # every solderable pad — the pointer must never land on copper.
-        _, _, _, _, crtyd_hw, crtyd_hh = self._layer_half_dims()
-        gap = self.SILK_MARKER_CLEARANCE + self.SILK_MARKER_RADIUS
-        sx = -1.0 if x <= 0 else 1.0
-        sy = 1.0 if y >= 0 else -1.0
-        marker_x = sx * (crtyd_hw + gap)
-        marker_y = sy * (crtyd_hh + gap)
-
-        # Silk layer marker (outside the courtyard, pin-1 corner)
+        # Silk layer marker (beside pad 1, inside the courtyard)
         silk_marker = cq.Workplane("XY").center(marker_x, marker_y).circle(
             self.SILK_MARKER_RADIUS
         ).extrude(self.SILK_MARKER_HEIGHT)
@@ -1016,7 +1115,7 @@ class PcbFootprintBuilder:
         silk_marker_assy.add(silk_marker, color=self.WHITE_COLOR)
         markers_assy.add(silk_marker_assy)
 
-        # Fab layer marker — same outside corner, off copper (QC F3).
+        # Fab layer marker — same spot as the silk dot, off copper (QC F3).
         fab_marker = cq.Workplane("XY").center(marker_x, marker_y).circle(
             self.SILK_MARKER_RADIUS
         ).extrude(self.SILK_MARKER_HEIGHT)
