@@ -71,6 +71,7 @@ SLOW_MODULES = frozenset(
         "test_sym10_refdes_prefix.py",
         "test_ui01_not_rotatable.py",
         "test_v02_footprint_dims.py",
+        "test_pin1_mark_qc.py",
     }
 )
 
@@ -80,6 +81,7 @@ SLOW_MODULES = frozenset(
 SLOW_TESTS = frozenset(
     {
         "test_ad9106_land_pattern.py::test_glb_ep_paste_windows_and_pin_data",
+        "test_symbol_rebalance.py::test_rebalanced_symbol_is_compact_and_conformant",
         "test_agentic.py::test_repair_fixes_rev13_single_column_datasheet",
         "test_footprint_land_pattern_qc.py::test_through_hole_pin1_pad_is_square",
         "test_footprint_silk_qfn.py::test_qfn48_footprint_glb_passes_hierarchy_validation",
