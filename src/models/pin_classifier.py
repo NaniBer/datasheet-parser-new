@@ -90,7 +90,8 @@ def classify_pin_name(name: str) -> Tuple[Optional[str], Optional[str], bool]:
     if c in {"NC", "DNC", "NOCONNECT", "RESERVED", "DNU"}:
         return "no_connect", "nc", active_low
     if c in {"EP", "EPAD", "PAD", "THERMAL", "THERMALPAD", "EXPOSEDPAD"}:
-        return "passive", "thermal", active_low
+        # SnapEDA: the exposed pad is grounded, so it is typed as power.
+        return "power_in", "thermal", active_low
     # Supply rails: VCC/VDD families (opt. analog/digital prefix + suffix such as
     # VDDIO/AVDD/DVDD), positive rails V+/VA+/VD+, plus the legacy family list.
     if (

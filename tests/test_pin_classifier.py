@@ -15,7 +15,7 @@ from src.models.pin_data import PinData, PackageInfo, Pin
     ("V–", "power_in", "ground"),          # en-dash minus (LM358 style)
     ("NC", "no_connect", "nc"),
     ("DNC", "no_connect", "nc"),
-    ("EP", "passive", "thermal"),
+    ("EP", "power_in", "thermal"),
     ("RESET", "input", "reset"),
     ("NRST", "input", "reset"),
     ("SRCLR", "input", "reset"),

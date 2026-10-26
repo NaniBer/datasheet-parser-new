@@ -70,6 +70,8 @@ def description_direction(text: str) -> Optional[Tuple[str, Optional[str]]]:
         return "power_in", "ground"
     if "ldo" in clause or "regulator" in clause:
         return "power_out", "supply"
+    if re.search(r"\b(supply|power)\s+output", clause):
+        return "power_out", "supply"   # "Clock Power Supply Output" (CLDO)
     if "supply" in clause or (re.search(r"\bpower\b", clause) and not _POWER_DOWN.search(clause)):
         return "power_in", "supply"
     has_in = re.search(r"\binputs?\b", clause) is not None
@@ -296,6 +298,10 @@ def apply_pin_directions(pins, source_text: str, tables=None) -> int:
         if not get("electrical_type"):
             put("electrical_type", etype)
             filled += 1
+        elif etype == c_type == "power_out" and get("electrical_type") != "power_out":
+            # The datasheet row and the name both say regulator output: that
+            # beats an earlier guess (QC AD9106 SCH-05: CLDO came as bidirectional).
+            put("electrical_type", etype)
         if role and not get("role"):
             put("role", role)
     return filled

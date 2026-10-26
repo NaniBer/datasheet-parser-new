@@ -446,8 +446,8 @@ class PinoutDiagramBuilder:
     def _augment_pin_data(self, pin_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Append the EPAD pin to the pin list for leadless parts (idempotent).
 
-        Typed passive / role thermal so the extras + netlist treat it as the
-        grounded exposed pad.
+        Typed power_in (SnapEDA types the grounded exposed pad as power) with
+        role thermal, so the extras + netlist treat it as the exposed pad.
         """
         if not self._has_exposed_pad:
             return pin_data
@@ -456,7 +456,7 @@ class PinoutDiagramBuilder:
         return list(pin_data) + [{
             "number": self._exposed_pad_number,
             "name": "EPAD",
-            "electrical_type": "passive",
+            "electrical_type": "power_in",
             "role": "thermal",
             "active_low": False,
             "nc": False,

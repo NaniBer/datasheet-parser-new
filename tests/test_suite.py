@@ -2568,7 +2568,7 @@ def test_schematic_quad_side_codes(tmp_path):
 
 
 def test_leadless_symbol_has_epad_pin(tmp_path):
-    # SCH / FP-02: a leadless QFN symbol carries an EPAD pin (pin N+1, passive,
+    # SCH / FP-02: a leadless QFN symbol carries an EPAD pin (pin N+1, power_in,
     # thermal) so the exposed pad can be wired to ground; a DIP must not.
     from pygltflib import GLTF2
     from src.schematic_generator.pinout_diagram_builder import build_pinout_diagram
@@ -2588,7 +2588,7 @@ def test_leadless_symbol_has_epad_pin(tmp_path):
     # The pin appears on both the pin-group node (full extras) and its label
     # mesh (pinName only); assert the fully-typed EPAD pin is present.
     qfn = _epad_pins("QFN-20", 20)
-    assert ("EPAD", "passive", "thermal") in qfn, qfn
+    assert ("EPAD", "power_in", "thermal") in qfn, qfn
     assert _epad_pins("DIP-8", 8) == []
 
 

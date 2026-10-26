@@ -171,3 +171,25 @@ def test_functional_symbol_puts_epad_with_the_grounds():
     assert epad.side == "right" and epad.y == min(p.y for p in right)
     bottom = b._body_center()[1] - b.params.body_height / 2
     assert epad.y - bottom == pytest.approx(b.params.pin_pitch)
+
+
+def test_ldo_supply_output_is_power_out_even_over_an_llm_guess():
+    # QC AD9106 SCH-05: CLDO "Clock Power Supply Output (Internal Regulator in
+    # Use)" shipped as bidirectional; it is a power output like DLDO1/DLDO2.
+    assert description_direction("Clock Power Supply Output (Internal Regulator") == (
+        "power_out", "supply")
+    pins = [Pin(number=22, name="CLDO", electrical_type="bidirectional"),
+            Pin(number=7, name="SDO", electrical_type="bidirectional")]
+    apply_pin_directions(pins, "22 CLDO Clock Power Supply Output (Internal Regulator\n"
+                               "7 SDO Serial Data Output\n")
+    assert [p.electrical_type for p in pins] == ["power_out", "bidirectional"]
+
+
+def test_exposed_pad_is_typed_as_power():
+    # QC AD9106 SCH-05: SnapEDA types the grounded exposed pad as power.
+    from src.schematic_generator.pinout_diagram_builder import PinoutDiagramBuilder
+    pins = [{"number": str(i), "name": f"P{i}"} for i in range(1, 9)]
+    b = PinoutDiagramBuilder("LFCSP-8", 8, "X", pin_data=pins)
+    epad = b._augment_pin_data(pins)[-1]
+    assert (epad["electrical_type"], epad["role"]) == ("power_in", "thermal")
+    assert classify_pin_name("EPAD")[:2] == ("power_in", "thermal")

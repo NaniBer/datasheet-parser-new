@@ -297,7 +297,7 @@ def build_table_extraction_prompt(
                 "- nc: true for no-connect pins (NC/DNC/RESERVED). A pin that must be tied\n"
                 "  to a net (e.g. \"connect to GND\") has nc=false; put wording in nc_instruction\n"
                 "Examples: VCC->power_in/supply; GND->power_in/ground; CLK->input/clock;\n"
-                "/RESET->input/reset active_low=true; QA->output/data; EP->passive/thermal;\n"
+                "/RESET->input/reset active_low=true; QA->output/data; EP->power_in/thermal;\n"
                 "NC->no_connect/nc nc=true.\n\n"
 
                 "OUTPUT FORMAT (JSON ONLY):\n"
