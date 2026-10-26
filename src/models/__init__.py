@@ -17,6 +17,7 @@ from .component_record import (
     DEVICE_CLASSES,
     REFDES_PREFIX,
     ROLE_SIDE,
+    ROLE_ALT_SIDE,
     LAND_PATTERN_SOURCES,
     normalize_electrical_type,
     normalize_role,
@@ -36,7 +37,7 @@ __all__ = [
     "Identity", "Provenance", "ArtifactLinks", "Ratings", "RecordPin",
     # Extraction output contract
     "ELECTRICAL_TYPES", "PIN_ROLES", "DEVICE_CLASSES", "REFDES_PREFIX",
-    "ROLE_SIDE", "LAND_PATTERN_SOURCES",
+    "ROLE_SIDE", "ROLE_ALT_SIDE", "LAND_PATTERN_SOURCES",
     "normalize_electrical_type", "normalize_role", "role_side",
     "role_coverage", "functional_layout_applicable",
     "refdes_prefix", "classify_device_class", "validate_pin_semantics",
