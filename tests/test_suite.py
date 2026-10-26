@@ -2913,9 +2913,30 @@ def test_cli_exit_code_contract(monkeypatch, tmp_path):
         main_mod.main()
     assert exc.value.code == main_mod.EXIT_DOMAIN_FAILURE
 
-    # Fail-open: a datasheet whose pins fail a validation gate (foo.pdf is a
-    # diode whose 'Anode'/'Cathode' names aren't groundable in the text) still
-    # emits a watermarked best-effort GLB -> 3, instead of refusing.
+    # Hermetic: foo.pdf has no deterministic pin table, so extraction goes to
+    # the LLM. Stub the client to return pins that fail validation (ungroundable
+    # names) instead of making a real network call.
+    class _StubLLMClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def extract_pin_data(self, **kwargs):
+            # Unique, buildable pins whose names don't appear in foo.pdf, so
+            # the pin-name grounding gate fails.
+            return PinData(
+                component_name="TESTPART",
+                package=PackageInfo(type="DIP-8", pin_count=8, width=6.0, height=9.0),
+                pins=[Pin(number=n, name=f"ZQX{n}") for n in range(1, 9)],
+                extraction_method="Table",
+            )
+
+        def __getattr__(self, name):
+            raise RuntimeError(f"no LLM in tests ({name})")
+
+    monkeypatch.setattr(main_mod, "LLMClient", _StubLLMClient)
+
+    # Fail-open: a datasheet whose pins fail a validation gate still emits a
+    # watermarked best-effort GLB -> 3, instead of refusing.
     monkeypatch.setattr("sys.argv", ["prog", "pdfs/foo.pdf", str(tmp_path / "foo.glb")])
     with pytest.raises(SystemExit) as exc:
         main_mod.main()
@@ -2958,11 +2979,14 @@ def test_exit_degraded_on_unvalidated_output():
 @pytest.mark.integration
 def test_cli_exit_zero_on_success(tmp_path):
     # Deterministic-path part (DFN.pdf needs no LLM): full run -> exit 0.
-    import subprocess, sys
+    import os, subprocess, sys
+    # Empty keys win over the child's own load_dotenv() (it never overrides set
+    # vars), so a developer's real .env can't turn this into a live LLM call.
+    env = {**os.environ, "LLM_API_KEY": "", "FASTCHAT_API_KEY": ""}
     proc = subprocess.run(
         [sys.executable, "-m", "src.main", "pdfs/DFN.pdf",
          str(tmp_path / "dfn.glb"), "--both"],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True, text=True, timeout=600, env=env,
     )
     assert proc.returncode == 0, proc.stdout[-500:] + proc.stderr[-500:]
     assert (tmp_path / "dfn_schematic.glb").exists()
