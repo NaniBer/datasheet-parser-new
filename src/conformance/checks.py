@@ -975,13 +975,15 @@ def check_functional_grouping(ctx: PartContext) -> _Outcome:
     that clear the shared coverage gate (power+ground concrete, >=50% concrete
     roles). Below the gate the symbol is legitimately physical, so the rule does
     not apply and we SKIP. For gated parts, every concretely-classified pin must
-    sit on ``ROLE_SIDE[role]``; ``nc`` pins (role "unplaced") and unknown/``other``
+    sit on ``ROLE_SIDE[role]`` (or ``ROLE_ALT_SIDE[role]``: supplies on top,
+    grounds on the bottom, where a lopsided layout was rebalanced); ``nc`` pins
+    (role "unplaced") and unknown/``other``
     roles are exempt (they carry no side obligation).
     """
     miss = _need_glb(ctx, "symbol")
     if miss:
         return miss
-    from ..models import ROLE_SIDE, normalize_role, functional_layout_applicable
+    from ..models import ROLE_ALT_SIDE, ROLE_SIDE, normalize_role, functional_layout_applicable
     g = ctx.glb("symbol")
     root = _root(g)
     legs = _find_child(g, root, "Legs") if root is not None else None
@@ -1006,7 +1008,7 @@ def check_functional_grouping(ctx: PartContext) -> _Outcome:
             continue
         actual = _SIDE_CODE_TO_NAME.get(ex.get("side"))
         graded += 1
-        if actual != expected:
+        if actual != expected and actual != ROLE_ALT_SIDE.get(role):
             mismatches.append(f"{g.nodes[p].name}({role}):{actual}!={expected}")
     if graded == 0:
         return _Outcome(CheckStatus.SKIP, "no side-bearing roles to grade")

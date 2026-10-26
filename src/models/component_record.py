@@ -61,7 +61,7 @@ ROLE_ALIASES = {
     "gnd": "ground", "vss": "ground", "analog_io": "analog",
     "no_connect": "nc", "dnc": "nc", "reserved": "nc", "": "other",
 }
-# SnapEDA convention (QC S1): everything is LEFT or RIGHT (no top/bottom). The
+# SnapEDA convention (QC S1): everything is LEFT or RIGHT by default. The
 # RIGHT column carries power/outputs/ground/thermal (VCC upper, outputs middle,
 # GND lower); the LEFT column carries control, inputs, I/O, data/analog, other.
 ROLE_SIDE = {
@@ -71,6 +71,11 @@ ROLE_SIDE = {
     "address": "left", "oscillator": "left",
     "nc": "unplaced", "other": "left",
 }
+# SnapEDA's other sanctioned power positions: power on the top edge, ground
+# (and the exposed pad) on the bottom edge. The functional layout moves whole
+# power groups there only to relieve a lopsided right column (see
+# schematic_generator.functional_layout.REBALANCE_MOVES).
+ROLE_ALT_SIDE = {"supply": "top", "ground": "bottom", "thermal": "bottom"}
 
 # Device classes -> reference-designator prefix (spec SYM-10). device_class holds
 # the semantic class; the prefix is derived via REFDES_PREFIX (fixes the old

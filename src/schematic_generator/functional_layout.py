@@ -4,7 +4,9 @@ Turns per-pin functional roles into a ``side -> ordered pin numbers`` layout so 
 symbol reads by function. Under the SnapEDA convention (QC S1) every pin sits in
 the LEFT or RIGHT column: the right column carries power/outputs/ground/thermal
 (VCC upper, outputs middle, GND lower); the left column carries control, inputs,
-I/O, data/analog and other. The result is fed through the existing
+I/O, data/analog and other. A very lopsided right column hands its grounds to
+the bottom edge (then its supplies to the top edge) -- see REBALANCE_MOVES.
+The result is fed through the existing
 custom-layout channel in ``pin_layout._layout_custom_pins``; a blank slot is
 represented by ``None`` and consumes one grid step without drawing a pin.
 
@@ -32,6 +34,23 @@ BLOCK_ORDER: Dict[str, List[str]] = {
     "top":    [],
     "bottom": [],
 }
+
+# Rebalancing a lopsided SnapEDA layout. The right column carries supplies,
+# outputs AND grounds, so an output-heavy part (a video decoder's pixel bus)
+# grows a tower far taller than its inputs column. When the right column is
+# more than _LOPSIDED_RATIO times the left AND at least _LOPSIDED_MIN_EXTRA
+# slots longer, whole power groups leave it, one move at a time, until it no
+# longer is: grounds (+ exposed pad) to the bottom edge, then supplies to the
+# top edge -- SnapEDA's other sanctioned power positions (power on top, ground
+# on the bottom). Signal flow (inputs left, outputs right) is never touched
+# and each group stays one contiguous block. Small / balanced parts never
+# reach the threshold, so their layout is unchanged.
+_LOPSIDED_RATIO = 1.5
+_LOPSIDED_MIN_EXTRA = 6
+REBALANCE_MOVES: List[tuple] = [
+    ("bottom", ["ground", "thermal"]),
+    ("top", ["supply"]),
+]
 
 _MIN_BODY_MM = 4 * SCHEMATIC_GRID_MM   # floor so a tiny part still renders a body
 _NAME_CHAR_W = 0.6                     # ~char width per font unit (matches label bbox math)
@@ -109,8 +128,10 @@ def functional_side_layout(pins: List[Dict[str, Any]]) -> Dict[str, List[Optiona
         side = role_side(normalize_role(p.get("role")))   # unknown/other -> "left"
         buckets.setdefault(side, {}).setdefault(r, []).append(p)
 
+    order_by_side = _rebalance(buckets, len(nc_pins))
+
     # Emit each side in canonical block order, one blank between non-empty blocks.
-    for side, order in BLOCK_ORDER.items():
+    for side, order in order_by_side.items():
         for role in order:
             block = _order_block(buckets[side].get(role, []))
             if not block:
@@ -131,6 +152,38 @@ def functional_side_layout(pins: List[Dict[str, Any]]) -> Dict[str, List[Optiona
     _centre_pair(layout, "left", "right")
     _centre_pair(layout, "top", "bottom")
     return layout
+
+
+def _column_slots(blocks: Dict[str, List[Any]], extra_block: int = 0) -> int:
+    """Slots a column needs: its pins, one blank between non-empty blocks."""
+    sizes = [len(b) for b in blocks.values() if b] + ([extra_block] if extra_block else [])
+    return sum(sizes) + max(len(sizes) - 1, 0)
+
+
+def _lopsided(tall: int, short: int) -> bool:
+    return tall > _LOPSIDED_RATIO * short and tall - short >= _LOPSIDED_MIN_EXTRA
+
+
+def _rebalance(buckets: Dict[str, Dict[str, List[Dict[str, Any]]]],
+               n_nc: int) -> Dict[str, List[str]]:
+    """Move whole power groups off a lopsided right column (see REBALANCE_MOVES).
+
+    Mutates ``buckets`` (role blocks change side) and returns the per-side
+    block order to emit. Only the right column is ever relieved: it is the one
+    holding the power groups, and moving them never mixes inputs with outputs.
+    """
+    order = {side: list(roles) for side, roles in BLOCK_ORDER.items()}
+    for dest, roles in REBALANCE_MOVES:
+        right = _column_slots(buckets["right"])
+        left = _column_slots(buckets["left"], n_nc)
+        if not _lopsided(right, left):
+            break
+        for role in roles:
+            block = buckets["right"].pop(role, None)
+            if block:
+                buckets[dest].setdefault(role, []).extend(block)
+                order[dest].append(role)
+    return order
 
 
 def _centre_pair(layout: Dict[str, List[Optional[str]]], a: str, b: str) -> None:
