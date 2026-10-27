@@ -54,6 +54,33 @@ _POWER_TAB_TOKENS = (
     "TO-263", "TO263", "D2PAK", "TO-247", "TO247",
 )
 
+# Typical seated height A and standoff A1 per family, used only when the
+# datasheet gave no height (JEDEC MO-xxx nominal/max values). One SOIC-like
+# 1.75 mm for every package drew a 5x5 LFCSP twice its real height and a PDIP
+# at half of it (QC G1, deployed run 26 Oct).
+_DEFAULT_HEIGHT = {
+    "QFN": (0.85, 0.02), "DFN": (0.85, 0.02), "WSON": (0.80, 0.02),
+    "SON": (0.80, 0.02),
+    "QFP": (2.45, 0.25), "LQFP": (1.60, 0.10), "TQFP": (1.20, 0.10),
+    "SOIC": (1.75, 0.10), "SOP": (1.75, 0.10), "SO": (1.75, 0.10),
+    "SSOP": (2.00, 0.10), "QSOP": (1.75, 0.10), "TSSOP": (1.20, 0.10),
+    "MSOP": (1.10, 0.10), "HVSSOP": (1.10, 0.10), "VSSOP": (1.00, 0.05),
+    "SOT23": (1.25, 0.05),
+    "DIP": (4.50, 0.51), "PDIP": (4.50, 0.51), "CDIP": (5.08, 0.51),
+}
+_FALLBACK_HEIGHT = (1.75, 0.10)
+# JEDEC "X" (extra-thin) variants, e.g. NXP XSON8 / SOT833-1, TI X2SON: <= 0.5 mm.
+_EXTRA_THIN_TOKENS = ("XSON", "X2SON", "XQFN", "X2QFN", "SOT833", "SOT886", "SOT891")
+
+
+def _default_height(package_type: Optional[str], family: str) -> Tuple[float, float]:
+    """Typical (A, A1) for a package whose datasheet gave no height."""
+    up = (package_type or "").upper().replace("-", "")
+    if any(tok.replace("-", "") in up for tok in _EXTRA_THIN_TOKENS):
+        return (0.50, 0.02)
+    return _DEFAULT_HEIGHT.get(family, _FALLBACK_HEIGHT)
+
+
 # Families whose leads run along all four sides (quad pins_per_side split).
 _QUAD_FAMILIES = {"QFP", "LQFP", "TQFP", "QFN"}
 
@@ -169,8 +196,9 @@ def build_spec(
     # Height A / standoff A1: extracted (preferred) or a JEDEC-ish default.
     # These drive the Z profile the footprint path throws away today.
     height_extracted = dims.get("A") is not None and dims.get("A1") is not None
-    body_height_A = float(dims["A"]) if dims.get("A") is not None else 1.75
-    standoff_A1 = float(dims["A1"]) if dims.get("A1") is not None else 0.10
+    default_A, default_A1 = _default_height(package_type, family)
+    body_height_A = float(dims["A"]) if dims.get("A") is not None else default_A
+    standoff_A1 = float(dims["A1"]) if dims.get("A1") is not None else default_A1
 
     # Lead thickness c (optional): extracted only; drives gull-wing lead solids.
     lead_thickness_c = float(dims["c"]) if dims.get("c") is not None else None

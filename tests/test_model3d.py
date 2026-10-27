@@ -342,3 +342,21 @@ class TestPipelineHook:
         process_datasheet_both(pin_data, out, extracted_dims=SOIC16_DIMS)
 
         assert not (tmp_path / "hc595_body.step").exists()
+
+
+@pytest.mark.parametrize("package_type,pins,height,standoff", [
+    ("PDIP-16", 16, 4.50, 0.51),
+    ("LFCSP-32", 32, 0.85, 0.02),
+    ("TQFP-48", 48, 1.20, 0.10),
+    ("LQFP-48", 48, 1.60, 0.10),
+    ("XSON8", 8, 0.50, 0.02),
+    ("SOIC-8", 8, 1.75, 0.10),
+])
+def test_missing_height_uses_the_family_default(package_type, pins, height, standoff):
+    # Deployed run 26 Oct: every body was 1.75 mm tall when the datasheet gave no
+    # height (QC G1).
+    from src.model3d.spec import build_spec
+
+    spec = build_spec(package_type=package_type, pin_count=pins, component_name="X")
+    assert spec.body_height_A == pytest.approx(height)
+    assert spec.standoff_A1 == pytest.approx(standoff)
