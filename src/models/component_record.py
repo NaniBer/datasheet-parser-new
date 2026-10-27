@@ -127,11 +127,13 @@ _ROLE_FROM_TYPE = {
     "open_emitter": "output", "input": "input", "bidirectional": "io",
 }
 
-# Roles that only describe a signal's function (not where it flows). An output
-# pin keeps its side by direction whatever the LLM called it: PGA2311P VOUTL
-# came as "analog", ADV7180 P0-P7 as "data", LLC "clock", XTAL2 "oscillator",
-# and all sat on the input side (QC B1, real-pipeline run 26 Oct).
-_FUNCTION_ONLY_ROLES = {None, "data", "analog", "clock", "oscillator", "io", "other"}
+# Roles that keep their own side on an output pin: power, thermal and no-connect.
+# Every other role only describes a signal's function (not where it flows), so
+# an output pin keeps its side by direction whatever the LLM called it: PGA2311P
+# VOUTL came as "analog", ADV7180 P0-P7 as "data", LLC "clock", XTAL2
+# "oscillator", TL16C2550 RTSA/DTRA "control", and all sat on the input side
+# (QC B1, real-pipeline and deployed runs 26 Oct).
+_SIDE_KEEPING_ROLES = {"supply", "ground", "thermal", "nc"}
 
 
 def role_side(role: Optional[str]) -> str:
@@ -526,7 +528,7 @@ class ComponentRecord:
                 c_type, c_role, c_active = classify_pin_name(name)
                 etype = etype or c_type
                 role = role or c_role or _ROLE_FROM_TYPE.get(etype)
-                if _ROLE_FROM_TYPE.get(etype) == "output" and role in _FUNCTION_ONLY_ROLES:
+                if _ROLE_FROM_TYPE.get(etype) == "output" and role not in _SIDE_KEEPING_ROLES:
                     role = "output"
                 active_low = active_low or c_active
                 # fill-only: a no-connect name/role sets the nc flag (never unsets).
