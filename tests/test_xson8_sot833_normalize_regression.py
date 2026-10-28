@@ -74,3 +74,23 @@ def test_genuine_son8_with_thermal_pad_still_gets_epad():
     assert norm == "SON"
     b = PcbFootprintBuilder(norm, 8, "U", extracted_dims=_XSON8_DIMS_WITH_BOGUS_EPAD)
     assert b._has_exposed_pad is True, "genuine SON-8 lost its thermal pad"
+
+
+@pytest.mark.parametrize("raw,family", [
+    ("PFB-48", "TQFP"), ("PFB", "TQFP"), ("RHB-32", "QFN"), ("DW-16", "SOIC"),
+    ("PW-20", "TSSOP"), ("N-16", "DIP"), ("DGK-8", "MSOP"),
+])
+def test_bare_ti_package_designator_names_its_family(raw, family):
+    # Deployed run 28 Oct: TL16C2550PFBR came back as "PFB-48", which fell
+    # through to the generic SON-48 fallback (2-row leadless pads, phantom EPAD).
+    from src.utils.package_detector import PackageDetector
+
+    assert PackageDetector().normalize_package_name(raw) == family
+
+
+@pytest.mark.parametrize("raw", ["FN-44", "TQFP-48", "SOIC-8", "SOT833-1"])
+def test_non_designator_names_are_unchanged_by_the_designator_rule(raw):
+    from src.utils.package_detector import PackageDetector
+
+    assert PackageDetector().normalize_package_name(raw) == {
+        "FN-44": "FN-44", "TQFP-48": "TQFP", "SOIC-8": "SOIC", "SOT833-1": "SOT833-1"}[raw]

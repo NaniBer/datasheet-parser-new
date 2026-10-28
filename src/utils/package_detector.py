@@ -393,6 +393,17 @@ class PackageDetector:
         if re.search(r"XSON[\s-]*8(?!\d)", pkg_upper):
             return "SOT833-1"
 
+        # A bare TI package designator ("PFB-48", "RHB-32", "DW") is the
+        # package's order code, not its family: name the family it stands for.
+        # TL16C2550PFBR came back as "PFB-48" on one run and fell through to
+        # the generic SON-48 fallback (2-row leadless pads, phantom EPAD).
+        designator = re.fullmatch(r"([A-Z]{1,3})(?:[\s-]*\d+)?", pkg_upper)
+        if designator:
+            from src.pdf_extractor.part_number_hint import TI_DESIGNATOR_FAMILIES
+            family = TI_DESIGNATOR_FAMILIES.get(designator.group(1))
+            if family:
+                return self.normalize_package_name(family)
+
         # Common aliases mapping
         aliases = [
             ("DUAL INLINE", "DIP"),
