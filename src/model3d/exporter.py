@@ -67,17 +67,10 @@ def _package_extras(provenance: Optional[Dict[str, str]]) -> dict:
 
 # --- Faceted GLB build (one node per B-rep face) ---------------------------
 
-# Z-up (CAD) -> Y-up (glTF): -90 deg about X, i.e. (x, y, z) -> (x, z, -y). Baked
-# into the vertices rather than carried as a rotation on the Package root: the
-# platform's /part/build re-writes the body GLB and drops root transforms, so
-# every body lay on its side in the viewer (QC G1, deployed run 26 Oct).
-def _zup_to_yup(points):
-    """Rotate an (N, 3) array from CAD Z-up to glTF Y-up."""
-    out = points.copy()
-    out[:, 1] = points[:, 2]
-    out[:, 2] = -points[:, 1]
-    return out
-
+# Orientation: the body GLB stays in CAD Z-up (board plane X-Y, height +Z) with
+# no transform on the Package root -- the platform's convention: its footprints
+# and every reference GLB lie flat in X-Y, and /part/build drops root transforms.
+# (A Y-up body, 28 Oct, stood at right angles to its own footprint.)
 
 _TESS_TOL = 0.02  # mm; face tessellation tolerance
 
@@ -92,8 +85,8 @@ def _build_faceted_glb(assembly: cq.Assembly, glb_path: str, ref_des: str,
 
     Node tree: ``Package -> Body -> <ref_des> -> [COMPOUND, COMPOUND_1, ...]``
     with one COMPOUND per tessellated face (all Body faces first, then each
-    Lead's faces in order). Vertices are written in glTF Y-up (rotated from CAD
-    Z-up here); no node carries a transform. Two materials: 0 = body, 1 = lead.
+    Lead's faces in order). Vertices stay in CAD Z-up coordinates and no node
+    carries a transform. Two materials: 0 = body, 1 = lead.
     """
     import numpy as np
     from pygltflib import (
@@ -123,9 +116,9 @@ def _build_faceted_glb(assembly: cq.Assembly, glb_path: str, ref_des: str,
         """Append geometry for one face; return the new mesh index (or None)."""
         if not verts or not tris:
             return None
-        positions = _zup_to_yup(np.array(
+        positions = np.array(
             [[v.x, v.y, v.z] for v in verts], dtype=np.float32
-        ))
+        )
         indices = np.array(tris, dtype=np.uint32).reshape(-1)
         if positions.size == 0 or indices.size == 0:
             return None
@@ -277,9 +270,9 @@ def _rewrite_glb_hierarchy(glb_path: str, ref_des: str,
     COMPOUND*`` (matching the 2d/schematic/3d reference convention).
 
     Geometry (meshes, accessors, buffers) is reused verbatim; only the node
-    graph is rebuilt. The cadquery root carries the Z-up->Y-up rotation; it is
-    composed into every solid's transform (with any intermediate transform) so
-    the ``Package`` root carries none -- the platform drops root transforms.
+    graph is rebuilt. cadquery puts a Z-up->Y-up rotation on its root; it is
+    dropped, so the model stays in CAD Z-up like the faceted path. Any transform
+    on intermediate nodes is baked into the corresponding solid.
     """
     import numpy as np
     from pygltflib import GLTF2, Node, Scene
@@ -294,8 +287,9 @@ def _rewrite_glb_hierarchy(glb_path: str, ref_des: str,
     root_index = roots[0]
     root = gltf.nodes[root_index]
 
-    # Collect mesh-bearing leaves in DFS order, composing every transform from
-    # the root down (the root's own Y-up rotation included).
+    # Collect mesh-bearing leaves in DFS order, composing every transform BELOW
+    # the root (the root's own Y-up rotation is dropped, so we start the
+    # composition at identity for its children).
     leaves: List[Tuple[int, Optional["np.ndarray"], str]] = []
 
     def collect(node_index: int, parent: Optional["np.ndarray"]) -> None:
@@ -306,11 +300,10 @@ def _rewrite_glb_hierarchy(glb_path: str, ref_des: str,
         for child_index in (node.children or []):
             collect(child_index, matrix)
 
-    root_matrix = _local_matrix(root, np)
     for child_index in (root.children or []):
-        collect(child_index, root_matrix)
+        collect(child_index, None)
     if root.mesh is not None:  # root itself carrying a mesh (unexpected, but safe)
-        leaves.append((root.mesh, root_matrix, root.name or ""))
+        leaves.append((root.mesh, None, root.name or ""))
 
     if not leaves:
         return

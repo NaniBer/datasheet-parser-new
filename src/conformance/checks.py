@@ -8,10 +8,11 @@ so the harness can grade artifacts that already exist on disk.
 Geometry note: glTF stores each mesh's local-space AABB in the POSITION
 accessor's ``min``/``max``. We accumulate node transforms from the scene root to
 put those boxes in world space (mm), then reason about clearance between
-silkscreen and copper *in the board plane*. The exporter bakes a Z-up->Y-up
-rotation on the root, so the flat footprint can lie in X-Z rather than X-Y; we
-detect the board plane per-GLB as the two largest-extent axes and ignore the
-thin (thickness) axis, so the check is orientation-agnostic. AABB clearance is
+silkscreen and copper *in the board plane*. Our GLBs lie flat in X-Y (Z up, the
+platform's convention), but older outputs carried a Z-up->Y-up root rotation
+that puts them in X-Z; we detect the board plane per-GLB as the two
+largest-extent axes and ignore the thin (thickness) axis, so the check is
+orientation-agnostic. AABB clearance is
 *conservative* — it can under-report the true gap for rotated/curved art, but it
 never misses a genuine overlap, which is exactly the reported defect (silk drawn
 across pads).
@@ -43,7 +44,7 @@ CENTROID_TOL_MM = 0.10         # FP-03 origin vs body centroid
 PIN_NAME_INSIDE_TOL_MM = 0.05  # SYM-13 pin-name text inside the body outline
 COURTYARD_TOL_MM = 0.05        # 3D-11 body envelope inside courtyard
 SEATING_TOL_MM = 0.10          # 3D-02 seating plane
-BODY_VERTICAL_AXIS = 1         # body GLB is Y-up (exporter bakes Z-up->Y-up)
+BODY_VERTICAL_AXIS = 2         # body GLB is Z-up, board plane X-Y (platform convention)
 
 
 @dataclass
@@ -631,7 +632,7 @@ def _is_through_hole(ctx: PartContext) -> Optional[bool]:
 def check_body_seating_plane(ctx: PartContext) -> _Outcome:
     """3D-02: Z=0 is the seating plane, body in +Z — not the body centre.
 
-    In the body GLB (Y-up) the seating plane is Y=0. For surface-mount parts the
+    In the body GLB (Z-up) the seating plane is Z=0. For surface-mount parts the
     body bottom sits at ~0; for through-hole parts the leads legitimately reach
     below 0 while the body stays above, so THT-ness (read from the footprint's
     plated holes) relaxes the lower bound. The defect this guards is the datum
@@ -681,7 +682,7 @@ def check_body_within_courtyard(ctx: PartContext) -> _Outcome:
     crt_box = _subtree_aabb3(gf, crt, gfw) if crt is not None else None
     if body_box is None or crt_box is None:
         return _Outcome(CheckStatus.UNRUN, "missing body or courtyard geometry")
-    axes = (0, 2)  # board plane for both (Y-up)
+    axes = (0, 1)  # board plane for both (Z-up)
     # Overrun = how far the body sticks out past the courtyard on any side.
     overrun = 0.0
     for ax in axes:

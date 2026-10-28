@@ -363,9 +363,9 @@ def test_missing_height_uses_the_family_default(package_type, pins, height, stan
 
 
 @pytest.mark.parametrize("faceted", [True, False])
-def test_body_glb_is_upright_without_a_root_transform(tmp_path, monkeypatch, faceted):
-    # Deployed run 26 Oct: /part/build drops the Package root's rotation, so the
-    # Y-up orientation must live in the geometry itself (QC G1).
+def test_body_glb_is_z_up_without_a_root_transform(tmp_path, monkeypatch, faceted):
+    # The platform's GLBs lie flat in X-Y with Z up, and /part/build drops root
+    # transforms: the body must be Z-up in its geometry, like its footprint.
     import cadquery as cq
     from pygltflib import GLTF2
     import src.model3d.exporter as X
@@ -381,6 +381,6 @@ def test_body_glb_is_upright_without_a_root_transform(tmp_path, monkeypatch, fac
     root = g.nodes[g.scenes[0].nodes[0]]
     assert root.name == "Package"
     assert not (root.rotation or root.matrix or root.translation or root.scale)
-    # Strip the root as the platform does: the body still stands 3 mm tall in +Y.
     lo, hi = _subtree_aabb3(g, _root(g), _world_matrices(g))
-    assert lo[1] == pytest.approx(0.0, abs=1e-3) and hi[1] == pytest.approx(3.0, abs=1e-3)
+    assert (hi[0] - lo[0], hi[1] - lo[1]) == (pytest.approx(1.0, abs=1e-3), pytest.approx(2.0, abs=1e-3))
+    assert lo[2] == pytest.approx(0.0, abs=1e-3) and hi[2] == pytest.approx(3.0, abs=1e-3)
