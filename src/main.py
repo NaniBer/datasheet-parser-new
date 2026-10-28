@@ -797,7 +797,7 @@ def _apply_deterministic_repair(pin_data, input_path, part_number, verbose=False
     extraction untouched.
     """
     from .agentic import repair_pins
-    from .agentic.repair import is_group
+    from .agentic.repair import carry_pin_data, is_group
 
     pins_list, container = _active_pins(pin_data)
     if not pins_list or input_path is None:
@@ -825,6 +825,11 @@ def _apply_deterministic_repair(pin_data, input_path, part_number, verbose=False
         if verbose:
             print("  Deterministic pin repair changed the pin set; keeping the extraction.")
         return
+    # A re-numbering repair moves names between pins: move each name's type,
+    # role and active-low with it (ADV7180 pins 24/25, deployed run 26 Oct).
+    applied = {n: repaired[n] for n, pin in current.items()
+               if not (is_group(repaired[n]) and not is_group(_pin_name(pin)))}
+    carry_pin_data(current, {n: _pin_name(p) for n, p in current.items()}, applied)
     changed = 0
     for n, pin in current.items():
         name = repaired[n]

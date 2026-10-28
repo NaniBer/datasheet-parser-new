@@ -61,6 +61,89 @@ _RANGE = re.compile(r"^([A-Za-z_]+?)(\d+)\s*(?:-|–|:|\s+to\s+)\s*(?:[A-Za-z_]+
 _LETTER_RANGE = re.compile(r"^([A-Za-z_]+)([A-Z])\s*[:\-–]\s*(?:[A-Za-z_]+)?([A-Z])\b")
 
 
+# --------------------------------------------------------------------------- pin data
+# Per-pin fields that describe the signal a NAME stands for, not the pin number.
+_PIN_DATA_FIELDS = ("electrical_type", "type", "role", "function", "active_low", "nc", "nc_instruction")
+
+
+def _pin_get(pin, key):
+    return pin.get(key) if isinstance(pin, dict) else getattr(pin, key, None)
+
+
+def _pin_has(pin, key) -> bool:
+    return key in pin if isinstance(pin, dict) else hasattr(pin, key)
+
+
+def _pin_set(pin, key, value) -> None:
+    if isinstance(pin, dict):
+        pin[key] = value
+    else:
+        setattr(pin, key, value)
+
+
+def _series_prefix(name: str) -> str:
+    """Leading letters of a pin name or group label (``AIN1 to AIN6`` -> AIN)."""
+    m = re.match(r"\s*([A-Za-z_]+)", name or "")
+    return m.group(1).upper() if m else ""
+
+
+def carry_pin_data(pins: Dict[int, object], old_names: Dict[int, str],
+                   new_names: Dict[int, str]) -> int:
+    """Move each pin's type/role/active-low with its NAME when a repair re-maps names.
+
+    A repair that re-numbers (wrong package column, variant pin table) renames
+    pins but used to leave the extraction's type and role on the pin number, so
+    they described the old name: ADV7180 pin 24 became ELPF yet kept AGND's
+    ground type, pin 25 became PVDD yet kept ELPF's analog input (deployed run
+    26 Oct). Rules, per renamed pin (dicts or Pin objects, fields that exist):
+
+    - the new name was a unique name on another pin -> take that pin's data;
+    - else, when the old name now lives on another pin (the data belonged to it)
+      -> re-derive from the new name (PVDD -> power/supply) or clear, so later
+      fill-only steps (the datasheet's I/O column) can set it;
+    - else, when a group label became a name outside the group (``AIN1 to AIN6``
+      -> AGND) -> re-derived or cleared the same way;
+    - else (a cosmetic fix such as ``V + D`` -> ``VD+``, or a group label split
+      into its members) the data still describes this pin and is kept.
+
+    Names are not written here. Returns the number of pins whose data changed.
+    """
+    from ..models.pin_classifier import classify_pin_name
+
+    counts: Dict[str, int] = {}
+    for v in old_names.values():
+        counts[v.upper()] = counts.get(v.upper(), 0) + 1
+    unique_at = {v.upper(): n for n, v in old_names.items() if counts[v.upper()] == 1}
+    new_upper = {n: (v or "").upper() for n, v in new_names.items()}
+    snap = {n: {f: _pin_get(p, f) for f in _PIN_DATA_FIELDS if _pin_has(p, f)} for n, p in pins.items()}
+    moved = 0
+    for n, pin in pins.items():
+        old, new = old_names.get(n, ""), new_names.get(n) or ""
+        if not new or new.upper() == old.upper():
+            continue
+        src = unique_at.get(new.upper())
+        if src is not None and src != n and src in snap:
+            for f, v in snap[src].items():
+                if isinstance(pin, dict) or _pin_has(pin, f):
+                    _pin_set(pin, f, v)
+            for f in set(_PIN_DATA_FIELDS) - set(snap[src]):   # the source never had it
+                if isinstance(pin, dict):
+                    pin.pop(f, None)
+            moved += 1
+        elif (is_group(old) and _series_prefix(new) != _series_prefix(old)) or (
+                old and not is_group(old)
+                and any(m != n and u == old.upper() for m, u in new_upper.items())):
+            c_type, c_role, c_active = classify_pin_name(new)
+            fresh = {"electrical_type": c_type, "type": c_type, "role": c_role,
+                     "function": c_role, "active_low": bool(c_active),
+                     "nc": c_role == "nc", "nc_instruction": None}
+            for f, v in fresh.items():
+                if _pin_has(pin, f):
+                    _pin_set(pin, f, v)
+            moved += 1
+    return moved
+
+
 # --------------------------------------------------------------------------- classification
 def is_group(name: str) -> bool:
     """True when a pin *name* is really a group label covering several pins."""
@@ -1237,9 +1320,10 @@ def _repair_pins(
     flags = {"duplicates": dups, "unresolved": leftover, "pin_count": len(names)}
 
     out_pins = []
-    for n, p in sorted(by_num.items()):
-        q = dict(p)
-        q["name"] = names.get(n, p.get("name"))
+    copies = {n: dict(p) for n, p in sorted(by_num.items())}
+    carry_pin_data(copies, original, names)
+    for n, q in copies.items():
+        q["name"] = names.get(n, q.get("name"))
         out_pins.append(q)
     for n in sorted(set(names) - set(by_num)):  # pins introduced by a column re-map
         out_pins.append({"number": n, "name": names[n], "type": None, "nc": False})
