@@ -67,9 +67,17 @@ def _package_extras(provenance: Optional[Dict[str, str]]) -> dict:
 
 # --- Faceted GLB build (one node per B-rep face) ---------------------------
 
-# Z-up (CAD) -> Y-up (glTF) rotation quaternion (-90 deg about X), placed on the
-# Package root so vertices stay in CAD coordinates.
-_ZUP_TO_YUP = [-0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+# Z-up (CAD) -> Y-up (glTF): -90 deg about X, i.e. (x, y, z) -> (x, z, -y). Baked
+# into the vertices rather than carried as a rotation on the Package root: the
+# platform's /part/build re-writes the body GLB and drops root transforms, so
+# every body lay on its side in the viewer (QC G1, deployed run 26 Oct).
+def _zup_to_yup(points):
+    """Rotate an (N, 3) array from CAD Z-up to glTF Y-up."""
+    out = points.copy()
+    out[:, 1] = points[:, 2]
+    out[:, 2] = -points[:, 1]
+    return out
+
 
 _TESS_TOL = 0.02  # mm; face tessellation tolerance
 
@@ -84,8 +92,8 @@ def _build_faceted_glb(assembly: cq.Assembly, glb_path: str, ref_des: str,
 
     Node tree: ``Package -> Body -> <ref_des> -> [COMPOUND, COMPOUND_1, ...]``
     with one COMPOUND per tessellated face (all Body faces first, then each
-    Lead's faces in order). Vertices stay in CAD Z-up coordinates; the Z-up->Y-up
-    rotation is carried on the Package root. Two materials: 0 = body, 1 = lead.
+    Lead's faces in order). Vertices are written in glTF Y-up (rotated from CAD
+    Z-up here); no node carries a transform. Two materials: 0 = body, 1 = lead.
     """
     import numpy as np
     from pygltflib import (
@@ -115,9 +123,9 @@ def _build_faceted_glb(assembly: cq.Assembly, glb_path: str, ref_des: str,
         """Append geometry for one face; return the new mesh index (or None)."""
         if not verts or not tris:
             return None
-        positions = np.array(
+        positions = _zup_to_yup(np.array(
             [[v.x, v.y, v.z] for v in verts], dtype=np.float32
-        )
+        ))
         indices = np.array(tris, dtype=np.uint32).reshape(-1)
         if positions.size == 0 or indices.size == 0:
             return None
@@ -233,7 +241,7 @@ def _build_faceted_glb(assembly: cq.Assembly, glb_path: str, ref_des: str,
     body_index = len(nodes) - 1
 
     package = Node(
-        name="Package", children=[body_index], rotation=list(_ZUP_TO_YUP),
+        name="Package", children=[body_index],
         extras=_package_extras(provenance),
     )
     nodes.append(package)
@@ -269,9 +277,9 @@ def _rewrite_glb_hierarchy(glb_path: str, ref_des: str,
     COMPOUND*`` (matching the 2d/schematic/3d reference convention).
 
     Geometry (meshes, accessors, buffers) is reused verbatim; only the node
-    graph is rebuilt. The cadquery root carries the Z-up->Y-up rotation, which we
-    move onto the new ``Package`` root so the model renders identically. Any
-    transform on intermediate nodes is baked into the corresponding solid.
+    graph is rebuilt. The cadquery root carries the Z-up->Y-up rotation; it is
+    composed into every solid's transform (with any intermediate transform) so
+    the ``Package`` root carries none -- the platform drops root transforms.
     """
     import numpy as np
     from pygltflib import GLTF2, Node, Scene
@@ -286,9 +294,8 @@ def _rewrite_glb_hierarchy(glb_path: str, ref_des: str,
     root_index = roots[0]
     root = gltf.nodes[root_index]
 
-    # Collect mesh-bearing leaves in DFS order, composing every transform BELOW
-    # the root (the root's own transform is preserved on Package, so we start the
-    # composition at identity for its children).
+    # Collect mesh-bearing leaves in DFS order, composing every transform from
+    # the root down (the root's own Y-up rotation included).
     leaves: List[Tuple[int, Optional["np.ndarray"], str]] = []
 
     def collect(node_index: int, parent: Optional["np.ndarray"]) -> None:
@@ -299,10 +306,11 @@ def _rewrite_glb_hierarchy(glb_path: str, ref_des: str,
         for child_index in (node.children or []):
             collect(child_index, matrix)
 
+    root_matrix = _local_matrix(root, np)
     for child_index in (root.children or []):
-        collect(child_index, None)
+        collect(child_index, root_matrix)
     if root.mesh is not None:  # root itself carrying a mesh (unexpected, but safe)
-        leaves.append((root.mesh, None, root.name or ""))
+        leaves.append((root.mesh, root_matrix, root.name or ""))
 
     if not leaves:
         return
@@ -342,11 +350,6 @@ def _rewrite_glb_hierarchy(glb_path: str, ref_des: str,
         children=[body_index],
         extras=_package_extras(provenance),
     )
-    # Preserve the cadquery root's placement (the Y-up rotation) on Package.
-    package.matrix = root.matrix
-    package.translation = root.translation
-    package.rotation = root.rotation
-    package.scale = root.scale
     new_nodes.append(package)
     package_index = len(new_nodes) - 1
 
