@@ -56,3 +56,12 @@ Two items we raised earlier turned out to be ours, not the platform's:
   One question remains: when `/part/build` patches pin names into the GLB
   (`glb_pins_patched`), does it also take each pin's type/role from our
   `/agentic` response? If it copies names only, the types can still be stale.
+
+## 5. Distinct pad-1 shape on SMD parts (QC AD FP-07)
+
+QC asked for pad 1 of AD9106 to look different from the others. Today the
+footprint marks pin 1 with the silkscreen dot (and a square pad on through-hole
+parts). SMD pads are all `pinShape: "rectangle"`; we only know `rectangle` and
+`circle`. Which pad shapes does the viewer draw (rounded rectangle, chamfered
+corner, oval)? Until we know, a differently drawn pad 1 would no longer match its
+stored `pinData`, which QC D6 also checks.

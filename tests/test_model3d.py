@@ -384,3 +384,14 @@ def test_body_glb_is_z_up_without_a_root_transform(tmp_path, monkeypatch, facete
     lo, hi = _subtree_aabb3(g, _root(g), _world_matrices(g))
     assert (hi[0] - lo[0], hi[1] - lo[1]) == (pytest.approx(1.0, abs=1e-3), pytest.approx(2.0, abs=1e-3))
     assert lo[2] == pytest.approx(0.0, abs=1e-3) and hi[2] == pytest.approx(3.0, abs=1e-3)
+
+
+def test_square_quad_gullwing_has_the_same_span_on_both_axes():
+    # TL16C2550 TQFP-48 3D came back 9 x 7 mm (footprint 9 x 9): a mis-read D.
+    from src.model3d.builder import select_template
+    from src.model3d.spec import build_spec
+
+    spec = build_spec("TQFP-48", 48, "X", {"D": 7.0, "E": 9.0, "E1": 7.0})
+    assert spec.body_length_D == spec.lead_span_E == 9.0
+    bb = select_template(spec).build(spec).toCompound().BoundingBox()
+    assert bb.xlen == pytest.approx(bb.ylen, abs=0.01) == pytest.approx(9.0, abs=0.01)

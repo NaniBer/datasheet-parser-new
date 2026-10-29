@@ -217,6 +217,14 @@ def build_spec(
 
     pins_per_side = _pins_per_side(family, pin_count)
 
+    # A gull-wing quad package is square (equal pins on every side), so its lead
+    # span is the same on both axes. An extracted D that disagrees with E (TL16C2550
+    # TQFP-48 came back 9 x 7 mm while the footprint was 9 x 9) is a mis-read: the
+    # larger of the two is the tip-to-tip span.
+    if (lead_style == "quad_gullwing" and len(set(pins_per_side)) == 1
+            and lead_span_E > 0 and body_length_D > 0 and body_length_D != lead_span_E):
+        lead_span_E = body_length_D = max(lead_span_E, body_length_D)
+
     return Body3DSpec(
         component_name=component_name,
         package_type=package_type,
