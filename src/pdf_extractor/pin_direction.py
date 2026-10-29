@@ -157,6 +157,22 @@ def _row_direction(tokens: List[str], name: str, number: int):
     A row may list a group of signals ("5, 6, 41, 42 GPO0 to GPO3 O ..."): one
     direction for all of them, so no name has to be paired with a number.
     """
+    parts = _row_parts(tokens, name, number)
+    if parts is None:
+        return None
+    own, rest = parts
+    if rest and _strip(rest[0]).upper() in _TYPE_CODES:
+        return (0 if own else 2), _TYPE_CODES[_strip(rest[0]).upper()]
+    if len(rest) >= 2:
+        found = description_direction(" ".join(rest))
+        if found:
+            return (1 if own else 3), found
+    return None
+
+
+def _row_parts(tokens: List[str], name: str, number: int):
+    """(own_number, remaining tokens) when the line is a pin-table row naming
+    ``name`` (number(s) then name, or name then number column(s)); else None."""
     if not tokens:
         return None
     target = _fold(name)
@@ -174,15 +190,7 @@ def _row_direction(tokens: List[str], name: str, number: int):
             return None
     if target not in names:
         return None
-    rest = tokens[j:]
-    own = number in numbers
-    if rest and _strip(rest[0]).upper() in _TYPE_CODES:
-        return (0 if own else 2), _TYPE_CODES[_strip(rest[0]).upper()]
-    if len(rest) >= 2:
-        found = description_direction(" ".join(rest))
-        if found:
-            return (1 if own else 3), found
-    return None
+    return number in numbers, tokens[j:]
 
 
 _TYPE_HEADER = re.compile(r"^(I/O|IO|TYPE|PIN TYPE|DIR(ECTION)?)(\s*\(\d+\))?$", re.I)
@@ -305,3 +313,77 @@ def apply_pin_directions(pins, source_text: str, tables=None) -> int:
         if role and not get("role"):
             put("role", role)
     return filled
+
+
+def propagate_channel_siblings(pins) -> int:
+    """Fill a pin's missing direction / active-low from its A/B channel twin.
+
+    Dual-channel parts name a signal per channel (RTSA/RTSB, CSA/CSB, TXA/TXB)
+    and the datasheet documents them in one grouped row ("RTSA, RTSB ... O",
+    "Chip select A/B (active low)"). A run that types only one channel (TL16C2550:
+    the B-channel came back with no direction, so RTSB/DTRB sat on the input
+    side) leaves the twin unspecified. Only a missing type / role / active-low is
+    filled, from a twin that differs by the last letter alone (A<->B) with a
+    base of at least two letters; nothing is ever overwritten. Returns the number
+    of pins changed.
+    """
+    def get(p, k):
+        return p.get(k) if isinstance(p, dict) else getattr(p, k, None)
+
+    def put(p, k, v):
+        if isinstance(p, dict):
+            p[k] = v
+        else:
+            setattr(p, k, v)
+
+    by_name = {}
+    for pin in pins or []:
+        name = _fold(get(pin, "name") or "")
+        by_name.setdefault(name, []).append(pin)
+    changed = 0
+    for pin in pins or []:
+        name = _fold(get(pin, "name") or "")
+        if len(name) < 3 or name[-1] not in "AB" or not name[-2].isalpha():
+            continue
+        twins = by_name.get(name[:-1] + ("B" if name[-1] == "A" else "A"), [])
+        if len(twins) != 1:
+            continue
+        twin, hit = twins[0], False
+        for key in ("electrical_type", "role"):
+            if not get(pin, key) and get(twin, key):
+                put(pin, key, get(twin, key))
+                hit = True
+        if get(twin, "active_low") and not get(pin, "active_low"):
+            put(pin, "active_low", True)
+            hit = True
+        changed += hit
+    return changed
+
+
+def apply_active_low_from_rows(pins, source_text: str) -> int:
+    """Flag a pin active-low when its own pin-table row says so ("32 TRIGGER
+    Pattern Trigger Input, Active Low."; "8 CS SPI Port Chip Select, Active Low.").
+
+    The printed overbar is lost in plain text, and ADI's sometimes uses no
+    overline font, but the description states it (AD9106 CS/RESET/TRIGGER stayed
+    unmarked, QC A5). Only a row stating this pin's own number counts; the flag is
+    only ever added. Returns the number of pins newly flagged.
+    """
+    from ..models.pin_classifier import description_marks_active_low
+
+    lines = [ln.split() for ln in (source_text or "").split("\n") if ln.strip()]
+    flagged = 0
+    for pin in pins or []:
+        get = (lambda k: pin.get(k)) if isinstance(pin, dict) else (lambda k: getattr(pin, k, None))
+        if get("active_low") or not get("name") or get("number") is None:
+            continue
+        for tokens in lines:
+            parts = _row_parts(tokens, get("name"), int(get("number")))
+            if parts and parts[0] and len(parts[1]) >= 2 and description_marks_active_low(" ".join(parts[1])):
+                if isinstance(pin, dict):
+                    pin["active_low"] = True
+                else:
+                    pin.active_low = True
+                flagged += 1
+                break
+    return flagged

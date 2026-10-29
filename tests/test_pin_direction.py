@@ -214,3 +214,41 @@ def test_output_pins_go_right_whatever_the_llm_role():
     assert sides == {"VOUTL": "right", "P7": "right", "XTAL2": "right", "SDO": "right",
                      "D0": "left", "VREFP": "right", "GND": "right",
                      "RTSA": "right", "RESET": "left"}
+
+
+def test_channel_twin_fills_missing_direction_and_active_low():
+    # Deployed run 29 Oct (TL16C2550): only the A-channel came back typed and
+    # active-low, so RTSB/DTRB/CSB sat on the input side unmarked.
+    from src.pdf_extractor.pin_direction import propagate_channel_siblings
+
+    pins = [Pin(number=33, name="RTSA", electrical_type="output", role="output", active_low=True),
+            Pin(number=22, name="RTSB"),
+            Pin(number=7, name="TXA", electrical_type="output", role="output"),
+            Pin(number=8, name="TXB", electrical_type="input", role="input"),   # never overwritten
+            Pin(number=9, name="INTA", electrical_type="output", role="output"),
+            Pin(number=10, name="INTB"),
+            Pin(number=11, name="VCCA", electrical_type="power_in", role="supply"),
+            Pin(number=12, name="A", electrical_type="input"),
+            Pin(number=13, name="B")]                                          # one-letter names are not twins
+    assert propagate_channel_siblings(pins) == 2
+    by = {p.name: p for p in pins}
+    assert (by["RTSB"].electrical_type, by["RTSB"].role, by["RTSB"].active_low) == ("output", "output", True)
+    assert by["INTB"].electrical_type == "output" and not by["INTB"].active_low
+    assert by["TXB"].electrical_type == "input"
+    assert by["B"].electrical_type is None
+
+
+def test_active_low_read_from_the_pin_row_description():
+    # AD9106 (QC A5): CS / RESET / TRIGGER carry their overbar only as a glyph the
+    # text loses, but the pin-table row says "Active Low".
+    from src.pdf_extractor.pin_direction import apply_active_low_from_rows
+
+    text = ("8 CS SPI Port Chip Select, Active Low.\n"
+            "9 RESET Active Low Reset Pin. Resets registers to their defaults.\n"
+            "32 TRIGGER Pattern Trigger Input, Active Low.\n"
+            "7 SDIO SPI Port Data Input/Output.\n"
+            "CS 8 17 FSADJ4 a drawing line that only names CS, Active Low\n")
+    pins = [Pin(number=8, name="CS"), Pin(number=9, name="RESET"), Pin(number=32, name="TRIGGER"),
+            Pin(number=7, name="SDIO"), Pin(number=17, name="FSADJ4")]
+    assert apply_active_low_from_rows(pins, text) == 3
+    assert {p.name for p in pins if p.active_low} == {"CS", "RESET", "TRIGGER"}

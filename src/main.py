@@ -762,7 +762,7 @@ def _apply_vision_fallback(pin_data, content, input_path, part_number, verbose=F
 
 
 
-def _apply_pin_directions(pin_data, content, verbose=False):
+def _apply_pin_directions(pin_data, content, verbose=False, input_path=None):
     """Fill each pin's direction from the datasheet's pin table (QC B1).
 
     The symbol puts pins on a side by role, and most names alone give none
@@ -771,12 +771,24 @@ def _apply_pin_directions(pin_data, content, verbose=False):
     it (pdf_extractor.pin_direction). Fill-only, no LLM; any failure is ignored.
     """
     try:
-        from .pdf_extractor.pin_direction import apply_pin_directions
+        from .pdf_extractor.pin_direction import (
+            apply_active_low_from_rows, apply_pin_directions, propagate_channel_siblings,
+        )
         filled = apply_pin_directions(
             getattr(pin_data, "pins", None) or [],
             getattr(content, "text_content", "") or "",
             getattr(content, "tables", None),
         )
+        pins = getattr(pin_data, "pins", None) or []
+        # The pin table can run onto a page the detector did not pick (AD9106's
+        # last rows, TRIGGER): scan the whole document's text rows as well.
+        apply_active_low_from_rows(pins, getattr(content, "text_content", "") or "")
+        if input_path is not None and any(not getattr(p, "active_low", False) for p in pins):
+            import pdfplumber
+            with pdfplumber.open(str(input_path)) as doc:
+                full = "\n".join((pg.extract_text() or "") for pg in doc.pages)
+            apply_active_low_from_rows(pins, full)
+        filled += propagate_channel_siblings(getattr(pin_data, "pins", None) or [])
         if verbose and filled:
             print(f"  Pin directions: {filled} read from the datasheet pin table")
     except Exception as exc:  # pragma: no cover - never block the build
@@ -2466,7 +2478,7 @@ def process_datasheet(
             content=content,
         )
         _apply_deterministic_repair(pin_data, input_path, resolved_part_number, verbose)
-        _apply_pin_directions(pin_data, content, verbose)
+        _apply_pin_directions(pin_data, content, verbose, input_path)
 
         # Modules/SiPs/grid-array parts: emit schematic only (no chip footprint).
         flag_module_footprint(pin_data, input_path, verbose=verbose)
@@ -2991,7 +3003,7 @@ def _emit_pins_only(input_path, output_path, args, effective_best_effort):
             verbose=args.verbose, force_best_effort=effective_best_effort,
         )
         _apply_deterministic_repair(pin_data, input_path, resolved_part_number, args.verbose)
-        _apply_pin_directions(pin_data, content, args.verbose)
+        _apply_pin_directions(pin_data, content, args.verbose, input_path)
     except DatasheetParserError as e:
         print(f"Error: {e}")
         sys.exit(EXIT_DOMAIN_FAILURE)
@@ -3123,7 +3135,7 @@ def _run_cli():
             )
             # Modules/SiPs/grid-array parts -> schematic only (no chip footprint).
             flag_module_footprint(pin_data, input_path, verbose=args.verbose)
-            _apply_pin_directions(pin_data, content, args.verbose)
+            _apply_pin_directions(pin_data, content, args.verbose, input_path)
         except DatasheetParserError as e:
             print(f"Error: {e}")
             sys.exit(EXIT_DOMAIN_FAILURE)
